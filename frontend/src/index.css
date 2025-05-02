@@ -1,0 +1,76 @@
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f5f5;
+  box-sizing: border-box;
+}
+
+*, *:before, *:after {
+  box-sizing: inherit;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+.full-bar {
+  background: linear-gradient(to right, #5A95D6, #C49FD6, #FF9B33);
+  padding: 8px 10px;
+  font-size: 30px;
+  font-weight: bold;
+  border-radius: 50px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.80);
+  position: relative;
+  margin-bottom: 20px;
+  color: white;
+}
+
+/* Global responsive styles */
+img, video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Make elements more touch-friendly */
+a, button, input, select, textarea {
+  touch-action: manipulation;
+}
+
+/* Responsive typography */
+@media (max-width: 768px) {
+  html {
+    font-size: 14px;
+  }
+  
+  .full-bar {
+    font-size: 20px;
+    padding: 6px 8px;
+    border-radius: 30px;
+  }
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 12px;
+  }
+  
+  .full-bar {
+    font-size: 16px;
+    padding: 5px;
+    border-radius: 20px;
+  }
+} 

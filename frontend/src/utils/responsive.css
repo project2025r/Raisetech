@@ -1,0 +1,108 @@
+/* Responsive Utility Classes */
+
+/* Touch-friendly target sizes */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Hide/show based on screen size */
+.hide-on-mobile {
+  display: block;
+}
+
+.show-on-mobile {
+  display: none;
+}
+
+/* Responsive spacing adjustments */
+.responsive-padding {
+  padding: 20px;
+}
+
+.responsive-margin {
+  margin: 20px;
+}
+
+/* Text sizes for better readability on mobile */
+.resp-text-large {
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.resp-text-normal {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.resp-text-small {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Responsive chart containers */
+.responsive-chart-container {
+  width: 100%;
+  overflow: visible;
+  position: relative;
+}
+
+/* Ensure charts remain visible and usable on mobile */
+.js-plotly-plot .plotly .main-svg {
+  overflow: visible !important;
+}
+
+.js-plotly-plot .plotly .svg-container {
+  width: 100% !important;
+}
+
+/* Media queries */
+@media (max-width: 768px) {
+  .hide-on-mobile {
+    display: none;
+  }
+  
+  .show-on-mobile {
+    display: block;
+  }
+  
+  .responsive-padding {
+    padding: 15px;
+  }
+  
+  .responsive-margin {
+    margin: 15px;
+  }
+  
+  .resp-text-large {
+    font-size: 16px;
+  }
+  
+  .resp-text-normal {
+    font-size: 14px;
+  }
+  
+  .resp-text-small {
+    font-size: 12px;
+  }
+  
+  /* Chart adjustments for mobile */
+  .responsive-chart-container {
+    min-height: 250px;
+  }
+}
+
+@media (max-width: 480px) {
+  .responsive-padding {
+    padding: 10px;
+  }
+  
+  .responsive-margin {
+    margin: 10px;
+  }
+  
+  /* Even smaller charts for very small screens */
+  .responsive-chart-container {
+    min-height: 200px;
+  }
+} 

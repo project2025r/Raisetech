@@ -1,0 +1,116 @@
+.pavement-page {
+  padding: 20px 0;
+}
+
+.webcam-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.webcam {
+  width: 100%;
+  max-width: 640px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.image-preview-container {
+  margin-top: 20px;
+  text-align: center;
+}
+
+.image-preview {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.processed-image-container {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.processed-image {
+  max-width: 100%;
+  max-height: 500px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.crack-types-list {
+  list-style-type: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.crack-types-list li {
+  background-color: #f8f9fa;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+}
+
+.results-summary {
+  margin-top: 20px;
+}
+
+.results-summary h5 {
+  margin-top: 15px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+/* Styles for the scrollable table */
+.scrollable-table {
+  max-height: 300px;
+  overflow-y: auto;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+}
+
+.scrollable-table table {
+  margin-bottom: 0;
+  width: 100%;
+  table-layout: auto;
+}
+
+.scrollable-table th {
+  position: sticky;
+  top: 0;
+  background-color: #f8f9fa;
+  z-index: 1;
+  white-space: nowrap;
+  padding: 10px;
+}
+
+.scrollable-table td {
+  padding: 8px;
+  vertical-align: middle;
+}
+
+.scrollable-table th:last-child,
+.scrollable-table td:last-child {
+  min-width: 130px;
+}
+
+/* Ensure responsive table */
+@media (max-width: 768px) {
+  .scrollable-table {
+    max-height: 250px;
+  }
+  
+  .scrollable-table th {
+    font-size: 0.9rem;
+    padding: 8px;
+  }
+  
+  .scrollable-table td {
+    font-size: 0.85rem;
+    padding: 6px;
+  }
+} 

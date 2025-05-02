@@ -1,0 +1,226 @@
+.app-container {
+  display: flex;
+  min-height: 100vh;
+}
+
+.content-container {
+  flex-grow: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* Header */
+.big-font {
+  font-size: 32px !important;
+  font-weight: bold;
+  color: #333333;
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+/* Subheader */
+.subheader {
+  font-size: 22px !important;
+  font-weight: bold;
+  color: #007BFF;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+/* Card Styling */
+.info-card {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
+  margin-bottom: 8px;
+  color: #333333;
+}
+
+/* Data text */
+.data-text {
+  font-size: 16px;
+  color: #333333;
+  line-height: 1.4;
+}
+
+/* Highlight important data */
+.highlight {
+  font-weight: bold;
+  color: #007BFF;
+}
+
+/* Table Styling */
+.scrollable-table {
+  height: 250px;
+  overflow-y: auto;
+  border-radius: 10px;
+  box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 100%;
+  text-align: center;
+  background: #ffffff;
+}
+
+/* Button styles */
+.custom-btn {
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.custom-btn:hover {
+  background-color: #0056b3;
+}
+
+.custom-btn.secondary {
+  background-color: #6c757d;
+}
+
+.custom-btn.secondary:hover {
+  background-color: #5a6268;
+}
+
+.custom-btn.danger {
+  background-color: #dc3545;
+}
+
+.custom-btn.danger:hover {
+  background-color: #c82333;
+}
+
+/* Image upload/display area */
+.image-upload-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.image-preview {
+  max-width: 100%;
+  max-height: 400px;
+  margin-top: 10px;
+  border-radius: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+/* Results display */
+.results-container {
+  margin-top: 20px;
+}
+
+/* File input styling */
+.file-input-container {
+  position: relative;
+  overflow: hidden;
+  display: inline-block;
+}
+
+.file-input-label {
+  padding: 8px 16px;
+  background-color: #6c757d;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-block;
+  transition: background-color 0.3s;
+}
+
+.file-input-label:hover {
+  background-color: #5a6268;
+}
+
+.file-input {
+  position: absolute;
+  font-size: 100px;
+  right: 0;
+  top: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Header styles */
+.header-title {
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.header-user-info {
+  font-size: 14px;
+  font-weight: normal;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Mobile adjustments for header */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .content-container {
+    padding: 12px;
+    margin-bottom: 60px; /* Space for mobile navigation */
+  }
+
+  .big-font {
+    font-size: 24px !important;
+  }
+
+  .subheader {
+    font-size: 18px !important;
+  }
+
+  .info-card {
+    padding: 10px;
+  }
+
+  .scrollable-table {
+    height: 200px;
+  }
+
+  .custom-btn {
+    padding: 6px 12px;
+    font-size: 14px;
+  }
+
+  /* Better touch targets for mobile */
+  button, 
+  .custom-btn, 
+  .file-input-label,
+  input[type="checkbox"],
+  input[type="radio"],
+  select {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Adjust form inputs for touch */
+  input, select, textarea {
+    font-size: 16px !important; /* Prevent iOS zoom on focus */
+  }
+
+  .header-title {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 480px) {
+  .big-font {
+    font-size: 20px !important;
+  }
+
+  .content-container {
+    padding: 8px;
+  }
+
+  .header-title {
+    font-size: 18px;
+  }
+} 

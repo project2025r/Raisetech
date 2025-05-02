@@ -1,0 +1,33 @@
+# Web Framework
+flask==2.2.3
+flask-cors==4.0.0
+werkzeug==2.3.7
+
+# Computer Vision & ML
+opencv-python==4.7.0.72
+numpy==1.25.2
+torch==2.0.1
+torchvision==0.15.2
+ultralytics==8.0.196
+scipy==1.11.3
+pillow==10.0.0
+
+# Data Processing & Visualization
+pandas==2.0.3
+plotly==5.15.0
+
+# Database
+pymongo==4.5.0
+
+
+# Geospatial
+geopy==2.3.0
+folium==0.14.0
+
+# Utils
+python-dotenv==1.0.0
+
+# Notes:
+# - gridfs is part of pymongo, not a separate package
+# - bson is part of pymongo, not a separate package
+# - uuid is a standard library module, not a package 
