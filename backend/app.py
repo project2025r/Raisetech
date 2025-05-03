@@ -23,7 +23,7 @@ from routes.users import users_bp
 
 # Create Flask application
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:5000"}})
+CORS(app)
 
 # Register blueprints
 app.register_blueprint(auth_bp, url_prefix='/api/auth')

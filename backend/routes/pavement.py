@@ -15,22 +15,35 @@ import uuid
 
 pavement_bp = Blueprint('pavement', __name__)
 
-# Global variables for models - lazy loaded
+# Global variables for models - lazy loaded or preloaded
 models = None
 midas = None
 midas_transform = None
 
-def get_models():
-    """Lazy-load models when needed"""
+@pavement_bp.before_app_first_request
+def preload_models():
+    """Preload YOLO and MiDaS models before the first request"""
     global models, midas, midas_transform
-    
+
     if models is None:
         models = load_yolo_models()
-    
+        for model in models.values():
+            try:
+                model.eval()
+            except Exception as e:
+                print(f"Warning: Could not set model to eval mode: {e}")
+
     if midas is None or midas_transform is None:
         midas, midas_transform = load_midas()
-    
+        if hasattr(midas, 'eval'):
+            midas.eval()
+
+
+def get_models():
+    """Return preloaded models"""
+    global models, midas, midas_transform
     return models, midas, midas_transform
+
 
 def decode_base64_image(base64_string):
     """Decode a base64 image to cv2 format"""
@@ -47,6 +60,7 @@ def encode_processed_image(image):
     _, buffer = cv2.imencode('.jpg', image)
     encoded_image = base64.b64encode(buffer).decode('utf-8')
     return f"data:image/jpeg;base64,{encoded_image}"
+
 
 @pavement_bp.route('/detect-potholes', methods=['POST'])
 def detect_potholes():
