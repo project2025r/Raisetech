@@ -30,6 +30,10 @@ const Pavement = () => {
       reader.onloadend = () => {
         setImagePreview(reader.result);
         
+        // Reset coordinates when a new file is uploaded
+        // The backend will extract coordinates from EXIF if available
+        setCoordinates('Not Available');
+        
         // Try to extract EXIF coordinates from the image
         // We'll handle this on the backend to avoid requiring EXIF libraries in the frontend
         // The coordinates will be extracted when we send the image for processing
@@ -52,6 +56,7 @@ const Pavement = () => {
       setProcessedImage(null);
       setResults(null);
       setError('');
+      // Note: We intentionally don't reset coordinates here to preserve location data from the camera
     }
   };
 
@@ -140,6 +145,13 @@ const Pavement = () => {
     setProcessedImage(null);
     setResults(null);
     setError('');
+    
+    // Only reset coordinates if the camera is not active
+    // This preserves camera-derived coordinates when the camera is on
+    if (!cameraActive) {
+      setCoordinates('Not Available');
+    }
+    
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }

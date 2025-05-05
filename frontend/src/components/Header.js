@@ -7,7 +7,7 @@ const Header = ({ user }) => {
       <Container fluid>
         <Row className="align-items-center">
           <Col className="text-center">
-            <span className="header-title">RAISE</span>
+            <img src="/assets/logo-light.png" alt="RAISE Logo" className="header-logo" />
           </Col>
           <Col xs="auto" className="d-none d-md-block">
             <small className="header-user-info">

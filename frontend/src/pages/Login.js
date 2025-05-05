@@ -22,26 +22,45 @@ const Login = ({ onLogin }) => {
     setLoading(true);
     setError('');
 
-    try {
-      const response = await axios.post('/api/auth/login', {
-        role,
-        username,
-        password
-      });
+    // Set up retry logic for initial connection issues
+    const maxRetries = 2;
+    let retryCount = 0;
+    let loginSuccessful = false;
+    
+    while (retryCount <= maxRetries && !loginSuccessful) {
+      try {
+        const response = await axios.post('/api/auth/login', {
+          role,
+          username,
+          password
+        });
 
-      if (response.data.success) {
-        onLogin(response.data.user);
-      } else {
-        setError(response.data.message || 'Login failed');
+        if (response.data.success) {
+          onLogin(response.data.user);
+          loginSuccessful = true;
+          break;
+        } else {
+          setError(response.data.message || 'Login failed');
+          break; // Don't retry if we got a response but authentication failed
+        }
+      } catch (error) {
+        // Only retry if it's likely a connection error (no response)
+        if (error.request && !error.response && retryCount < maxRetries) {
+          retryCount++;
+          setError(`Connection attempt ${retryCount} failed, retrying...`);
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        } else {
+          setError(
+            error.response?.data?.message || 
+            'Login failed. Please check your credentials and try again.'
+          );
+          break;
+        }
       }
-    } catch (error) {
-      setError(
-        error.response?.data?.message || 
-        'Login failed. Please check your credentials and try again.'
-      );
-    } finally {
-      setLoading(false);
     }
+    
+    setLoading(false);
   };
 
   return (

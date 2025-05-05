@@ -152,6 +152,12 @@
   font-weight: bold;
 }
 
+.header-logo {
+  height: 40px;
+  max-width: 100%;
+  object-fit: contain;
+}
+
 .header-user-info {
   font-size: 14px;
   font-weight: normal;
@@ -209,6 +215,10 @@
   .header-title {
     font-size: 22px;
   }
+  
+  .header-logo {
+    height: 30px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -222,5 +232,9 @@
 
   .header-title {
     font-size: 18px;
+  }
+  
+  .header-logo {
+    height: 24px;
   }
 } 

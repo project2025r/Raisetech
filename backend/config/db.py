@@ -2,6 +2,10 @@ import pymongo
 import os
 from dotenv import load_dotenv
 import gridfs
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -10,13 +14,42 @@ def get_db_connection():
     """
     Create a database connection to MongoDB
     """
+    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    db_name = os.getenv("DB_NAME", "LTA")
+    
     try:
-        # Connect to MongoDB (Replace with your MongoDB URI if using a remote server)
-        client = pymongo.MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
-        db = client.get_database(os.getenv("DB_NAME", "LTA"))
+        # Connect to MongoDB with increased timeout
+        logger.info(f"Connecting to MongoDB at {mongo_uri}, database: {db_name}")
+        client = pymongo.MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=10000,  # Increased from 5000ms to 10000ms
+            connectTimeoutMS=10000,
+            socketTimeoutMS=20000,
+            maxPoolSize=50,
+            retryWrites=True
+        )
+        
+        # Force a connection to verify the connection works
+        client.server_info()
+        
+        # Verify database access
+        db = client.get_database(db_name)
+        # Perform a simple operation to verify the database is accessible
+        db.command('ping')
+        
+        logger.info("✅ MongoDB connection established successfully")
         return db
+    except pymongo.errors.ServerSelectionTimeoutError as e:
+        logger.error(f"❌ MongoDB connection timeout: {e}")
+        return None
+    except pymongo.errors.ConnectionFailure as e:
+        logger.error(f"❌ MongoDB connection failure: {e}")
+        return None
+    except pymongo.errors.OperationFailure as e:
+        logger.error(f"❌ MongoDB operation failure: {e}")
+        return None
     except Exception as e:
-        print(f"❌ MongoDB connection error: {e}")
+        logger.error(f"❌ MongoDB connection error: {e}")
         return None
 
 def connect_to_db():
@@ -63,11 +96,11 @@ def create_collections():
             db.crack_images.create_index([("timestamp", pymongo.DESCENDING)])
             db.kerb_images.create_index([("timestamp", pymongo.DESCENDING)])
 
-            print("✅ Collections created successfully")
+            logger.info("✅ Collections created successfully")
         except Exception as e:
-            print(f"❌ Error creating collections: {e}")
+            logger.error(f"❌ Error creating collections: {e}")
     else:
-        print("❌ Could not create collections due to connection error")
+        logger.error("❌ Could not create collections due to connection error")
 
 # def insert_sample_data():
 #     """
@@ -134,7 +167,7 @@ def create_collections():
 #     else:
 #         print("❌ Could not insert data due to connection error")
 
-# Initialize collections and insert sample data when this module is imported
+# Initialize collections when this module is imported
 if __name__ == "__main__":
     create_collections()  # Create collections
-    insert_sample_data()  # Insert sample data
+    # insert_sample_data()  # Insert sample data

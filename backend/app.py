@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -98,13 +99,48 @@ def server_error(error):
     logger.error(f"500 Error: {error}")
     return jsonify({"error": "Server error"}), 500
 
+def initialize_database():
+    """Initialize database with retry mechanism"""
+    from config.db import connect_to_db, create_collections
+    
+    # Try to establish database connection with retries
+    max_retries = 8  # Increased from 5
+    retry_count = 0
+    db = None
+    backoff_time = 1.0  # Start with 1 second
+    
+    while retry_count < max_retries and db is None:
+        logger.info(f"Attempting database connection (attempt {retry_count+1}/{max_retries})...")
+        db = connect_to_db()
+        if db is None:
+            retry_count += 1
+            logger.warning(f"Database connection attempt {retry_count} failed, retrying in {backoff_time} seconds...")
+            time.sleep(backoff_time)
+            # Exponential backoff with a max of 8 seconds
+            backoff_time = min(backoff_time * 1.5, 8.0)
+    
+    if db is None:
+        logger.warning("Could not connect to database after multiple attempts, continuing without database...")
+        return False
+    
+    # Create collections once we have a connection
+    logger.info("Creating database collections...")
+    try:
+        create_collections()
+        logger.info("Database initialization complete!")
+        return True
+    except Exception as e:
+        logger.error(f"Error creating collections: {e}")
+        return False
+
 # Run the application
 if __name__ == "__main__":
     logger.info("Starting Road AI Safety Enhancement API server")
     try:
-        # Create MongoDB collections if they don't exist
-        from config.db import create_collections
-        create_collections()
+        # Initialize the database
+        database_ready = initialize_database()
+        if not database_ready:
+            logger.warning("Application starting without confirmed database connection. Some features may not work.")
         
         # Check if model files exist
         from utils.models import MODEL_PATHS
