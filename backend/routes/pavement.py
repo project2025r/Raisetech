@@ -20,11 +20,34 @@ models = None
 midas = None
 midas_transform = None
 
-@pavement_bp.before_app_first_request
-def preload_models():
-    """Preload YOLO and MiDaS models before the first request"""
+def preload_models_on_startup():
+    """Eagerly preload YOLO and MiDaS models when the Flask server starts"""
     global models, midas, midas_transform
 
+    print("Preloading pavement models on server startup...")
+    
+    # Load YOLO models
+    models = load_yolo_models()
+    for model in models.values():
+        try:
+            model.eval()
+        except Exception as e:
+            print(f"Warning: Could not set model to eval mode: {e}")
+    
+    # Load MiDaS model
+    midas, midas_transform = load_midas()
+    if hasattr(midas, 'eval'):
+        midas.eval()
+    
+    print("✅ Pavement models successfully preloaded on startup")
+    return models, midas, midas_transform
+
+@pavement_bp.before_app_first_request
+def preload_models():
+    """Preload YOLO and MiDaS models before the first request if not already loaded"""
+    global models, midas, midas_transform
+
+    # Only load if models haven't been loaded yet
     if models is None:
         models = load_yolo_models()
         for model in models.values():

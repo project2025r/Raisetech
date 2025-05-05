@@ -34,6 +34,11 @@ app.register_blueprint(recommendation_bp, url_prefix='/api/recommendation')
 app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
 app.register_blueprint(users_bp, url_prefix='/api/users')
 
+# Eagerly load pavement models on application startup
+from routes.pavement import preload_models_on_startup
+preload_models_on_startup()
+logger.info("Pavement models preloaded successfully")
+
 # Register the direct route for potholes list
 @app.route('/api/potholes/list', methods=['GET'])
 def get_potholes_list():
