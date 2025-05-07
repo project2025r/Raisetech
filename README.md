@@ -27,7 +27,7 @@ ReactApp/
 
 - Python 3.9+
 - Node.js 16+
-- PostgreSQL database
+- MongoDB database
 
 ### Backend Setup
 
