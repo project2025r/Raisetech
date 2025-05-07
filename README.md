@@ -52,11 +52,9 @@ ReactApp/
 
 5. Create a `.env` file in the backend directory with the following variables:
    ```
-   DB_HOST=localhost
+   MONGO_URI=mongodb://localhost:27017
    DB_NAME=LTA
-   DB_USER=postgres
-   DB_PASSWORD=1234
-   DB_PORT=5432
+
    ```
 
 6. Start the Flask server:
