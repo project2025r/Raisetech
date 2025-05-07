@@ -17,7 +17,7 @@ ReactApp/
 
 - **Backend:** Flask (Python)
 - **Frontend:** React.js
-- **Database:** PostgreSQL
+- **Database:** MongoDB
 - **Computer Vision:** OpenCV, PyTorch, YOLO
 - **Data Visualization:** Plotly
 
