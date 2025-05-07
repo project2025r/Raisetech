@@ -7,11 +7,16 @@ import datetime
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
-def parse_date_filters():
-    """Helper function to parse date filter parameters"""
+def parse_filters():
+    """Helper function to parse filter parameters"""
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
+    username = request.args.get('username')
     
+    # Initialize filters dict
+    filters = {}
+    
+    # Handle date filtering
     date_filter = {}
     if start_date:
         try:
@@ -30,7 +35,14 @@ def parse_date_filters():
         except ValueError:
             pass
     
-    return date_filter if date_filter else None
+    if date_filter:
+        filters["timestamp"] = date_filter
+    
+    # Handle username filtering
+    if username:
+        filters["username"] = username
+    
+    return filters if filters else {}
 
 @dashboard_bp.route('/summary', methods=['GET'])
 def get_dashboard_summary():
@@ -45,8 +57,8 @@ def get_dashboard_summary():
         }), 500
     
     try:
-        # Get date filters
-        date_filter = parse_date_filters()
+        # Get filters
+        query_filter = parse_filters()
         
         # Initialize result container
         dashboard_data = {
@@ -74,11 +86,6 @@ def get_dashboard_summary():
                 "latest": []
             }
         }
-        
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
         
         # --- POTHOLES ---
         
@@ -264,13 +271,8 @@ def get_pothole_data():
                 "message": "Database connection failed"
             }), 500
         
-        # Get date filters
-        date_filter = parse_date_filters()
-        
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
+        # Get filters
+        query_filter = parse_filters()
         
         results = []
         
@@ -360,13 +362,8 @@ def get_crack_data():
                 "message": "Database connection failed"
             }), 500
         
-        # Get date filters
-        date_filter = parse_date_filters()
-        
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
+        # Get filters
+        query_filter = parse_filters()
         
         results = []
         
@@ -455,13 +452,8 @@ def get_kerb_data():
                 "message": "Database connection failed"
             }), 500
         
-        # Get date filters
-        date_filter = parse_date_filters()
-        
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
+        # Get filters
+        query_filter = parse_filters()
         
         results = []
         
@@ -541,11 +533,8 @@ def get_image_stats():
                 "message": "Database connection failed"
             }), 500
 
-        # Get date filters
-        date_filter = parse_date_filters()
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
+        # Get filters
+        query_filter = parse_filters()
         
         # Get all images from the database
         pothole_images = list(db.pothole_images.find(query_filter, {
@@ -720,30 +709,25 @@ def get_statistics():
     """
     Get statistics for different types of issues
     """
-    db = connect_to_db()
-    if db is None:
-        return jsonify({
-            "success": False,
-            "message": "Database connection failed"
-        }), 500
-    
     try:
-        # Get date filters
-        date_filter = parse_date_filters()
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
         
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
+        # Parse filters
+        query_filter = parse_filters()
         
-        # Initialize result
-        stats = {
-            "total_issues": 0,
+        response_data = {
             "issues_by_type": {
                 "potholes": 0,
                 "cracks": 0,
                 "kerbs": 0
             },
+            "total_issues": 0,
+            "total_images": 0,
             "pothole_stats": {
                 "count": 0,
                 "by_size": {"Small (<1k)": 0, "Medium (1k - 10k)": 0, "Big (>10k)": 0},
@@ -777,8 +761,8 @@ def get_statistics():
         if pothole_result:
             pothole_count = pothole_result[0]["total"]
         
-        stats["issues_by_type"]["potholes"] = pothole_count
-        stats["pothole_stats"]["count"] = pothole_count
+        response_data["issues_by_type"]["potholes"] = pothole_count
+        response_data["total_images"] = pothole_count
         
         # Get pothole size distribution and volume
         if pothole_count > 0:
@@ -793,8 +777,8 @@ def get_statistics():
                 for pothole in image.get("potholes", []):
                     # Update size distribution
                     if "volume_range" in pothole:
-                        if pothole["volume_range"] in stats["pothole_stats"]["by_size"]:
-                            stats["pothole_stats"]["by_size"][pothole["volume_range"]] += 1
+                        if pothole["volume_range"] in response_data["pothole_stats"]["by_size"]:
+                            response_data["pothole_stats"]["by_size"][pothole["volume_range"]] += 1
                     
                     # Add to volume calculation
                     if "volume" in pothole:
@@ -803,7 +787,7 @@ def get_statistics():
             
             # Calculate average volume
             if volume_count > 0:
-                stats["pothole_stats"]["avg_volume"] = round(total_volume / volume_count, 2)
+                response_data["pothole_stats"]["avg_volume"] = round(total_volume / volume_count, 2)
         
         # --- CRACKS ---
         
@@ -817,8 +801,8 @@ def get_statistics():
         if crack_result:
             crack_count = crack_result[0]["total"]
         
-        stats["issues_by_type"]["cracks"] = crack_count
-        stats["crack_stats"]["count"] = crack_count
+        response_data["issues_by_type"]["cracks"] = crack_count
+        response_data["total_images"] += crack_count
         
         # Get crack type distribution
         if crack_count > 0:
@@ -829,13 +813,13 @@ def get_statistics():
                 # If image has type_counts, use those
                 if "type_counts" in image:
                     for crack_type, count in image["type_counts"].items():
-                        if crack_type in stats["crack_stats"]["by_type"]:
-                            stats["crack_stats"]["by_type"][crack_type] += count
+                        if crack_type in response_data["crack_stats"]["by_type"]:
+                            response_data["crack_stats"]["by_type"][crack_type] += count
                 else:
                     # Otherwise count each crack individually
                     for crack in image.get("cracks", []):
-                        if "crack_type" in crack and crack["crack_type"] in stats["crack_stats"]["by_type"]:
-                            stats["crack_stats"]["by_type"][crack["crack_type"]] += 1
+                        if "crack_type" in crack and crack["crack_type"] in response_data["crack_stats"]["by_type"]:
+                            response_data["crack_stats"]["by_type"][crack["crack_type"]] += 1
         
         # --- KERBS ---
         
@@ -849,8 +833,8 @@ def get_statistics():
         if kerb_result:
             kerb_count = kerb_result[0]["total"]
         
-        stats["issues_by_type"]["kerbs"] = kerb_count
-        stats["kerb_stats"]["count"] = kerb_count
+        response_data["issues_by_type"]["kerbs"] = kerb_count
+        response_data["total_images"] += kerb_count
         
         # Get kerb condition distribution
         if kerb_count > 0:
@@ -861,20 +845,20 @@ def get_statistics():
                 # If image has condition_counts, use those
                 if "condition_counts" in image:
                     for condition, count in image["condition_counts"].items():
-                        if condition in stats["kerb_stats"]["by_condition"]:
-                            stats["kerb_stats"]["by_condition"][condition] += count
+                        if condition in response_data["kerb_stats"]["by_condition"]:
+                            response_data["kerb_stats"]["by_condition"][condition] += count
                 else:
                     # Otherwise count each kerb individually
                     for kerb in image.get("kerbs", []):
-                        if "condition" in kerb and kerb["condition"] in stats["kerb_stats"]["by_condition"]:
-                            stats["kerb_stats"]["by_condition"][kerb["condition"]] += 1
+                        if "condition" in kerb and kerb["condition"] in response_data["kerb_stats"]["by_condition"]:
+                            response_data["kerb_stats"]["by_condition"][kerb["condition"]] += 1
         
         # Calculate total issues
-        stats["total_issues"] = pothole_count + crack_count + kerb_count
+        response_data["total_issues"] = pothole_count + crack_count + kerb_count
         
         return jsonify({
             "success": True,
-            "data": stats
+            "data": response_data
         })
     
     except Exception as e:
@@ -888,25 +872,16 @@ def get_issues_by_type():
     """
     Get issue counts by type for charts
     """
-    db = connect_to_db()
-    if db is None:
-        return jsonify({
-            "success": False,
-            "message": "Database connection failed"
-        }), 500
-    
     try:
-        # Get date filters
-        date_filter = parse_date_filters()
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
         
-        # Create query filter with date range if provided
-        query_filter = {}
-        if date_filter:
-            query_filter["timestamp"] = date_filter
-        
-        # Initialize result containers
-        types = []
-        counts = []
+        # Parse filters
+        query_filter = parse_filters()
         
         # Initialize type counts dictionary
         type_counts = {
@@ -928,17 +903,7 @@ def get_issues_by_type():
             "Kerb - Damaged Kerbs": 0
         }
         
-        # Get pothole counts by volume range from old collection
-        pipeline = [
-            {"$match": query_filter} if query_filter else {},
-            {"$group": {"_id": "$volume_range", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}}
-        ]
-        for result in db.potholes.aggregate(pipeline):
-            type_key = f"Pothole - {result['_id']}"
-            type_counts[type_key] += result['count']
-        
-        # Get pothole counts from new collection
+        # Get pothole counts from collection
         pothole_images = list(db.pothole_images.find(query_filter))
         for image in pothole_images:
             for pothole in image.get("potholes", []):
@@ -947,17 +912,7 @@ def get_issues_by_type():
                     if type_key in type_counts:
                         type_counts[type_key] += 1
         
-        # Get crack counts by type from old collection
-        pipeline = [
-            {"$match": query_filter} if query_filter else {},
-            {"$group": {"_id": "$crack_type", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}}
-        ]
-        for result in db.cracks.aggregate(pipeline):
-            type_key = f"Crack - {result['_id']}"
-            type_counts[type_key] += result['count']
-        
-        # Get crack counts from new collection
+        # Get crack counts from collection
         crack_images = list(db.crack_images.find(query_filter))
         for image in crack_images:
             # If type_counts is available in the image document, use it
@@ -974,17 +929,7 @@ def get_issues_by_type():
                         if type_key in type_counts:
                             type_counts[type_key] += 1
         
-        # Get kerb counts by condition from old collection
-        pipeline = [
-            {"$match": query_filter} if query_filter else {},
-            {"$group": {"_id": "$condition", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}}
-        ]
-        for result in db.kerbs.aggregate(pipeline):
-            type_key = f"Kerb - {result['_id']}"
-            type_counts[type_key] += result['count']
-        
-        # Get kerb counts from new collection
+        # Get kerb counts from collection
         kerb_images = list(db.kerb_images.find(query_filter))
         for image in kerb_images:
             # If condition_counts is available in the image document, use it
@@ -1002,6 +947,8 @@ def get_issues_by_type():
                             type_counts[type_key] += 1
         
         # Convert the dictionary to lists for response
+        types = []
+        counts = []
         for type_name, count in type_counts.items():
             if count > 0:  # Only include types with non-zero counts
                 types.append(type_name)
@@ -1021,21 +968,30 @@ def get_issues_by_type():
 @dashboard_bp.route('/weekly-trend', methods=['GET'])
 def get_weekly_trend():
     """
-    Get trend data for the past week
+    Get weekly trend data for chart
     """
-    db = connect_to_db()
-    if db is None:
-        return jsonify({
-            "success": False,
-            "message": "Database connection failed"
-        }), 500
-    
     try:
-        # Get date filters
-        date_filter = parse_date_filters()
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
+        
+        # Parse filters
+        query_filter = parse_filters()
         base_query = {}
-        if date_filter:
-            base_query["timestamp"] = date_filter
+        
+        # Extract username filter if present
+        username_filter = None
+        if 'username' in query_filter:
+            username_filter = query_filter['username']
+            base_query['username'] = username_filter
+        
+        # Extract date filter if present
+        date_filter = None
+        if 'timestamp' in query_filter:
+            date_filter = query_filter['timestamp']
         
         # Get the last 7 days for the date range or use default if no filter provided
         if not date_filter:
@@ -1052,7 +1008,7 @@ def get_weekly_trend():
                 start_date = datetime.datetime.fromisoformat(date_filter['$gte'])
             else:
                 start_date = end_date - datetime.timedelta(days=7)
-                
+            
             # Limit to 7 days if the range is too large
             date_diff = (end_date - start_date).days
             if date_diff > 7:

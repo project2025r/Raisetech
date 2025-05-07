@@ -52,6 +52,11 @@ function Dashboard() {
   const [endDate, setEndDate] = useState('');
   const [dateFilterApplied, setDateFilterApplied] = useState(false);
 
+  // User filter state
+  const [usersList, setUsersList] = useState([]);
+  const [selectedUser, setSelectedUser] = useState('');
+  const [userFilterApplied, setUserFilterApplied] = useState(false);
+
   // Defect type filter state
   const [defectFilters, setDefectFilters] = useState({
     potholes: true,
@@ -83,14 +88,15 @@ function Dashboard() {
   }, []);
 
   // Fetch dashboard data from backend
-  const fetchData = async (dateFilters = {}) => {
+  const fetchData = async (filters = {}) => {
     try {
       setLoading(true);
       
-      // Add date filters to requests if provided
+      // Add filters to requests if provided
       const params = {};
-      if (dateFilters.startDate) params.start_date = dateFilters.startDate;
-      if (dateFilters.endDate) params.end_date = dateFilters.endDate;
+      if (filters.startDate) params.start_date = filters.startDate;
+      if (filters.endDate) params.end_date = filters.endDate;
+      if (filters.username) params.username = filters.username;
       
       // Get overview statistics
       const statsResponse = await axios.get('/api/dashboard/statistics', { params });
@@ -162,10 +168,30 @@ function Dashboard() {
     }
   }, []);
 
+  // Fetch users list for filter dropdown
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await axios.get('/api/users/all');
+        if (response.data.success) {
+          setUsersList(response.data.users);
+        }
+      } catch (error) {
+        console.error('Error fetching users:', error);
+      }
+    };
+    
+    fetchUsers();
+  }, []);
+
   // Handle date filter application
   const handleApplyDateFilter = () => {
     if (startDate && endDate) {
-      fetchData({ startDate, endDate });
+      fetchData({ 
+        startDate, 
+        endDate,
+        username: selectedUser || undefined
+      });
       setDateFilterApplied(true);
     }
   };
@@ -181,8 +207,37 @@ function Dashboard() {
     
     setEndDate(newEndDate);
     setStartDate(newStartDate);
-    fetchData({ startDate: newStartDate, endDate: newEndDate });
+    fetchData({ 
+      startDate: newStartDate, 
+      endDate: newEndDate,
+      username: selectedUser || undefined
+    });
     setDateFilterApplied(false);
+  };
+
+  // Handle user filter application
+  const handleApplyUserFilter = () => {
+    fetchData({
+      startDate,
+      endDate,
+      username: selectedUser || undefined
+    });
+    setUserFilterApplied(!!selectedUser);
+  };
+
+  // Handle user filter reset
+  const handleResetUserFilter = () => {
+    setSelectedUser('');
+    fetchData({
+      startDate,
+      endDate
+    });
+    setUserFilterApplied(false);
+  };
+
+  // Handle user selection
+  const handleUserChange = (e) => {
+    setSelectedUser(e.target.value);
   };
 
   // Filter the issues by type whenever the filters or data changes
@@ -272,51 +327,108 @@ function Dashboard() {
   };
 
   return (
-    <Container fluid className="mt-4">
-      <h1 className="text-center mb-4">Dashboard</h1>
+    <Container fluid className="dashboard-container">
+      <h2 className="my-4">Dashboard</h2>
       
-      {/* Date Filter */}
-      <Card className="mb-4 shadow-sm">
+      {/* Filters Card */}
+      <Card className="mb-4 shadow-sm dashboard-card filters-card">
+        <Card.Header className="bg-primary text-white">
+          <h5 className="mb-0">Filters</h5>
+        </Card.Header>
         <Card.Body>
-          <Row className="date-filter-container">
-            <Col md={6}>
-              <Form.Group className="mb-3">
-                <Form.Label>Start Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                />
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>End Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                />
-              </Form.Group>
-            </Col>
-            <Col md={6} className="d-flex align-items-end date-filter-buttons">
-              <Button 
-                variant="primary" 
-                onClick={handleApplyDateFilter}
-                className="me-2"
-                disabled={!startDate || !endDate}
-              >
-                Apply Filter
-              </Button>
-              <Button 
-                variant="outline-secondary" 
-                onClick={handleResetDateFilter}
-                disabled={!dateFilterApplied}
-              >
-                Reset
-              </Button>
+          <Row>
+            <Col lg={6} className="filter-section">
+              <h6>Date Range</h6>
+              <div className="filter-controls">
+                <div className="filter-field">
+                  <Form.Group>
+                    <Form.Label className="small">Start Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      size="sm"
+                    />
+                  </Form.Group>
+                </div>
+                <div className="filter-field">
+                  <Form.Group>
+                    <Form.Label className="small">End Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      size="sm"
+                    />
+                  </Form.Group>
+                </div>
+                <div className="filter-actions">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={handleApplyDateFilter}
+                    disabled={!startDate || !endDate}
+                  >
+                    Apply
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline-secondary"
+                    onClick={handleResetDateFilter}
+                    disabled={!dateFilterApplied}
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </div>
               {dateFilterApplied && (
-                <span className="ms-3 text-success">
+                <div className="filter-status text-success">
                   Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}
-                </span>
+                </div>
+              )}
+            </Col>
+            <Col lg={6} className="filter-section">
+              <h6>User Filter</h6>
+              <div className="filter-controls">
+                <div className="filter-field">
+                  <Form.Group>
+                    <Form.Label className="small">Select User</Form.Label>
+                    <Form.Select
+                      value={selectedUser}
+                      onChange={handleUserChange}
+                      size="sm"
+                    >
+                      <option value="">All Users</option>
+                      {usersList.map((user, index) => (
+                        <option key={index} value={user.username}>
+                          {user.username} ({user.role})
+                        </option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="filter-actions">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={handleApplyUserFilter}
+                  >
+                    Apply
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline-secondary"
+                    onClick={handleResetUserFilter}
+                    disabled={!userFilterApplied}
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </div>
+              {userFilterApplied && (
+                <div className="filter-status text-success">
+                  Showing data for user: {selectedUser}
+                </div>
               )}
             </Col>
           </Row>
@@ -563,7 +675,7 @@ function Dashboard() {
           {/* Recently Uploaded Images Section */}
           <Row className="mb-4">
             <Col md={12}>
-              <Card className="shadow-sm">
+              <Card className="shadow-sm dashboard-card">
                 <Card.Header className="bg-primary text-white">
                   <h5 className="mb-0">All Uploaded Images</h5>
                 </Card.Header>
@@ -574,7 +686,7 @@ function Dashboard() {
                         <Row>
                           {dashboardData.potholes.latest.map((pothole, index) => (
                             <Col md={4} className="mb-4" key={`pothole-${index}`}>
-                              <Card>
+                              <Card className="h-100 shadow-sm">
                                 <Card.Header>
                                   <h6 className="mb-0">Pothole #{pothole.pothole_id}</h6>
                                 </Card.Header>
@@ -635,7 +747,7 @@ function Dashboard() {
                         <Row>
                           {dashboardData.cracks.latest.map((crack, index) => (
                             <Col md={4} className="mb-4" key={`crack-${index}`}>
-                              <Card>
+                              <Card className="h-100 shadow-sm">
                                 <Card.Header>
                                   <h6 className="mb-0">{crack.crack_type} #{crack.crack_id}</h6>
                                 </Card.Header>
@@ -697,7 +809,7 @@ function Dashboard() {
                           {dashboardData.kerbs && dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0 ? (
                             dashboardData.kerbs.latest.map((kerb, index) => (
                               <Col md={4} className="mb-4" key={`kerb-${index}`}>
-                                <Card>
+                                <Card className="h-100 shadow-sm">
                                   <Card.Header>
                                     <h6 className="mb-0">{kerb.condition} #{kerb.kerb_id}</h6>
                                   </Card.Header>

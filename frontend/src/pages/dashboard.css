@@ -18,6 +18,65 @@
   padding: 5px;
 }
 
+/* Dashboard container */
+.dashboard-container {
+  padding: 15px;
+}
+
+/* Dashboard card with consistent styling */
+.dashboard-card {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+  border: none;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Filters card specific styling */
+.filters-card {
+  margin-bottom: 20px;
+}
+
+.filters-card .card-header {
+  padding: 12px 20px;
+  font-weight: 600;
+}
+
+.filters-card .card-body {
+  padding: 20px;
+}
+
+/* Filter section styles */
+.filter-section {
+  margin-bottom: 15px;
+}
+
+.filter-section h6 {
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.filter-field {
+  flex: 1;
+  min-width: 120px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-status {
+  margin-top: 8px;
+  font-size: 0.85rem;
+}
+
 /* Special styles for pie charts */
 .pie-chart-container {
   padding: 15px;
@@ -142,6 +201,26 @@
   width: 10px;
   height: 10px;
   margin-right: 3px;
+}
+
+@media (max-width: 992px) {
+  /* Filter section adjusts for medium screens */
+  .filter-section {
+    margin-bottom: 25px;
+  }
+  
+  .filter-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .filter-field {
+    margin-bottom: 10px;
+  }
+  
+  .filter-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 768px) {

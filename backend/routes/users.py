@@ -58,4 +58,35 @@ def get_user_summary():
         return jsonify({
             "success": False,
             "message": f"Error fetching user summary: {str(e)}"
-        }), 500 
+        }), 500
+
+@users_bp.route('/all', methods=['GET'])
+def get_all_users():
+    """
+    API endpoint to get all users for dashboard filter
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
+        
+        # Get all users from database with limited fields
+        users = list(db.users.find({}, {
+            "_id": 0,
+            "username": 1,
+            "role": 1
+        }))
+        
+        return jsonify({
+            "success": True,
+            "users": users
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error fetching users: {str(e)}"
+        }), 500
