@@ -14,7 +14,7 @@ const Home = ({ user }) => {
       color: '#3498db'
     },
     {
-      title: 'Road Infrastructure',
+      title: 'Infrastructure',
       description: 'Identify and monitor road infrastructure elements such as kerbs',
       icon: <FaColumns size={48} className="module-icon-svg" />,
       path: '/road-infrastructure',

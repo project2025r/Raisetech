@@ -64,7 +64,7 @@ const Sidebar = ({ onLogout }) => {
   const menuItems = [
     { path: '/', name: 'Home', icon: <FaHome size={20} /> },
     { path: '/pavement', name: 'Pavement', icon: <FaMap size={20} /> },
-    { path: '/road-infrastructure', name: 'Road Infrastructure', icon: <FaColumns size={20} /> },
+    { path: '/road-infrastructure', name: 'Infrastructure', icon: <FaColumns size={20} /> },
     { path: '/recommendation', name: 'Recommendation', icon: <FaLightbulb size={20} /> },
     { path: '/dashboard', name: 'Dashboard', icon: <FaChartBar size={20} /> }
   ];

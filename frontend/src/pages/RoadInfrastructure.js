@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import Webcam from 'react-webcam';
+import useResponsive from '../hooks/useResponsive';
 
 // Fix the marker icon issue with Leaflet in React
 delete L.Icon.Default.prototype._getIconUrl;
@@ -28,9 +29,11 @@ function RoadInfrastructure() {
   const [coordinates, setCoordinates] = useState('Not Available');
   const [inputSource, setInputSource] = useState('video');
   const [activeTab, setActiveTab] = useState('detection');
+  const [cameraOrientation, setCameraOrientation] = useState('environment');
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
+  const { isMobile } = useResponsive();
 
   // Road infrastructure classes (from the Python model)
   const roadInfraClasses = [
@@ -120,6 +123,11 @@ function RoadInfrastructure() {
         );
       }
     }
+  };
+
+  // Toggle camera orientation (front/back) for mobile devices
+  const toggleCameraOrientation = () => {
+    setCameraOrientation(prev => prev === 'environment' ? 'user' : 'environment');
   };
 
   // Process image/video for detection
@@ -293,9 +301,19 @@ function RoadInfrastructure() {
                               videoConstraints={{
                                 width: 640,
                                 height: 480,
-                                facingMode: "environment"
+                                facingMode: cameraOrientation
                               }}
                             />
+                            {isMobile && (
+                              <Button 
+                                variant="outline-secondary" 
+                                onClick={toggleCameraOrientation}
+                                className="mt-2 mb-2"
+                                size="sm"
+                              >
+                                Rotate Camera
+                              </Button>
+                            )}
                           </div>
                           <Button 
                             variant="success" 

@@ -3,6 +3,7 @@ import { Container, Row, Col, Card, Button, Form, Tabs, Tab, Alert, Spinner } fr
 import axios from 'axios';
 import Webcam from 'react-webcam';
 import './Pavement.css';
+import useResponsive from '../hooks/useResponsive';
 
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
@@ -15,9 +16,11 @@ const Pavement = () => {
   const [error, setError] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
   const [coordinates, setCoordinates] = useState('Not Available');
+  const [cameraOrientation, setCameraOrientation] = useState('environment');
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
+  const { isMobile } = useResponsive();
 
   // Handle file input change
   const handleFileChange = (e) => {
@@ -77,6 +80,11 @@ const Pavement = () => {
         );
       }
     }
+  };
+
+  // Toggle camera orientation (front/back) for mobile devices
+  const toggleCameraOrientation = () => {
+    setCameraOrientation(prev => prev === 'environment' ? 'user' : 'environment');
   };
 
   // Process image for detection
@@ -213,7 +221,22 @@ const Pavement = () => {
                     ref={webcamRef}
                     screenshotFormat="image/jpeg"
                     className="webcam"
+                    videoConstraints={{
+                      width: 640,
+                      height: 480,
+                      facingMode: cameraOrientation
+                    }}
                   />
+                  {isMobile && (
+                    <Button 
+                      variant="outline-secondary" 
+                      onClick={toggleCameraOrientation}
+                      className="mt-2 mb-2"
+                      size="sm"
+                    >
+                      Rotate Camera
+                    </Button>
+                  )}
                   <Button 
                     variant="success" 
                     onClick={handleCapture}
