@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Container, Row, Col, Card, Tabs, Tab, Form, Button } from 'react-bootstrap';
 import Plot from 'react-plotly.js';
 import ChartContainer from '../components/ChartContainer';
+import DefectMap from '../components/DefectMap';
 import './dashboard.css';
 
 function Dashboard() {
@@ -672,6 +673,9 @@ function Dashboard() {
             </Col>
           </Row>
           
+          {/* Defect Map Section */}
+          <DefectMap />
+          
           {/* Recently Uploaded Images Section */}
           <Row className="mb-4">
             <Col md={12}>
@@ -877,6 +881,8 @@ function Dashboard() {
               </Card>
             </Col>
           </Row>
+
+         
         </>
       )}
     </Container>

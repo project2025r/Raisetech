@@ -9,6 +9,7 @@ import Pavement from './pages/Pavement';
 import RoadInfrastructure from './pages/RoadInfrastructure';
 import Recommendation from './pages/Recommendation';
 import Dashboard from './pages/Dashboard';
+import DefectDetail from './pages/DefectDetail';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 
@@ -69,6 +70,10 @@ function App() {
             <Route 
               path="/dashboard" 
               element={authenticated ? <Dashboard /> : <Navigate to="/login" />} 
+            />
+            <Route 
+              path="/view/:imageId" 
+              element={authenticated ? <DefectDetail /> : <Navigate to="/login" />} 
             />
             <Route 
               path="*" 

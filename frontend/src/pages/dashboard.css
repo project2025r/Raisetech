@@ -51,8 +51,9 @@
 }
 
 .filter-section h6 {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   font-weight: 600;
+  color: #495057;
 }
 
 .filter-controls {
@@ -314,5 +315,235 @@
   /* Infrastructure pie chart needs more space on mobile */
   .infrastructure-chart-container {
     padding: 10px;
+  }
+  /* Defect type filter checkboxes */
+  .filter-checkbox .form-check-label {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: flex-start;
+    overflow: visible;
+    text-overflow: clip;
+    padding-top: 15px;
+  }
+}
+
+/* Map Component Styles */
+.map-container {
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Improved filter styling */
+.filter-field-container {
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+  padding: 10px;
+  width: 100%;
+}
+
+.filter-actions-container {
+  margin: 15px 0;
+  padding: 10px;
+}
+
+.filter-btn {
+  font-weight: 500;
+  min-width: 120px;
+  padding: 8px 15px;
+  border-radius: 4px;
+}
+
+.defect-type-filter-options {
+  display: flex;
+  flex-direction: column;
+  padding: 5px 10px 5px 5px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+  width: 100%;
+  min-width: 150px;
+  box-sizing: border-box;
+}
+
+.filter-checkbox {
+  margin-left: 10px;
+  font-weight: 500;
+  width: 100%;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.filter-checkbox .form-check-input {
+  margin-right: 8px;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.filter-checkbox .form-check-label {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: flex-start;
+  overflow: visible;
+  text-overflow: clip;
+  
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 15px;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+  margin: 10px auto;
+  max-width: 400px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-right: 10px;
+  font-weight: 500;
+}
+
+.legend-marker {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-right: 5px;
+  border: 1px solid #ffffff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+}
+
+.defect-popup {
+  min-width: 200px;
+  max-width: 300px;
+}
+
+.defect-popup h6 {
+  border-bottom: 1px solid #eee;
+  padding-bottom: 5px;
+  margin-bottom: 10px;
+}
+
+.defect-popup ul {
+  margin-bottom: 10px;
+}
+
+.defect-popup ul ul {
+  margin-top: 5px;
+  margin-left: 10px;
+  font-size: 0.9em;
+}
+
+.custom-marker {
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+
+.defect-type-filters {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  padding: 5px 0;
+}
+
+/* Make sure Leaflet CSS is properly applied */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* Fix for popup z-index issues */
+.leaflet-popup {
+  z-index: 1000 !important;
+}
+
+/* Responsive styling for small screens */
+@media (max-width: 768px) {
+  .map-container {
+    height: 400px !important;
+  }
+  
+  .filter-section {
+    margin-bottom: 15px;
+  }
+
+}
+
+/* Defect Detail Page Styles */
+.defect-image-container {
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 8px;
+  background-color: #f8f9fa;
+  margin-bottom: 15px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+}
+
+.defect-image-container img {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+}
+
+.table-bordered th {
+  background-color: #f8f9fa;
+}
+
+/* Style for badges */
+.badge {
+  font-size: 0.85rem;
+  padding: 5px 8px;
+}
+
+/* Recommendation card styling */
+.recommendation-card {
+  border-left: 4px solid #007bff;
+}
+
+.recommendation-card .card-header {
+  background-color: rgba(0, 123, 255, 0.1);
+  font-weight: 500;
+}
+
+.recommendation-card ul {
+  padding-left: 1.5rem;
+}
+
+/* Responsive styling for detail page */
+@media (max-width: 768px) {
+  .defect-image-container {
+    min-height: 200px;
+  }
+  
+  .defect-image-container img {
+    max-height: 300px;
+  }
+  
+  .detail-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .detail-actions .btn {
+    width: 100%;
+  }
+
+  .me-2 btn btn-outline-light btn-sm {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
   }
 } 
