@@ -26,10 +26,14 @@ def get_models():
     
     if models is None:
         models = load_yolo_models()
-        # Add class names to the models
-        models["road_infra_classes"] = distinct_classes + continuous_classes
-    
+        # Dynamically assign class names for each detection model
+        for detection_type in models:
+            if detection_type == "road_infra":
+                models[f"{detection_type}_classes"] = distinct_classes + continuous_classes
+            # You can extend with more detection types and class lists here if needed
+
     return models
+
 
 def decode_base64_image(base64_string):
     """Decode a base64 image to cv2 format"""
@@ -47,6 +51,44 @@ def encode_processed_image(image):
     encoded_image = base64.b64encode(buffer).decode('utf-8')
     return f"data:image/jpeg;base64,{encoded_image}"
 
+def extract_frame_from_video(video_base64):
+    """Extract the first frame from a base64 encoded video"""
+    try:
+        # Remove data URL prefix if present
+        if 'base64,' in video_base64:
+            video_base64 = video_base64.split('base64,')[1]
+        
+        # Decode base64 to binary
+        video_data = base64.b64decode(video_base64)
+        
+        # Create a temporary file to store the video
+        temp_video_path = "temp_video.mp4"
+        with open(temp_video_path, "wb") as f:
+            f.write(video_data)
+        
+        # Open the video file
+        cap = cv2.VideoCapture(temp_video_path)
+        
+        # Check if video opened successfully
+        if not cap.isOpened():
+            raise Exception("Could not open video file")
+        
+        # Read the first frame
+        ret, frame = cap.read()
+        
+        # Release the video capture object and delete temp file
+        cap.release()
+        if os.path.exists(temp_video_path):
+            os.remove(temp_video_path)
+        
+        if not ret:
+            raise Exception("Could not read frame from video")
+        
+        return frame
+    
+    except Exception as e:
+        raise Exception(f"Error extracting frame from video: {str(e)}")
+
 @road_infrastructure_bp.route('/detect', methods=['POST'])
 def detect_infrastructure():
     """
@@ -61,10 +103,11 @@ def detect_infrastructure():
             "message": "Failed to load models"
         }), 500
     
-    if 'image' not in request.json:
+    # Check if we have image or video data
+    if 'image' not in request.json and 'video' not in request.json:
         return jsonify({
             "success": False,
-            "message": "No image data provided"
+            "message": "No image or video data provided"
         }), 400
     
     # Extract coordinates if provided
@@ -74,14 +117,25 @@ def detect_infrastructure():
     selected_classes = request.json.get('selectedClasses', [])
     
     try:
-        # Get and decode image data
-        image_data = request.json['image']
-        image = decode_base64_image(image_data)
+        # Process based on input type
+        if 'image' in request.json and request.json['image']:
+            # Get and decode image data
+            image_data = request.json['image']
+            image = decode_base64_image(image_data)
+        elif 'video' in request.json and request.json['video']:
+            # Extract frame from video
+            video_data = request.json['video']
+            image = extract_frame_from_video(video_data)
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Invalid or empty image/video data"
+            }), 400
         
         if image is None:
             return jsonify({
                 "success": False,
-                "message": "Invalid image data"
+                "message": "Failed to process input data"
             }), 400
         
         # Process the image
@@ -101,15 +155,6 @@ def detect_infrastructure():
         
         # Process results
         detections = []
-        
-        # Tracking data (for unique object counting)
-        tracked_objects = {}
-        object_id_counter = 0
-        iou_threshold = 0.5
-        
-        # Class-based statistics
-        continuous_lengths = {}
-        continuous_last_second_added = {}
         
         # Colors for different classes
         colors = [
@@ -251,4 +296,4 @@ def get_infrastructure_data():
         }
     ]
     
-    return jsonify(sample_data) 
+    return jsonify(sample_data)

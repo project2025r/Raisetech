@@ -42,7 +42,6 @@ def preload_models_on_startup():
     print("✅ Pavement models successfully preloaded on startup")
     return models, midas, midas_transform
 
-@pavement_bp.before_app_first_request
 def preload_models():
     """Preload YOLO and MiDaS models before the first request if not already loaded"""
     global models, midas, midas_transform

@@ -62,6 +62,26 @@ function RoadInfrastructure() {
     }
   }, []);
 
+  // Handle input source change
+  useEffect(() => {
+    // Reset relevant states when input source changes
+    setImagePreview(null);
+    setVideoPreview(null);
+    setProcessedImage(null);
+    setDetectionResults(null);
+    setError('');
+    
+    if (inputSource === 'camera') {
+      setCameraActive(true);
+    } else {
+      setCameraActive(false);
+    }
+    
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [inputSource]);
+
   // Handle file input change for video
   const handleVideoChange = (e) => {
     const file = e.target.files[0];
@@ -96,13 +116,15 @@ function RoadInfrastructure() {
 
   // Handle camera capture
   const handleCapture = () => {
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (imageSrc) {
-      setImagePreview(imageSrc);
-      setImageFile(null);
-      setProcessedImage(null);
-      setDetectionResults(null);
-      setError('');
+    if (webcamRef.current) {
+      const imageSrc = webcamRef.current.getScreenshot();
+      if (imageSrc) {
+        setImagePreview(imageSrc);
+        setImageFile(null);
+        setProcessedImage(null);
+        setDetectionResults(null);
+        setError('');
+      }
     }
   };
 
@@ -130,36 +152,51 @@ function RoadInfrastructure() {
     setCameraOrientation(prev => prev === 'environment' ? 'user' : 'environment');
   };
 
+  // Check if we have media for detection
+  const hasMediaForDetection = () => {
+    if (inputSource === 'video') return !!videoPreview;
+    if (inputSource === 'image' || inputSource === 'camera') return !!imagePreview;
+    return false;
+  };
+
   // Process image/video for detection
   const handleDetect = async () => {
-    if ((!imagePreview && !videoPreview) || selectedClasses.length === 0) {
+    if (!hasMediaForDetection() || selectedClasses.length === 0) {
       setError('Please select input media and at least one detection class');
       return;
     }
-
+  
     setLoading(true);
     setError('');
-
+  
     try {
-      // Prepare request data
-      const requestData = {
-        type: 'road_infra',
-        image: imagePreview,
-        coordinates: coordinates,
-        selectedClasses: selectedClasses
-      };
-
-      // Make API request
-      const response = await axios.post('/api/road-infrastructure/detect', requestData);
-
-      // Handle response
+      const formData = new FormData();
+      formData.append('type', 'road_infra');
+      formData.append('selectedClasses', JSON.stringify(selectedClasses));
+      formData.append('coordinates', coordinates);
+  
+      if (inputSource === 'video' && videoFile) {
+        formData.append('video', videoFile);
+      } else if ((inputSource === 'image' || inputSource === 'camera') && imagePreview) {
+        const blob = await (await fetch(imagePreview)).blob();
+        formData.append('image', blob, 'capture.jpg');
+      }
+  
+      const response = await axios.post('/api/road-infrastructure/detect', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+  
       if (response.data.success) {
         setProcessedImage(response.data.processed_image);
         setDetectionResults(response.data);
       } else {
         setError(response.data.message || 'Detection failed');
       }
+  
     } catch (error) {
+      console.error('Detection error:', error);
       setError(
         error.response?.data?.message || 
         'An error occurred during detection. Please try again.'
@@ -168,6 +205,7 @@ function RoadInfrastructure() {
       setLoading(false);
     }
   };
+  
 
   // Reset detection
   const handleReset = () => {
@@ -280,13 +318,13 @@ function RoadInfrastructure() {
                   )}
 
                   {inputSource === 'camera' && (
-                    <div className="mb-3">
+                    <div className="text-center mt-3">
                       <Button 
-                        variant={cameraActive ? "primary" : "outline-primary"}
+                        variant={cameraActive ? "danger" : "info"} 
                         onClick={toggleCamera}
-                        className="mb-3"
+                        className="mb-2"
                       >
-                        {cameraActive ? "Disable Camera" : "Enable Camera"}
+                        {cameraActive ? 'Stop Camera' : 'Start Camera'}
                       </Button>
                       
                       {cameraActive && (
@@ -321,30 +359,28 @@ function RoadInfrastructure() {
                           >
                             Capture Photo
                           </Button>
-                          {imagePreview && (
-                            <div className="mt-3">
-                              <img 
-                                src={imagePreview} 
-                                alt="Captured" 
-                                style={{ maxWidth: '100%', maxHeight: '300px' }} 
-                              />
-                            </div>
-                          )}
                         </>
+                      )}
+                      
+                      {imagePreview && (
+                        <div className="mt-3">
+                          <img 
+                            src={imagePreview} 
+                            alt="Captured" 
+                            style={{ maxWidth: '100%', maxHeight: '300px' }} 
+                          />
+                        </div>
                       )}
                     </div>
                   )}
 
                   {error && <Alert variant="danger">{error}</Alert>}
-
                   <div className="d-flex gap-2 mt-3">
                     <Button 
                       variant="primary" 
                       onClick={handleDetect}
                       disabled={loading || 
-                        (inputSource === 'video' && !videoPreview) || 
-                        (inputSource === 'image' && !imagePreview) || 
-                        (inputSource === 'camera' && !imagePreview) ||
+                        !hasMediaForDetection() ||
                         selectedClasses.length === 0}
                     >
                       {loading ? (
@@ -358,8 +394,11 @@ function RoadInfrastructure() {
                           />
                           <span className="ms-2">Processing...</span>
                         </>
-                      ) : "Detect Infrastructure"}
+                      ) : (
+                        "Detect Infrastructure"
+                      )}
                     </Button>
+              
                     <Button 
                       variant="secondary" 
                       onClick={handleReset}
@@ -367,98 +406,98 @@ function RoadInfrastructure() {
                     >
                       Reset
                     </Button>
-                </div>
+                  </div>
               </Card.Body>
             </Card>
           </Col>
           
           <Col md={6}>
-              {processedImage ? (
-            <Card className="mb-4 shadow-sm">
-                  <Card.Header className="bg-success text-white">
-                    <h5 className="mb-0">Detection Results</h5>
-              </Card.Header>
-              <Card.Body>
-                    <div className="processed-image-container mb-3">
-                      <img 
-                        src={processedImage} 
-                        alt="Processed" 
-                        style={{ maxWidth: '100%' }}
-                      />
-                    </div>
-                    
-                    {detectionResults && detectionResults.detections && (
-                      <>
-                        <h5>Detection Summary</h5>
-                <div className="table-responsive">
-                  <table className="table table-striped">
-                    <thead>
-                      <tr>
-                                <th>Infrastructure Type</th>
-                                <th>Count</th>
+            {processedImage ? (
+              <Card className="mb-4 shadow-sm">
+                <Card.Header className="bg-success text-white">
+                  <h5 className="mb-0">Detection Results</h5>
+                </Card.Header>
+                <Card.Body>
+                  <div className="processed-image-container mb-3">
+                    <img 
+                      src={processedImage} 
+                      alt="Processed" 
+                      style={{ maxWidth: '100%' }}
+                    />
+                  </div>
+                  
+                  {detectionResults && detectionResults.detections && (
+                    <>
+                      <h5>Detection Summary</h5>
+                      <div className="table-responsive">
+                        <table className="table table-striped">
+                          <thead>
+                            <tr>
+                              <th>Infrastructure Type</th>
+                              <th>Count</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(getClassCounts()).map(([cls, count]) => (
+                              <tr key={cls}>
+                                <td>{cls}</td>
+                                <td>{count}</td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {Object.entries(getClassCounts()).map(([cls, count]) => (
-                                <tr key={cls}>
-                                  <td>{cls}</td>
-                                  <td>{count}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        
-                        <h5>Detection Details</h5>
-                        <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                          <table className="table table-striped">
-                            <thead>
-                              <tr>
-                                <th>ID</th>
-                                <th>Class</th>
-                                <th>Confidence</th>
-                                <th>Coordinates</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                              {detectionResults.detections.map((detection) => (
-                                <tr key={detection.id}>
-                                  <td>{detection.id}</td>
-                                  <td>{detection.class}</td>
-                                  <td>{(detection.confidence * 100).toFixed(1)}%</td>
-                                  <td>{detection.coordinates}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                      </>
-                    )}
-                  </Card.Body>
-                </Card>
-              ) : (
-                <Card className="mb-4 shadow-sm">
-                  <Card.Header className="bg-info text-white">
-                    <h5 className="mb-0">Instructions</h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <ol>
-                      <li>Select one or more infrastructure types to detect</li>
-                      <li>Choose your input source (video, image, or camera)</li>
-                      <li>Upload media or capture a photo</li>
-                      <li>Click "Detect Infrastructure" to analyze</li>
-                    </ol>
-                    <p>Detection will identify and highlight road infrastructure features such as:</p>
-                    <ul>
-                      <li>Pavement markings</li>
-                      <li>Road signs</li>
-                      <li>Safety barriers</li>
-                      <li>Road edge lines</li>
-                      <li>Lane markings</li>
-                    </ul>
-              </Card.Body>
-            </Card>
-              )}
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      
+                      <h5>Detection Details</h5>
+                      <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                        <table className="table table-striped">
+                          <thead>
+                            <tr>
+                              <th>ID</th>
+                              <th>Class</th>
+                              <th>Confidence</th>
+                              <th>Coordinates</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detectionResults.detections.map((detection) => (
+                              <tr key={detection.id}>
+                                <td>{detection.id}</td>
+                                <td>{detection.class}</td>
+                                <td>{(detection.confidence * 100).toFixed(1)}%</td>
+                                <td>{detection.coordinates}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            ) : (
+              <Card className="mb-4 shadow-sm">
+                <Card.Header className="bg-info text-white">
+                  <h5 className="mb-0">Instructions</h5>
+                </Card.Header>
+                <Card.Body>
+                  <ol>
+                    <li>Select one or more infrastructure types to detect</li>
+                    <li>Choose your input source (video, image, or camera)</li>
+                    <li>Upload media or capture a photo</li>
+                    <li>Click "Detect Infrastructure" to analyze</li>
+                  </ol>
+                  <p>Detection will identify and highlight road infrastructure features such as:</p>
+                  <ul>
+                    <li>Pavement markings</li>
+                    <li>Road signs</li>
+                    <li>Safety barriers</li>
+                    <li>Road edge lines</li>
+                    <li>Lane markings</li>
+                  </ul>
+                </Card.Body>
+              </Card>
+            )}
           </Col>
         </Row>
         </Tab>
@@ -513,4 +552,4 @@ function RoadInfrastructure() {
   );
 }
 
-export default RoadInfrastructure; 
+export default RoadInfrastructure;

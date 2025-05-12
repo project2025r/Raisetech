@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Container, Row, Col, Card, Button, Form, Tabs, Tab, Alert, Spinner } from 'react-bootstrap';
+import React, { useState, useRef, useEffect } from 'react';
+import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner } from 'react-bootstrap';
 import axios from 'axios';
 import Webcam from 'react-webcam';
 import './Pavement.css';
@@ -8,8 +8,9 @@ import useResponsive from '../hooks/useResponsive';
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
   const [detectionType, setDetectionType] = useState('potholes');
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
+  const [imageFiles, setImageFiles] = useState([]);
+  const [imagePreviewsMap, setImagePreviewsMap] = useState({});
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [processedImage, setProcessedImage] = useState(null);
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -18,30 +19,38 @@ const Pavement = () => {
   const [coordinates, setCoordinates] = useState('Not Available');
   const [cameraOrientation, setCameraOrientation] = useState('environment');
   
+  // Add state for batch processing results
+  const [batchResults, setBatchResults] = useState([]);
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [processedCount, setProcessedCount] = useState(0);
+  const [totalToProcess, setTotalToProcess] = useState(0);
+  
+  // Add state for auto-navigation through results
+  const [autoNavigationActive, setAutoNavigationActive] = useState(false);
+  const [autoNavigationIndex, setAutoNavigationIndex] = useState(0);
+  const autoNavigationRef = useRef(null);
+  
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   const { isMobile } = useResponsive();
 
-  // Handle file input change
+  // Handle multiple file input change
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setImageFile(file);
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+      setImageFiles([...imageFiles, ...files]);
       
-      // Create preview
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-        
-        // Reset coordinates when a new file is uploaded
-        // The backend will extract coordinates from EXIF if available
-        setCoordinates('Not Available');
-        
-        // Try to extract EXIF coordinates from the image
-        // We'll handle this on the backend to avoid requiring EXIF libraries in the frontend
-        // The coordinates will be extracted when we send the image for processing
-      };
-      reader.readAsDataURL(file);
+      // Create previews for each file
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setImagePreviewsMap(prev => ({
+            ...prev,
+            [file.name]: reader.result
+          }));
+        };
+        reader.readAsDataURL(file);
+      });
       
       // Reset results
       setProcessedImage(null);
@@ -54,8 +63,16 @@ const Pavement = () => {
   const handleCapture = () => {
     const imageSrc = webcamRef.current.getScreenshot();
     if (imageSrc) {
-      setImagePreview(imageSrc);
-      setImageFile(null);
+      const timestamp = new Date().toISOString();
+      const filename = `camera_capture_${timestamp}.jpg`;
+      
+      setImageFiles([...imageFiles, filename]);
+      setImagePreviewsMap(prev => ({
+        ...prev,
+        [filename]: imageSrc
+      }));
+      setCurrentImageIndex(imageFiles.length);
+      
       setProcessedImage(null);
       setResults(null);
       setError('');
@@ -88,12 +105,7 @@ const Pavement = () => {
   };
 
   // Process image for detection
-  const handleDetect = async () => {
-    if (!imagePreview) {
-      setError('Please upload or capture an image first');
-      return;
-    }
-
+  const handleProcess = async () => {
     setLoading(true);
     setError('');
 
@@ -102,9 +114,18 @@ const Pavement = () => {
       const userString = sessionStorage.getItem('user');
       const user = userString ? JSON.parse(userString) : null;
       
+      // Get the currently selected image
+      const currentImagePreview = Object.values(imagePreviewsMap)[currentImageIndex];
+      
+      if (!currentImagePreview) {
+        setError('No image selected for processing');
+        setLoading(false);
+        return;
+      }
+      
       // Prepare request data
       const requestData = {
-        image: imagePreview,
+        image: currentImagePreview,
         coordinates: coordinates,
         username: user?.username || 'Unknown',
         role: user?.role || 'Unknown'
@@ -146,22 +167,197 @@ const Pavement = () => {
     }
   };
 
+  // Add a new function to process all images
+  const handleProcessAll = async () => {
+    if (Object.keys(imagePreviewsMap).length === 0) {
+      setError('No images to process');
+      return;
+    }
+
+    setBatchProcessing(true);
+    setError('');
+    setBatchResults([]);
+    setProcessedCount(0);
+    setTotalToProcess(Object.keys(imagePreviewsMap).length);
+    
+    // Get user info from session storage
+    const userString = sessionStorage.getItem('user');
+    const user = userString ? JSON.parse(userString) : null;
+    
+    try {
+      // Determine endpoint based on detection type
+      let endpoint;
+      switch(detectionType) {
+        case 'potholes':
+          endpoint = '/api/pavement/detect-potholes';
+          break;
+        case 'cracks':
+          endpoint = '/api/pavement/detect-cracks';
+          break;
+        case 'kerbs':
+          endpoint = '/api/pavement/detect-kerbs';
+          break;
+        default:
+          endpoint = '/api/pavement/detect-potholes';
+      }
+      
+      const results = [];
+      const filenames = Object.keys(imagePreviewsMap);
+      
+      // Process each image sequentially and display immediately
+      for (let i = 0; i < filenames.length; i++) {
+        const filename = filenames[i];
+        const imageData = imagePreviewsMap[filename];
+        
+        try {
+          // Update current image index to show which image is being processed
+          setCurrentImageIndex(i);
+          
+          // Prepare request data
+          const requestData = {
+            image: imageData,
+            coordinates: coordinates,
+            username: user?.username || 'Unknown',
+            role: user?.role || 'Unknown'
+          };
+          
+          // Make API request
+          const response = await axios.post(endpoint, requestData);
+          
+          if (response.data.success) {
+            // Immediately display the processed image
+            setProcessedImage(response.data.processed_image);
+            setResults(response.data);
+            
+            results.push({
+              filename,
+              success: true,
+              processedImage: response.data.processed_image,
+              data: response.data
+            });
+          } else {
+            results.push({
+              filename,
+              success: false,
+              error: response.data.message || 'Detection failed'
+            });
+          }
+        } catch (error) {
+          results.push({
+            filename,
+            success: false,
+            error: error.response?.data?.message || 'An error occurred during detection'
+          });
+        }
+        
+        // Update progress
+        setProcessedCount(prev => prev + 1);
+        
+        // Pause briefly to allow user to see the result before moving to next image
+        // Only pause if not on the last image
+        if (i < filenames.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second pause
+        }
+      }
+      
+      // Store final results but don't show the batch summary
+      setBatchResults(results);
+      
+    } catch (error) {
+      setError('Failed to process batch: ' + (error.message || 'Unknown error'));
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
+
   // Reset detection
   const handleReset = () => {
-    setImageFile(null);
-    setImagePreview(null);
+    setImageFiles([]);
+    setImagePreviewsMap({});
+    setCurrentImageIndex(0);
     setProcessedImage(null);
     setResults(null);
     setError('');
+    setBatchResults([]);
+    setProcessedCount(0);
+    setTotalToProcess(0);
     
     // Only reset coordinates if the camera is not active
-    // This preserves camera-derived coordinates when the camera is on
     if (!cameraActive) {
       setCoordinates('Not Available');
     }
     
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  // Add a function to handle auto-navigation through results
+  const startAutoNavigation = () => {
+    if (batchResults.length === 0) return;
+    
+    // Find only successful results
+    const successfulResults = batchResults.filter(result => result.success);
+    if (successfulResults.length === 0) return;
+    
+    setAutoNavigationActive(true);
+    setAutoNavigationIndex(0);
+    
+    // Display the first result
+    const firstResult = successfulResults[0];
+    const fileIndex = Object.keys(imagePreviewsMap).findIndex(
+      filename => filename === firstResult.filename
+    );
+    
+    if (fileIndex !== -1) {
+      setCurrentImageIndex(fileIndex);
+      setProcessedImage(firstResult.processedImage);
+      setResults(firstResult.data);
+    }
+    
+    // Set up interval for auto-navigation
+    autoNavigationRef.current = setInterval(() => {
+      setAutoNavigationIndex(prevIndex => {
+        const nextIndex = prevIndex + 1;
+        
+        // If we've reached the end, stop auto-navigation
+        if (nextIndex >= successfulResults.length) {
+          clearInterval(autoNavigationRef.current);
+          setAutoNavigationActive(false);
+          return prevIndex;
+        }
+        
+        // Display the next result
+        const nextResult = successfulResults[nextIndex];
+        const nextFileIndex = Object.keys(imagePreviewsMap).findIndex(
+          filename => filename === nextResult.filename
+        );
+        
+        if (nextFileIndex !== -1) {
+          setCurrentImageIndex(nextFileIndex);
+          setProcessedImage(nextResult.processedImage);
+          setResults(nextResult.data);
+        }
+        
+        return nextIndex;
+      });
+    }, 3000); // Change results every 3 seconds
+  };
+
+  // Clean up interval on component unmount
+  useEffect(() => {
+    return () => {
+      if (autoNavigationRef.current) {
+        clearInterval(autoNavigationRef.current);
+      }
+    };
+  }, []);
+
+  // Stop auto-navigation
+  const stopAutoNavigation = () => {
+    if (autoNavigationRef.current) {
+      clearInterval(autoNavigationRef.current);
+      setAutoNavigationActive(false);
     }
   };
 
@@ -208,6 +404,7 @@ const Pavement = () => {
                         onChange={handleFileChange}
                         ref={fileInputRef}
                         disabled={cameraActive}
+                        multiple
                       />
                     </label>
                   </div>
@@ -247,44 +444,89 @@ const Pavement = () => {
                 </div>
               )}
 
-              {imagePreview && (
+              {Object.keys(imagePreviewsMap).length > 0 && (
                 <div className="image-preview-container mb-3">
-                  <h5>Preview</h5>
-                  <img 
-                    src={imagePreview} 
-                    alt="Preview" 
-                    className="image-preview img-fluid" 
-                  />
+                  <h5>Previews</h5>
+                  <div className="image-gallery">
+                    {Object.entries(imagePreviewsMap).map(([name, preview], index) => (
+                      <div 
+                        key={name} 
+                        className={`image-thumbnail ${index === currentImageIndex ? 'selected' : ''}`}
+                        onClick={() => setCurrentImageIndex(index)}
+                      >
+                        <img 
+                          src={preview} 
+                          alt={`Preview ${index + 1}`} 
+                          className="img-thumbnail" 
+                        />
+                        <button 
+                          className="btn btn-sm btn-danger remove-image" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newFiles = imageFiles.filter((_, i) => i !== index);
+                            const newPreviewsMap = {...imagePreviewsMap};
+                            delete newPreviewsMap[name];
+                            setImageFiles(newFiles);
+                            setImagePreviewsMap(newPreviewsMap);
+                            if (currentImageIndex >= newFiles.length) {
+                              setCurrentImageIndex(Math.max(0, newFiles.length - 1));
+                            }
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="current-image-preview">
+                    {Object.values(imagePreviewsMap)[currentImageIndex] && (
+                      <img 
+                        src={Object.values(imagePreviewsMap)[currentImageIndex]} 
+                        alt="Current Preview" 
+                        className="image-preview img-fluid" 
+                      />
+                    )}
+                  </div>
                 </div>
               )}
 
               {error && <Alert variant="danger">{error}</Alert>}
 
-              <div className="d-flex gap-2">
+              <div className="d-flex gap-2 mb-3">
                 <Button 
                   variant="primary" 
-                  onClick={handleDetect}
-                  disabled={!imagePreview || loading}
+                  onClick={handleProcess}
+                  disabled={Object.keys(imagePreviewsMap).length === 0 || loading || batchProcessing}
                 >
                   {loading ? (
                     <>
-                      <Spinner
-                        as="span"
-                        animation="border"
-                        size="sm"
-                        role="status"
-                        aria-hidden="true"
-                      />
+                      <Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" />
                       <span className="ms-2">Detecting...</span>
                     </>
                   ) : (
-                    `Detect ${detectionType === 'potholes' ? 'Potholes' : detectionType === 'cracks' ? 'Cracks' : 'Kerbs'}`
+                    `Detect Current Image`
                   )}
                 </Button>
+                
+                <Button 
+                  variant="success" 
+                  onClick={handleProcessAll}
+                  disabled={Object.keys(imagePreviewsMap).length === 0 || loading || batchProcessing}
+                >
+                  {batchProcessing ? (
+                    <>
+                      <Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" />
+                      <span className="ms-2">Processing {processedCount}/{totalToProcess}</span>
+                    </>
+                  ) : (
+                    `Process All Images`
+                  )}
+                </Button>
+                
                 <Button 
                   variant="secondary" 
                   onClick={handleReset}
-                  disabled={loading}
+                  disabled={loading || batchProcessing}
                 >
                   Reset
                 </Button>
@@ -442,6 +684,102 @@ const Pavement = () => {
               </Card.Body>
             </Card>
           )}
+
+          {/* Batch processing status indicator */}
+          {batchProcessing && (
+            <div className="batch-processing-status mt-3">
+              <div className="d-flex align-items-center">
+                <div className="me-3">
+                  <Spinner animation="border" size="sm" role="status" />
+                </div>
+                <div>
+                  <h6 className="mb-1">Processing images: {processedCount}/{totalToProcess}</h6>
+                  <div className="progress" style={{ height: '10px' }}>
+                    <div 
+                      className="progress-bar" 
+                      role="progressbar" 
+                      style={{ width: `${(processedCount / totalToProcess) * 100}%` }}
+                      aria-valuenow={processedCount}
+                      aria-valuemin="0" 
+                      aria-valuemax={totalToProcess}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!batchProcessing && batchResults.length > 0 && (
+            <div className="batch-complete-status mt-3">
+              <Alert variant="success">
+                <i className="fas fa-check-circle me-2"></i>
+                Processed {batchResults.length} images. 
+                {batchResults.filter(r => r.success).length} successful, 
+                {batchResults.filter(r => !r.success).length} failed.
+              </Alert>
+            </div>
+          )}
+
+          {/* Navigation buttons for processed images */}
+          {batchResults.length > 1 && !batchProcessing && (
+            <div className="image-navigation mt-3 d-flex justify-content-between">
+              <Button 
+                variant="outline-secondary" 
+                size="sm"
+                disabled={currentImageIndex === 0}
+                onClick={() => {
+                  if (currentImageIndex > 0) {
+                    const newIndex = currentImageIndex - 1;
+                    setCurrentImageIndex(newIndex);
+                    
+                    // Find the result for this image
+                    const filename = Object.keys(imagePreviewsMap)[newIndex];
+                    const result = batchResults.find(r => r.filename === filename);
+                    
+                    if (result && result.success) {
+                      setProcessedImage(result.processedImage);
+                      setResults(result.data);
+                    } else {
+                      setProcessedImage(null);
+                      setResults(null);
+                    }
+                  }
+                }}
+              >
+                <i className="fas fa-arrow-left me-1"></i> Previous Image
+              </Button>
+              
+              <div className="image-counter">
+                Image {currentImageIndex + 1} of {Object.keys(imagePreviewsMap).length}
+              </div>
+              
+              <Button 
+                variant="outline-secondary" 
+                size="sm"
+                disabled={currentImageIndex >= Object.keys(imagePreviewsMap).length - 1}
+                onClick={() => {
+                  if (currentImageIndex < Object.keys(imagePreviewsMap).length - 1) {
+                    const newIndex = currentImageIndex + 1;
+                    setCurrentImageIndex(newIndex);
+                    
+                    // Find the result for this image
+                    const filename = Object.keys(imagePreviewsMap)[newIndex];
+                    const result = batchResults.find(r => r.filename === filename);
+                    
+                    if (result && result.success) {
+                      setProcessedImage(result.processedImage);
+                      setResults(result.data);
+                    } else {
+                      setProcessedImage(null);
+                      setResults(null);
+                    }
+                  }
+                }}
+              >
+                Next Image <i className="fas fa-arrow-right ms-1"></i>
+              </Button>
+            </div>
+          )}
         </Tab>
         <Tab eventKey="information" title="Information">
           <Card>
@@ -510,3 +848,4 @@ const Pavement = () => {
 };
 
 export default Pavement; 
+ 
