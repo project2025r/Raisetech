@@ -1,251 +1,585 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 import cv2
 import numpy as np
 import base64
 import os
+import logging
+import time
+import json
+import torch
 from utils.models import load_yolo_models
+from threading import Lock, Thread
+from datetime import datetime
+import pandas as pd
+from math import radians, cos, sin, asin, sqrt
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 road_infrastructure_bp = Blueprint('road_infrastructure', __name__)
 
-# Global variable for models - lazy loaded
+# Global variables  
 models = None
+processing_lock = Lock()
+current_processing = None
+processing_stop_flag = False
+processing_thread = None
 
-# Define the continuous and distinct classes as in the StreamlitApp
-continuous_classes = ["HTP-edge_line", "HTP-lane_line", "Water-Based Kerb Paint"]
-distinct_classes = [
-    "Cold Plastic Rumble Marking Paint",
-    "Raised Pavement Markers",
-    "Rubber Speed Breaker",
-    "SW_Beam_Crash_Barrier",
-    "YNM Informatory Sign Boards"
+# Create processed_videos directory if it doesn't exist
+PROCESSED_VIDEOS_DIR = os.path.join(os.path.dirname(__file__), '..', 'processed_videos')
+os.makedirs(PROCESSED_VIDEOS_DIR, exist_ok=True)
+
+# Define the continuous and distinct classes
+continuous_classes = [
+    'Hot Thermoplastic Paint-edge_line-',
+    'Water-Based Kerb Paint',
+    'Single W Metal Beam Crash Barrier'
 ]
+
+distinct_classes = [
+    'Hot Thermoplastic Paint-lane_line-',
+    'Rubber Speed Breaker',
+    'YNM Informatory Sign Boards',
+    'Cold Plastic Rumble Marking Paint',
+    'Raised Pavement Markers'
+]
+
+# Object tracking variables
+tracked_objects = {}
+object_id_counter = 0
+iou_threshold = 0.5
+max_missing_frames = 30
+
+def calculate_iou(box1, box2):
+    """Calculate Intersection over Union between two bounding boxes"""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union = box1_area + box2_area - intersection
+    
+    return intersection / union if union > 0 else 0
 
 def get_models():
     """Lazy-load models when needed"""
     global models
     
     if models is None:
+        logger.info("Loading YOLO models...")
+        
+        # Log CUDA availability and device info
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+            logger.info(f"Current CUDA device: {torch.cuda.current_device()}")
+            logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+            logger.info(f"CUDA device memory allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+            logger.info(f"CUDA device memory cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+        
         models = load_yolo_models()
-        # Dynamically assign class names for each detection model
-        for detection_type in models:
-            if detection_type == "road_infra":
-                models[f"{detection_type}_classes"] = distinct_classes + continuous_classes
-            # You can extend with more detection types and class lists here if needed
+        
+        # Log model device information
+        for model_name, model in models.items():
+            if model_name == "road_infra":
+                # For YOLO models
+                if hasattr(model, 'device'):
+                    logger.info(f"Model {model_name} is using device: {model.device}")
+                elif hasattr(model, 'model'):
+                    logger.info(f"Model {model_name} is using device: {model.model.device}")
+            else:
+                # For other model types (like SegmentationModel)
+                try:
+                    device = next(model.parameters()).device
+                    logger.info(f"Model {model_name} is using device: {device}")
+                except (AttributeError, StopIteration):
+                    logger.info(f"Model {model_name} device information not available")
+        
+        # Get class names from YOLO model
+        if 'road_infra' in models:
+            yolo_class_names = list(models['road_infra'].names.values())
+            models['road_infra_classes'] = yolo_class_names
+        else:
+            yolo_class_names = []
+        
+        # # Dynamically assign class names for each detection model
+        # for detection_type in models:
+        #     if detection_type == "road_infra":
+        #         models[f"{detection_type}_classes"] = distinct_classes + continuous_classes
+        # logger.info("Models loaded successfully")
 
     return models
 
-
-def decode_base64_image(base64_string):
-    """Decode a base64 image to cv2 format"""
-    if 'base64,' in base64_string:
-        base64_string = base64_string.split('base64,')[1]
+def process_video_frame(frame, frame_count, coordinates, selected_classes, models):
+    """Process a single video frame and return detections"""
+    global tracked_objects, object_id_counter
     
-    img_data = base64.b64decode(base64_string)
-    np_arr = np.frombuffer(img_data, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    return img
-
-def encode_processed_image(image):
-    """Encode a processed image to base64"""
-    _, buffer = cv2.imencode('.jpg', image)
-    encoded_image = base64.b64encode(buffer).decode('utf-8')
-    return f"data:image/jpeg;base64,{encoded_image}"
-
-def extract_frame_from_video(video_base64):
-    """Extract the first frame from a base64 encoded video"""
-    try:
-        # Remove data URL prefix if present
-        if 'base64,' in video_base64:
-            video_base64 = video_base64.split('base64,')[1]
-        
-        # Decode base64 to binary
-        video_data = base64.b64decode(video_base64)
-        
-        # Create a temporary file to store the video
-        temp_video_path = "temp_video.mp4"
-        with open(temp_video_path, "wb") as f:
-            f.write(video_data)
-        
-        # Open the video file
-        cap = cv2.VideoCapture(temp_video_path)
-        
-        # Check if video opened successfully
-        if not cap.isOpened():
-            raise Exception("Could not open video file")
-        
-        # Read the first frame
-        ret, frame = cap.read()
-        
-        # Release the video capture object and delete temp file
-        cap.release()
-        if os.path.exists(temp_video_path):
-            os.remove(temp_video_path)
-        
-        if not ret:
-            raise Exception("Could not read frame from video")
-        
-        return frame
+    logger.debug(f"Processing frame {frame_count}")
     
-    except Exception as e:
-        raise Exception(f"Error extracting frame from video: {str(e)}")
-
-@road_infrastructure_bp.route('/detect', methods=['POST'])
-def detect_infrastructure():
-    """
-    API endpoint to detect road infrastructure elements
-    """
-    # Get models
-    models = get_models()
+    # Log GPU memory before processing
+    if torch.cuda.is_available():
+        logger.debug(f"GPU Memory before frame {frame_count}:")
+        logger.debug(f"Allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+        logger.debug(f"Cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
     
-    if not models:
-        return jsonify({
-            "success": False,
-            "message": "Failed to load models"
-        }), 500
+    start_time = time.time()
+    detection_frame = frame.copy()
+    current_frame_detections = []
+    continuous_frame_flags = {cls: False for cls in continuous_classes}
     
-    # Check if we have image or video data
-    if 'image' not in request.json and 'video' not in request.json:
-        return jsonify({
-            "success": False,
-            "message": "No image or video data provided"
-        }), 400
+    # Run detection
+    results = models["road_infra"](frame, conf=0.3)
     
-    # Extract coordinates if provided
-    coordinates = request.json.get('coordinates', 'Not Available')
+    # Log inference time
+    inference_time = time.time() - start_time
+    logger.debug(f"Frame {frame_count} inference time: {inference_time:.3f} seconds")
+        
+    # Use model's class names for mapping
+    class_names = models["road_infra_classes"]
     
-    # Get selected classes for filtering
-    selected_classes = request.json.get('selectedClasses', [])
-    
-    try:
-        # Process based on input type
-        if 'image' in request.json and request.json['image']:
-            # Get and decode image data
-            image_data = request.json['image']
-            image = decode_base64_image(image_data)
-        elif 'video' in request.json and request.json['video']:
-            # Extract frame from video
-            video_data = request.json['video']
-            image = extract_frame_from_video(video_data)
-        else:
-            return jsonify({
-                "success": False,
-                "message": "Invalid or empty image/video data"
-            }), 400
+    # Process detections
+    for result in results:
+        boxes = result.boxes
+        classes = boxes.cls.int().cpu().tolist()
+        confidences = boxes.conf.cpu().tolist()
+        coords = boxes.xyxy.cpu().numpy()
         
-        if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to process input data"
-            }), 400
-        
-        # Process the image
-        processed_image = image.copy()
-        
-        # Get requested detection type
-        detection_type = request.json.get('type', 'road_infra')
-        
-        if detection_type not in models:
-            return jsonify({
-                "success": False,
-                "message": f"Unknown detection type: {detection_type}"
-            }), 400
-        
-        # Detect objects
-        results = models[detection_type](processed_image, conf=0.25)
-        
-        # Process results
-        detections = []
-        
-        # Colors for different classes
-        colors = [
-            (0, 255, 0),    # Green
-            (255, 0, 0),    # Blue
-            (0, 0, 255),    # Red
-            (255, 255, 0),  # Cyan
-            (255, 0, 255),  # Magenta
-            (0, 255, 255),  # Yellow
-            (128, 0, 128),  # Purple
-            (0, 128, 128),  # Teal
-            (128, 128, 0)   # Olive
-        ]
-        
-        for result in results:
-            boxes = result.boxes
-            classes = boxes.cls.int().cpu().tolist()
-            confidences = boxes.conf.cpu().tolist()
-            coords = boxes.xyxy.cpu().numpy()
+        for box, cls, conf in zip(coords, classes, confidences):
+            detection_class = class_names[cls] if cls < len(class_names) else f"Class {cls}"
             
-            class_names = models[f"{detection_type}_classes"]
+            # Skip if not in selected classes
+            if selected_classes and detection_class not in selected_classes:
+                continue
+                
+            x1, y1, x2, y2 = map(int, box)
+            bbox = [x1, y1, x2, y2]
             
-            for i, (cls, conf, box) in enumerate(zip(classes, confidences, coords)):
-                class_name = class_names[cls] if cls < len(class_names) else f"Class {cls}"
-                
-                # Skip if this class is not in selected_classes (if filtering is active)
-                if selected_classes and class_name not in selected_classes:
-                    continue
-                
-                # Get box coordinates
-                x1, y1, x2, y2 = map(int, box[:4])
-                
-                # Draw bounding box
-                color = colors[cls % len(colors)]
-                cv2.rectangle(processed_image, (x1, y1), (x2, y2), color, 2)
-                
-                # Draw label
-                text = f"{class_name} ({conf:.2f})"
-                cv2.putText(processed_image, text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                
-                # Calculate dimensions
-                width = x2 - x1
-                height = y2 - y1
-                area = width * height
-                
-                # Determine if this is a distinct or continuous element
-                element_type = "distinct" if class_name in distinct_classes else "continuous"
-                
-                # Add to results
-                detections.append({
-                    "id": i + 1,
-                    "class": class_name,
-                    "confidence": round(float(conf), 3),
-                    "width": width,
-                    "height": height,
-                    "area": area,
-                    "type": element_type,
-                    "coordinates": coordinates
+            if detection_class in distinct_classes:
+                current_frame_detections.append({
+                    'class': detection_class,
+                    'bbox': bbox,
+                    'confidence': float(conf)
                 })
+            elif detection_class in continuous_classes:
+                continuous_frame_flags[detection_class] = True
+                cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+                cv2.putText(detection_frame, detection_class, (x1, y1 - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+    
+    # Update tracked objects
+    updated_tracked = {}
+    used_ids = set()
+    
+    for det in current_frame_detections:
+        best_match_id = None
+        best_iou = 0
         
-        # Encode the processed image
-        encoded_image = encode_processed_image(processed_image)
+        for obj_id, obj in tracked_objects.items():
+            if obj['class'] != det['class']:
+                continue
+            iou = calculate_iou(det['bbox'], obj['bbox'])
+            if iou > best_iou and iou > iou_threshold:
+                best_iou = iou
+                best_match_id = obj_id
         
-        # Prepare summary statistics
-        class_counts = {}
-        for det in detections:
-            class_name = det["class"]
-            class_counts[class_name] = class_counts.get(class_name, 0) + 1
+        if best_match_id is not None:
+            tracked_objects[best_match_id]['bbox'] = det['bbox']
+            tracked_objects[best_match_id]['last_seen'] = frame_count
+            updated_tracked[best_match_id] = tracked_objects[best_match_id]
+            used_ids.add(best_match_id)
+        else:
+            object_id_counter += 1
+            new_id = object_id_counter
+            updated_tracked[new_id] = {
+                'class': det['class'],
+                'bbox': det['bbox'],
+                'last_seen': frame_count
+            }
+    
+    # Update tracked objects that weren't matched
+    for obj_id, obj in tracked_objects.items():
+        if obj_id not in used_ids:
+            if frame_count - obj['last_seen'] <= max_missing_frames:
+                updated_tracked[obj_id] = obj
+    
+    tracked_objects = updated_tracked
+    
+    # Draw tracked objects
+    for obj_id, obj in tracked_objects.items():
+        if obj['last_seen'] == frame_count and obj['class'] in distinct_classes:
+            x1, y1, x2, y2 = obj['bbox']
+            cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = f"{obj['class']} ({obj_id})"
+            cv2.putText(detection_frame, label, (x1, y1 - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    
+    # Convert frame to base64 for streaming
+    success, buffer = cv2.imencode('.jpg', detection_frame)
+    if not success:
+        logger.error(f'Frame {frame_count}: JPEG encoding failed!')
+        frame_base64 = ''
+    else:
+        frame_base64 = base64.b64encode(buffer).decode('utf-8')
+    logger.debug(f'Frame {frame_count} base64 length: {len(frame_base64)}')
+    
+    # Log GPU memory after processing
+    if torch.cuda.is_available():
+        logger.debug(f"GPU Memory after frame {frame_count}:")
+        logger.debug(f"Allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+        logger.debug(f"Cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+    
+    logger.debug(f"Frame {frame_count} processed successfully")
+    return frame_base64, current_frame_detections, continuous_frame_flags
+
+def haversine(coord1, coord2):
+    # Calculate the great circle distance between two points on the earth (specified in decimal degrees)
+    lat1, lon1 = coord1
+    lat2, lon2 = coord2
+    # convert decimal degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    # haversine formula
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371  # Radius of earth in kilometers
+    return c * r
+
+def interpolate_coordinates(coordinates):
+    cumulative_distance = 0
+    intermediate_data = []
+    for i in range(len(coordinates)-1):
+        start_time, start_coord = coordinates[i]
+        end_time, end_coord = coordinates[i+1]
+        time_interval = end_time - start_time
+        for t in range(time_interval+1):
+            fraction = t/time_interval if time_interval != 0 else 0
+            lat = start_coord[0] + (end_coord[0]-start_coord[0])*fraction
+            lon = start_coord[1] + (end_coord[1]-start_coord[1])*fraction
+            coord = (lat, lon)
+            if t==0 and i==0:
+                distance = 0
+            else:
+                distance = haversine(intermediate_data[-1]["Coordinates"], coord)
+            cumulative_distance += distance
+            intermediate_data.append({
+                "Time": start_time+t,
+                "Coordinates": coord,
+                "Distance (km)": round(distance,3),
+                "Cumulative Distance (km)": round(cumulative_distance,3)
+            })
+    return pd.DataFrame(intermediate_data)
+
+coordinates = [
+    (0, (1.3006389, 103.8635833)),
+    (53, (1.297318, 103.859268)),
+    (103, (1.295415, 103.857382)),
+    (145, (1.293250, 103.856030)),
+    (181, (1.288964, 103.854396)),
+    (205, (1.286459, 103.853885)),
+    (226, (1.283927, 103.852936)),
+    (239, (1.282433, 103.852168)),
+    (265, (1.280199, 103.850698)),
+    (281, (1.278865, 103.849899))
+]
+
+df_cleaned = interpolate_coordinates(coordinates)
+
+
+def process_video(video_path, coordinates, selected_classes):
+    """Process video and yield frames"""
+    global current_processing, processing_stop_flag
+    
+    try:
+        # Reset stop flag at start of processing
+        processing_stop_flag = False
         
-        # Separate distinct and continuous elements
-        distinct_elements = [d for d in detections if d['type'] == 'distinct']
-        continuous_elements = [d for d in detections if d['type'] == 'continuous']
-        
-        # Return results
-        return jsonify({
+        # Get models
+        models = get_models()
+        if not models:
+            yield json.dumps({"success": False, "message": "Failed to load models"})
+            return
+
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            yield json.dumps({"success": False, "message": "Could not open video file"})
+            return
+
+        # Get video properties
+        frame_rate = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        logger.info(f"Video properties - FPS: {frame_rate}, Total frames: {total_frames}, Resolution: {width}x{height}")
+
+        # Create output video writer
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"processed_video_{timestamp}.mp4"
+        output_path = os.path.join(PROCESSED_VIDEOS_DIR, output_filename)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, frame_rate, (width, height))
+        logger.info(f"Saving processed video to: {output_path}")
+
+        # Initialize tracking variables
+        iou_threshold = 0.1
+        max_missing_frames = 5
+        tracked_objects = {}
+        object_id_counter = 0
+        distinct_detections = []
+        continuous_lengths = {}
+        continuous_last_second_added = {}
+
+        # Process frames
+        frame_count = 0
+        while cap.isOpened() and not processing_stop_flag:
+            ret, frame = cap.read()
+            if not ret:
+                logger.info("End of video reached")
+                break
+
+            frame_count += 1
+            current_second = frame_count // frame_rate
+            matched_row = df_cleaned[df_cleaned["Time"] == current_second]
+            coords = matched_row.iloc[0]["Coordinates"] if not matched_row.empty else (None, None)
+
+            detection_frame = frame.copy()
+            current_frame_detections = []
+            continuous_frame_flags = {cls: False for cls in continuous_classes}
+
+            # Run detection
+            results = models["road_infra"](frame, conf=0.3)
+            
+            # Process detections
+            for result in results:
+                for box, cls, conf in zip(result.boxes.xyxy, result.boxes.cls, result.boxes.conf):
+                    detection_class = models["road_infra"].names[int(cls)]
+                    
+                    # Skip if not in selected classes
+                    if selected_classes and detection_class not in selected_classes:
+                        continue
+                
+                    x1, y1, x2, y2 = map(int, box)
+                    bbox = [x1, y1, x2, y2]
+                    
+                    if detection_class in distinct_classes:
+                        current_frame_detections.append({
+                            'class': detection_class,
+                            'bbox': bbox
+                        })
+                    elif detection_class in continuous_classes:
+                        continuous_frame_flags[detection_class] = True
+                        cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+                        cv2.putText(detection_frame, detection_class, (x1, y1 - 10),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+
+            # Update tracked objects
+            updated_tracked = {}
+            used_ids = set()
+            
+            for det in current_frame_detections:
+                best_match_id = None
+                best_iou = 0
+                
+                for obj_id, obj in tracked_objects.items():
+                    if obj['class'] != det['class']:
+                        continue
+                    iou = calculate_iou(det['bbox'], obj['bbox'])
+                    if iou > best_iou and iou > iou_threshold:
+                        best_iou = iou
+                        best_match_id = obj_id
+                
+                if best_match_id is not None:
+                    tracked_objects[best_match_id]['bbox'] = det['bbox']
+                    tracked_objects[best_match_id]['last_seen'] = frame_count
+                    updated_tracked[best_match_id] = tracked_objects[best_match_id]
+                    distinct_detections.append({
+                        'Frame': frame_count,
+                        'Second': current_second,
+                        'ID': best_match_id,
+                        'Class': det['class'],
+                        'GPS': coords
+                    })
+                    used_ids.add(best_match_id)
+                else:
+                    object_id_counter += 1
+                    new_id = object_id_counter
+                    updated_tracked[new_id] = {
+                        'class': det['class'],
+                        'bbox': det['bbox'],
+                        'last_seen': frame_count
+                    }
+                    distinct_detections.append({
+                        'Frame': frame_count,
+                        'Second': current_second,
+                        'ID': new_id,
+                        'Class': det['class'],
+                        'GPS': coords
+                    })
+            
+            # Update tracked objects that weren't matched
+            for obj_id, obj in tracked_objects.items():
+                if obj_id not in used_ids:
+                    if frame_count - obj['last_seen'] <= max_missing_frames:
+                        updated_tracked[obj_id] = obj
+            
+            tracked_objects = updated_tracked
+
+            # Draw tracked objects
+            for obj_id, obj in tracked_objects.items():
+                if obj['last_seen'] == frame_count and obj['class'] in distinct_classes:
+                    x1, y1, x2, y2 = obj['bbox']
+                    cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"{obj['class']} ({obj_id})"
+                    cv2.putText(detection_frame, label, (x1, y1 - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # Update continuous lengths
+            distance = 0
+            if not matched_row.empty:
+                distance = matched_row.iloc[0]["Distance (km)"]
+            for cls, detected in continuous_frame_flags.items():
+                if detected:
+                    if continuous_last_second_added.get(cls, -1) != current_second:
+                        continuous_lengths[cls] = continuous_lengths.get(cls, 0) + distance
+                        continuous_last_second_added[cls] = current_second
+
+            # After updating continuous_lengths, draw cumulative length for each detected continuous class
+            for result in results:
+                for box, cls_idx, conf in zip(result.boxes.xyxy, result.boxes.cls, result.boxes.conf):
+                    detection_class = models["road_infra"].names[int(cls_idx)]
+                    if detection_class in continuous_classes and continuous_frame_flags[detection_class]:
+                        x1, y1, x2, y2 = map(int, box)
+                        cum_length = continuous_lengths.get(detection_class, 0)
+                        label = f"{detection_class}: {cum_length:.2f} km"
+                        cv2.putText(detection_frame, label, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+
+            # Build live tables
+            df_distinct = pd.DataFrame(distinct_detections)
+            if not df_distinct.empty:
+                df_distinct_sorted = df_distinct.sort_values(by="Frame")
+                df_distinct_latest = df_distinct_sorted.groupby("ID", as_index=False).last()
+                live_distinct_table = df_distinct_latest[['ID', 'Class', 'GPS', 'Frame', 'Second']].to_dict(orient='records')
+            else:
+                live_distinct_table = []
+
+            live_continuous_table = [
+                {"Class": k, "Cumulative Length (km)": round(v, 3)} for k, v in continuous_lengths.items()
+            ]
+
+            # Convert frame to base64 for streaming
+            success, buffer = cv2.imencode('.jpg', detection_frame)
+            if not success:
+                logger.error(f'Frame {frame_count}: JPEG encoding failed!')
+                frame_base64 = ''
+            else:
+                frame_base64 = base64.b64encode(buffer).decode('utf-8')
+
+            # Write frame to output video
+            out.write(detection_frame)
+
+            # Send frame data
+            frame_data = {
+                "frame": frame_base64,
+                "frame_count": frame_count,
+                "total_frames": total_frames,
+                "live_distinct_table": live_distinct_table,
+                "live_continuous_table": live_continuous_table,
+                "output_path": output_path
+            }
+
+            # At the start, send class_names to the frontend in the first frame's data
+            if frame_count == 1:
+                frame_data['class_names'] = list(models["road_infra"].names.values())
+
+            yield f"data: {json.dumps(frame_data)}\n\n"
+
+        # Release video writer
+        out.release()
+        logger.info(f"Processed video saved successfully to: {output_path}")
+
+        # Send final results
+        final_data = {
             "success": True,
-            "message": f"Detected {len(detections)} objects",
-            "processed_image": encoded_image,
-            "detections": detections,
-            "class_counts": class_counts,
-            "distinct_elements": distinct_elements,
-            "continuous_elements": continuous_elements
-        })
+            "total_frames": frame_count,
+            "distinct_detections": distinct_detections,
+            "continuous_lengths": continuous_lengths,
+            "output_path": output_path,
+            "stopped_early": processing_stop_flag
+        }
+
+        logger.info("Processing completed successfully")
+        yield f"data: {json.dumps(final_data)}\n\n"
     
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error during detection: {str(e)}", exc_info=True)
+        yield f"data: {json.dumps({'success': False, 'message': str(e)})}\n\n"
+    finally:
+        if 'cap' in locals():
+            cap.release()
+        if 'out' in locals():
+            out.release()
+        current_processing = None
+        processing_stop_flag = False  # Reset the stop flag
+
+@road_infrastructure_bp.route('/detect', methods=['GET', 'POST'])
+def detect_infrastructure():
+    """API endpoint to detect road infrastructure elements"""
+    global current_processing
+    global processing_thread
+    
+    if request.method == 'GET':
+        logger.info("Received GET request for SSE connection")
+        if current_processing is None:
+            return jsonify({"success": False, "message": "No video processing in progress"}), 400
+        return Response(stream_with_context(current_processing), mimetype='text/event-stream')
+
+    logger.info("Received detection request")
+    
+    # Check if we have video data
+    if 'video' not in request.files:
+        logger.error("No video data provided")
         return jsonify({
             "success": False,
-            "message": f"Error processing image: {str(e)}"
-        }), 500
+            "message": "No video data provided"
+        }), 400
+
+    # Get video file and other parameters
+    video_file = request.files['video']
+    coordinates = request.form.get('coordinates', 'Not Available')
+    selected_classes = request.form.get('selectedClasses', '[]')
+    selected_classes = json.loads(selected_classes)
+
+    logger.info(f"Processing video with coordinates: {coordinates}")
+    logger.info(f"Selected classes: {selected_classes}")
+
+    try:
+        # Save video temporarily
+        temp_video_path = os.path.join(os.path.dirname(__file__), "temp_video.mp4")
+        logger.info(f"Saving video to temporary path: {temp_video_path}")
+        video_file.save(temp_video_path)
+
+        # Start processing in a separate thread
+        with processing_lock:
+            if processing_thread is not None and processing_thread.is_alive():
+                return jsonify({"success": False, "message": "Another video is being processed"}), 400
+            def target():
+                global current_processing
+                current_processing = process_video(temp_video_path, coordinates, selected_classes)
+                # The generator will run and yield data for SSE
+            processing_thread = Thread(target=target)
+            processing_thread.start()
+
+        return jsonify({"success": True, "message": "Video processing started"})
+
+    except Exception as e:
+        logger.error(f"Error during video setup: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @road_infrastructure_bp.route('/data', methods=['GET'])
 def get_infrastructure_data():
@@ -297,3 +631,22 @@ def get_infrastructure_data():
     ]
     
     return jsonify(sample_data)
+
+@road_infrastructure_bp.route('/stop_processing', methods=['POST'])
+def stop_processing():
+    """API endpoint to stop video processing"""
+    global processing_stop_flag
+    global processing_thread
+    global current_processing
+    processing_stop_flag = True
+    if processing_thread is not None:
+        processing_thread.join(timeout=10)  # Wait up to 10 seconds for thread to finish
+        processing_thread = None
+    current_processing = None
+    return jsonify({"success": True, "message": "Stop signal sent"})
+
+@road_infrastructure_bp.route('/status', methods=['GET'])
+def get_processing_status():
+    global processing_thread
+    status = "processing" if processing_thread is not None and processing_thread.is_alive() else "idle"
+    return jsonify({"status": status})

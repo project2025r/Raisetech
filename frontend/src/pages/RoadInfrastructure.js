@@ -30,21 +30,33 @@ function RoadInfrastructure() {
   const [inputSource, setInputSource] = useState('video');
   const [activeTab, setActiveTab] = useState('detection');
   const [cameraOrientation, setCameraOrientation] = useState('environment');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [shouldStop, setShouldStop] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [frameBuffer, setFrameBuffer] = useState([]);
+  const [currentFrameIndex, setCurrentFrameIndex] = useState(0);
+  const BUFFER_SIZE = 10; // Number of frames to buffer before playback
+  const PLAYBACK_FPS = 15; // Playback frame rate
+  const [liveDistinctTable, setLiveDistinctTable] = useState([]);
+  const [liveContinuousTable, setLiveContinuousTable] = useState([]);
+  const [classNames, setClassNames] = useState([]);
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   const { isMobile } = useResponsive();
+  const eventSourceRef = useRef(null);
 
   // Road infrastructure classes (from the Python model)
   const roadInfraClasses = [
-    "Cold Plastic Rumble Marking Paint",
-    "Raised Pavement Markers",
-    "Rubber Speed Breaker",
-    "SW_Beam_Crash_Barrier",
-    "Water-Based Kerb Paint",
-    "YNM Informatory Sign Boards",
-    "HTP-edge_line",
-    "HTP-lane_line"
+    'Hot Thermoplastic Paint-edge_line-',
+    'Water-Based Kerb Paint',
+    'Single W Metal Beam Crash Barrier',
+    'Hot Thermoplastic Paint-lane_line-',
+    'Rubber Speed Breaker',
+    'YNM Informatory Sign Boards',
+    'Cold Plastic Rumble Marking Paint',
+    'Raised Pavement Markers'
   ];
 
   // Find user's location
@@ -159,6 +171,22 @@ function RoadInfrastructure() {
     return false;
   };
 
+  // Reset detection
+  const handleReset = () => {
+    setShouldStop(true);
+    setVideoFile(null);
+    setVideoPreview(null);
+    setImageFile(null);
+    setImagePreview(null);
+    setProcessedImage(null);
+    setDetectionResults(null);
+    setError('');
+    setIsProcessing(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   // Process image/video for detection
   const handleDetect = async () => {
     if (!hasMediaForDetection() || selectedClasses.length === 0) {
@@ -166,8 +194,20 @@ function RoadInfrastructure() {
       return;
     }
   
+    console.log('Starting detection process...');
+    console.log('Selected classes:', selectedClasses);
+    console.log('Input source:', inputSource);
+    console.log('Coordinates:', coordinates);
+  
     setLoading(true);
     setError('');
+    setIsProcessing(true);
+    setShouldStop(false);
+    setIsBuffering(true);
+    setIsPlaying(false);
+    setFrameBuffer([]);
+    setCurrentFrameIndex(0);
+    setProcessedImage(null);
   
     try {
       const formData = new FormData();
@@ -176,50 +216,160 @@ function RoadInfrastructure() {
       formData.append('coordinates', coordinates);
   
       if (inputSource === 'video' && videoFile) {
+        console.log('Processing video file:', videoFile.name);
         formData.append('video', videoFile);
       } else if ((inputSource === 'image' || inputSource === 'camera') && imagePreview) {
+        console.log('Processing image/camera input');
         const blob = await (await fetch(imagePreview)).blob();
         formData.append('image', blob, 'capture.jpg');
       }
   
-      const response = await axios.post('/api/road-infrastructure/detect', formData, {
+      console.log('Sending request to backend...');
+      
+      // First, upload the video file and start processing
+      const uploadResponse = await axios.post('/api/road-infrastructure/detect', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       });
-  
-      if (response.data.success) {
-        setProcessedImage(response.data.processed_image);
-        setDetectionResults(response.data);
-      } else {
-        setError(response.data.message || 'Detection failed');
+      
+      console.log('Upload response:', uploadResponse.data);
+      
+      if (!uploadResponse.data.success) {
+        throw new Error(uploadResponse.data.message);
+      }
+      
+      // Then, establish SSE connection
+      const eventSource = new EventSource('/api/road-infrastructure/detect');
+      eventSourceRef.current = eventSource;
+      
+      eventSource.onmessage = (event) => {
+        if (eventSourceRef.current === null) return; // If stopped, ignore
+        const data = JSON.parse(event.data);
+        console.log('Received frame data:', data);
+        
+        if (data.success === false) {
+          setError(data.message || 'Detection failed');
+          eventSource.close();
+          eventSourceRef.current = null;
+          setIsProcessing(false);
+          setLoading(false);
+          return;
+        }
+        
+        if (data.frame && typeof data.frame === 'string' && data.frame.length > 1000) {
+          setFrameBuffer(prev => {
+            const newBuffer = [...prev, data.frame];
+            if (newBuffer.length >= BUFFER_SIZE && !isPlaying) {
+              setIsBuffering(false);
+              setIsPlaying(true);
+            }
+            return newBuffer;
+          });
+        } else if (data.frame && data.frame.length <= 1000) {
+          console.warn('Received a frame, but it is too short to be valid. Skipping.');
+        }
+        
+        // Update detection results
+        if (data.detections) {
+          setDetectionResults(prev => ({
+            ...prev,
+            total_frames: data.total_frames,
+            processed_frames: data.frame_count,
+            detections: [...(prev?.detections || []), ...data.detections],
+            continuous_lengths: data.continuous_lengths,
+            output_path: data.output_path
+          }));
+        }
+        
+        // Update live tables
+        if (data.live_distinct_table) setLiveDistinctTable(data.live_distinct_table);
+        if (data.live_continuous_table) setLiveContinuousTable(data.live_continuous_table);
+        
+        if (data.class_names && Array.isArray(data.class_names)) {
+          setClassNames(data.class_names);
+        }
+        
+        // Check if this is the final message
+        if (data.tracked_objects) {
+          eventSource.close();
+          eventSourceRef.current = null;
+          setIsProcessing(false);
+          setLoading(false);
+        }
+
+        if (data.stopped_early !== undefined) {
+          console.log('Processing ended:', data.stopped_early ? 'stopped early' : 'completed');
+          setIsProcessing(false);
+          setIsBuffering(false);
+          setLoading(false);
+          if (data.output_path) {
+            // setError(`Processing ${data.stopped_early ? 'stopped' : 'completed'}. Video saved to: ${data.output_path}`);
+          }
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('EventSource error:', error);
+        eventSource.close();
+        eventSourceRef.current = null;
+        // setError('Error during video processing');
+        setIsProcessing(false);
+        setLoading(false);
+      };
+      
+      // Handle stop request
+      if (shouldStop) {
+        eventSource.close();
+        eventSourceRef.current = null;
+        setIsProcessing(false);
+        setLoading(false);
       }
   
     } catch (error) {
       console.error('Detection error:', error);
       setError(
         error.response?.data?.message || 
+        error.message ||
         'An error occurred during detection. Please try again.'
       );
-    } finally {
+      setIsProcessing(false);
       setLoading(false);
     }
   };
-  
 
-  // Reset detection
-  const handleReset = () => {
-    setVideoFile(null);
-    setVideoPreview(null);
-    setImageFile(null);
-    setImagePreview(null);
-    setProcessedImage(null);
-    setDetectionResults(null);
-    setError('');
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+  // Playback timer: play frames from buffer at fixed FPS
+  useEffect(() => {
+    let playbackInterval;
+    if (isPlaying && frameBuffer.length > 0) {
+      playbackInterval = setInterval(() => {
+        setCurrentFrameIndex(prev => {
+          if (prev < frameBuffer.length - 1) {
+            return prev + 1;
+          } else {
+            setIsPlaying(false); // Stop at the end
+            return prev;
+          }
+        });
+      }, 1000 / PLAYBACK_FPS);
     }
-  };
+    return () => {
+      if (playbackInterval) clearInterval(playbackInterval);
+    };
+  }, [isPlaying, frameBuffer]);
+
+  // Update processedImage when currentFrameIndex changes
+  useEffect(() => {
+    if (frameBuffer.length > 0 && currentFrameIndex < frameBuffer.length) {
+      setProcessedImage(frameBuffer[currentFrameIndex]);
+    }
+  }, [currentFrameIndex, frameBuffer]);
+
+  // Playback controls
+  const handlePlayPause = () => setIsPlaying(p => !p);
+  const handleRewind = () => setCurrentFrameIndex(i => Math.max(i - 5, 0));
+  const handleForward = () => setCurrentFrameIndex(i => Math.min(i + 5, frameBuffer.length - 1));
+  const handleSliderChange = (e) => setCurrentFrameIndex(Number(e.target.value));
 
   // Group detections by class
   const getClassCounts = () => {
@@ -229,6 +379,51 @@ function RoadInfrastructure() {
       acc[det.class] = (acc[det.class] || 0) + 1;
       return acc;
     }, {});
+  };
+
+  // Add this new function after the getClassCounts function (around line 380-390)
+  const stopProcessing = async () => {
+    try {
+      // Close the EventSource connection
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+
+      // Send stop signal to backend
+      const response = await axios.post('/api/road-infrastructure/stop_processing');
+      console.log('Stop processing response:', response.data);
+
+      // Update UI state
+      setIsProcessing(false);
+      setShouldStop(true);
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setLoading(false);
+
+      // Keep the last frame and tables visible
+      if (frameBuffer.length > 0) {
+        setProcessedImage(frameBuffer[frameBuffer.length - 1]);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error stopping processing:', error);
+      setError('Failed to stop processing: ' + error.message);
+      setLoading(false);
+      return false;
+    }
+  };
+
+  // Then modify the existing handleStopProcessing function (around line 399-407)
+  const handleStopProcessing = async () => {
+    if (isProcessing) {
+      const stopped = await stopProcessing();
+      setLoading(false);
+      if (stopped) {
+        setError('Processing stopped. Video has been saved.');
+      }
+    }
   };
 
   return (
@@ -241,13 +436,13 @@ function RoadInfrastructure() {
         className="mb-4"
       >
         <Tab eventKey="detection" title="Detection">
-        <Row>
-          <Col md={6}>
-            <Card className="mb-4 shadow-sm">
-              <Card.Header className="bg-primary text-white">
+          <Row>
+            <Col md={6}>
+              <Card className="mb-4 shadow-sm">
+                <Card.Header className="bg-primary text-white">
                   <h5 className="mb-0">Detection Settings</h5>
-              </Card.Header>
-              <Card.Body>
+                </Card.Header>
+                <Card.Body>
                   <Form.Group className="mb-3">
                     <Form.Label>Select Infrastructure Classes to Detect</Form.Label>
                     <Form.Control
@@ -257,7 +452,16 @@ function RoadInfrastructure() {
                       onChange={(e) => setSelectedClasses([...e.target.selectedOptions].map(opt => opt.value))}
                       style={{ height: '150px' }}
                     >
-                      {roadInfraClasses.map((cls) => (
+                      {(classNames.length > 0 ? classNames : [
+                        'Hot Thermoplastic Paint-edge_line-',
+                        'Water-Based Kerb Paint',
+                        'Single W Metal Beam Crash Barrier',
+                        'Hot Thermoplastic Paint-lane_line-',
+                        'Rubber Speed Breaker',
+                        'YNM Informatory Sign Boards',
+                        'Cold Plastic Rumble Marking Paint',
+                        'Raised Pavement Markers'
+                      ]).map((cls) => (
                         <option key={cls} value={cls}>{cls}</option>
                       ))}
                     </Form.Control>
@@ -381,7 +585,8 @@ function RoadInfrastructure() {
                       onClick={handleDetect}
                       disabled={loading || 
                         !hasMediaForDetection() ||
-                        selectedClasses.length === 0}
+                        selectedClasses.length === 0 ||
+                        isProcessing}
                     >
                       {loading ? (
                         <>
@@ -401,105 +606,192 @@ function RoadInfrastructure() {
               
                     <Button 
                       variant="secondary" 
-                      onClick={handleReset}
-                      disabled={loading}
+                      onClick={isProcessing ? handleStopProcessing : handleReset}
+                      disabled={loading && !isProcessing}
                     >
-                      Reset
+                      {isProcessing ? "Stop Processing" : "Reset"}
                     </Button>
                   </div>
-              </Card.Body>
-            </Card>
-          </Col>
-          
-          <Col md={6}>
-            {processedImage ? (
-              <Card className="mb-4 shadow-sm">
-                <Card.Header className="bg-success text-white">
-                  <h5 className="mb-0">Detection Results</h5>
-                </Card.Header>
-                <Card.Body>
-                  <div className="processed-image-container mb-3">
-                    <img 
-                      src={processedImage} 
-                      alt="Processed" 
-                      style={{ maxWidth: '100%' }}
-                    />
-                  </div>
-                  
-                  {detectionResults && detectionResults.detections && (
-                    <>
-                      <h5>Detection Summary</h5>
-                      <div className="table-responsive">
-                        <table className="table table-striped">
-                          <thead>
-                            <tr>
-                              <th>Infrastructure Type</th>
-                              <th>Count</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {Object.entries(getClassCounts()).map(([cls, count]) => (
-                              <tr key={cls}>
-                                <td>{cls}</td>
-                                <td>{count}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      
-                      <h5>Detection Details</h5>
-                      <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                        <table className="table table-striped">
-                          <thead>
-                            <tr>
-                              <th>ID</th>
-                              <th>Class</th>
-                              <th>Confidence</th>
-                              <th>Coordinates</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {detectionResults.detections.map((detection) => (
-                              <tr key={detection.id}>
-                                <td>{detection.id}</td>
-                                <td>{detection.class}</td>
-                                <td>{(detection.confidence * 100).toFixed(1)}%</td>
-                                <td>{detection.coordinates}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  )}
                 </Card.Body>
               </Card>
-            ) : (
-              <Card className="mb-4 shadow-sm">
-                <Card.Header className="bg-info text-white">
-                  <h5 className="mb-0">Instructions</h5>
-                </Card.Header>
-                <Card.Body>
-                  <ol>
-                    <li>Select one or more infrastructure types to detect</li>
-                    <li>Choose your input source (video, image, or camera)</li>
-                    <li>Upload media or capture a photo</li>
-                    <li>Click "Detect Infrastructure" to analyze</li>
-                  </ol>
-                  <p>Detection will identify and highlight road infrastructure features such as:</p>
-                  <ul>
-                    <li>Pavement markings</li>
-                    <li>Road signs</li>
-                    <li>Safety barriers</li>
-                    <li>Road edge lines</li>
-                    <li>Lane markings</li>
-                  </ul>
-                </Card.Body>
-              </Card>
-            )}
-          </Col>
-        </Row>
+            </Col>
+            
+            <Col md={6}>
+              {processedImage ? (
+                <Card className="mb-4 shadow-sm">
+                  <Card.Header className="bg-success text-white">
+                    <h5 className="mb-0">Detection Results</h5>
+                  </Card.Header>
+                  <Card.Body>
+                    <div className="processed-image-container mb-3">
+                      {isBuffering && (
+                        <div className="processing-overlay">
+                          <Spinner animation="border" role="status">
+                            <span className="visually-hidden">Buffering video...</span>
+                          </Spinner>
+                          <span style={{ color: 'white', marginLeft: 10 }}>Buffering video...</span>
+                        </div>
+                      )}
+                      <img
+                        src={processedImage && processedImage.length > 1000 ? `data:image/jpeg;base64,${processedImage}` : ''}
+                        alt="Processed"
+                        style={{ maxWidth: '100%' }}
+                        onError={(e) => { e.target.onerror = null; e.target.src = ''; setError('Failed to display processed frame.'); }}
+                      />
+                      {isProcessing && !isBuffering && (
+                        <div className="processing-overlay">
+                          <Spinner animation="border" role="status">
+                            <span className="visually-hidden">Processing...</span>
+                          </Spinner>
+                        </div>
+                      )}
+                      {/* Playback controls */}
+                      {frameBuffer.length > 0 && !isBuffering && (
+                        <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 10 }}>
+                          <button onClick={handleRewind} disabled={currentFrameIndex === 0}>⏪</button>
+                          <button onClick={handlePlayPause}>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</button>
+                          <button onClick={handleForward} disabled={currentFrameIndex >= frameBuffer.length - 1}>⏩</button>
+                          <input
+                            type="range"
+                            min={0}
+                            max={frameBuffer.length - 1}
+                            value={currentFrameIndex}
+                            onChange={handleSliderChange}
+                            style={{ flex: 1 }}
+                          />
+                          <span style={{ minWidth: 60 }}>{currentFrameIndex + 1} / {frameBuffer.length}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {detectionResults && detectionResults.detections && (
+                      <>
+                        <h5>Detection Summary</h5>
+                        <div className="table-responsive">
+                          <table className="table table-striped">
+                            <thead>
+                              <tr>
+                                <th>Infrastructure Type</th>
+                                <th>Count</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(getClassCounts()).map(([cls, count]) => (
+                                <tr key={cls}>
+                                  <td>{cls}</td>
+                                  <td>{count}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        
+                        {detectionResults.continuous_lengths && Object.keys(detectionResults.continuous_lengths).length > 0 && (
+                          <>
+                            <h5>Cumulative Lengths (Continuous Classes)</h5>
+                            <div className="table-responsive">
+                              <table className="table table-striped">
+                                <thead>
+                                  <tr>
+                                    <th>Infrastructure Type</th>
+                                    <th>Cumulative Length (km)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {Object.entries(detectionResults.continuous_lengths).map(([cls, length]) => (
+                                    <tr key={cls}>
+                                      <td>{cls}</td>
+                                      <td>{length}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                    {/* Live Discrete Table */}
+                    {liveDistinctTable.length > 0 && (
+                      <div style={{ marginTop: 20 }}>
+                        <h5>Live Discrete Detections</h5>
+                        <div className="table-responsive" style={{ maxHeight: 200, overflowY: 'auto' }}>
+                          <table className="table table-striped table-sm">
+                            <thead>
+                              <tr>
+                                <th>ID</th>
+                                <th>Class</th>
+                                <th>GPS</th>
+                                <th>Frame</th>
+                                <th>Second</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {liveDistinctTable.map(row => (
+                                <tr key={row.ID}>
+                                  <td>{row.ID}</td>
+                                  <td>{row.Class}</td>
+                                  <td>{row.GPS ? `${row.GPS[0].toFixed(6)}, ${row.GPS[1].toFixed(6)}` : '-'}</td>
+                                  <td>{row.Frame}</td>
+                                  <td>{row.Second}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                    {/* Live Continuous Table */}
+                    {liveContinuousTable.length > 0 && (
+                      <div style={{ marginTop: 20 }}>
+                        <h5>Live Continuous (Cumulative) Data</h5>
+                        <div className="table-responsive" style={{ maxHeight: 150, overflowY: 'auto' }}>
+                          <table className="table table-striped table-sm">
+                            <thead>
+                              <tr>
+                                <th>Class</th>
+                                <th>Cumulative Length (km)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {liveContinuousTable.map(row => (
+                                <tr key={row.Class}>
+                                  <td>{row.Class}</td>
+                                  <td>{row['Cumulative Length (km)']}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </Card.Body>
+                </Card>
+              ) : (
+                <Card className="mb-4 shadow-sm">
+                  <Card.Header className="bg-info text-white">
+                    <h5 className="mb-0">Instructions</h5>
+                  </Card.Header>
+                  <Card.Body>
+                    <ol>
+                      <li>Select one or more infrastructure types to detect</li>
+                      <li>Choose your input source (video, image, or camera)</li>
+                      <li>Upload media or capture a photo</li>
+                      <li>Click "Detect Infrastructure" to analyze</li>
+                    </ol>
+                    <p>Detection will identify and highlight road infrastructure features such as:</p>
+                    <ul>
+                      <li>Pavement markings</li>
+                      <li>Road signs</li>
+                      <li>Safety barriers</li>
+                      <li>Road edge lines</li>
+                      <li>Lane markings</li>
+                    </ul>
+                  </Card.Body>
+                </Card>
+              )}
+            </Col>
+          </Row>
         </Tab>
         
         <Tab eventKey="information" title="Information">
