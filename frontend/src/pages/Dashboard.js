@@ -6,6 +6,88 @@ import ChartContainer from '../components/ChartContainer';
 import DefectMap from '../components/DefectMap';
 import './dashboard.css';
 
+// ImageCard component to isolate state for each image
+const ImageCard = ({ defect, defectType, defectIdKey }) => {
+  const [isOriginal, setIsOriginal] = useState(false);
+  
+  const toggleView = (showOriginal) => {
+    setIsOriginal(showOriginal);
+  };
+  
+  return (
+    <Col md={4} className="mb-4" key={`${defectType}-${defect[defectIdKey]}`}>
+      <Card className="h-100 shadow-sm">
+        <Card.Header>
+          <h6 className="mb-0">
+            {defectType === 'cracks' ? `${defect.crack_type} #${defect.crack_id}` : 
+             defectType === 'kerbs' ? `${defect.condition} #${defect.kerb_id}` : 
+             `Pothole #${defect.pothole_id}`}
+          </h6>
+        </Card.Header>
+        <Card.Body>
+          <div className="mb-2 text-center">
+            {defect.processed_image_id ? (
+              <img 
+                src={`/api/pavement/get-image/${isOriginal 
+                  ? defect.original_image_id 
+                  : defect.processed_image_id
+                }`}
+                alt={`${defectType === 'cracks' ? 'Crack' : defectType === 'kerbs' ? 'Kerb' : 'Pothole'} ${defect[defectIdKey]}`}
+                className="img-fluid mb-2 border"
+                style={{ maxHeight: "200px" }}
+              />
+            ) : (
+              <div className="text-muted">No image available</div>
+            )}
+          </div>
+          <div className="small">
+            {defectType === 'potholes' && (
+              <>
+                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2.toFixed(2)} cm²</p>
+                <p className="mb-1"><strong>Depth:</strong> {defect.depth_cm.toFixed(2)} cm</p>
+                <p className="mb-1"><strong>Volume:</strong> {defect.volume.toFixed(2)}</p>
+              </>
+            )}
+            {defectType === 'cracks' && (
+              <>
+                <p className="mb-1"><strong>Type:</strong> {defect.crack_type}</p>
+                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2.toFixed(2)} cm²</p>
+                <p className="mb-1"><strong>Range:</strong> {defect.area_range}</p>
+              </>
+            )}
+            {defectType === 'kerbs' && (
+              <>
+                <p className="mb-1"><strong>Type:</strong> {defect.kerb_type}</p>
+                <p className="mb-1"><strong>Length:</strong> {defect.length_m && defect.length_m.toFixed(2)} m</p>
+                <p className="mb-1"><strong>Condition:</strong> {defect.condition}</p>
+              </>
+            )}
+            <p className="mb-1"><strong>Uploaded by:</strong> {defect.username}</p>
+            <p className="mb-1"><strong>Timestamp:</strong> {new Date(defect.timestamp).toLocaleString()}</p>
+            <div className="mt-2">
+              <Button
+                variant={isOriginal ? 'primary' : 'outline-primary'}
+                size="sm"
+                className="me-2"
+                onClick={() => toggleView(true)}
+              >
+                Original
+              </Button>
+              <Button
+                variant={!isOriginal ? 'success' : 'outline-success'}
+                size="sm"
+                onClick={() => toggleView(false)}
+              >
+                Processed
+              </Button>
+            </div>
+          </div>
+        </Card.Body>
+      </Card>
+    </Col>
+  );
+};
+
 function Dashboard() {
   const [statistics, setStatistics] = useState({
     potholesDetected: 0,
@@ -69,13 +151,6 @@ function Dashboard() {
   const [filteredIssuesByType, setFilteredIssuesByType] = useState({
     types: [],
     counts: []
-  });
-
-  // Image toggle state
-  const [displayedImages, setDisplayedImages] = useState({
-    potholes: {}, // Will store pothole_id -> 'original' or 'processed'
-    cracks: {},   // Will store crack_id -> 'original' or 'processed' 
-    kerbs: {}     // Will store kerb_id -> 'original' or 'processed'
   });
 
   // Get current date and 30 days ago for default date range
@@ -271,60 +346,6 @@ function Dashboard() {
       ...prev,
       [defectType]: !prev[defectType]
     }));
-  };
-
-  // Initialize images to processed by default
-  useEffect(() => {
-    if (dashboardData.potholes.latest.length > 0 || 
-        dashboardData.cracks.latest.length > 0 || 
-        dashboardData.kerbs.latest.length > 0) {
-      
-      // Create initialized objects for each defect type
-      const potholeImages = {};
-      const crackImages = {};
-      const kerbImages = {};
-      
-      // Initialize pothole images to 'processed' by default
-      dashboardData.potholes.latest.forEach(pothole => {
-        potholeImages[pothole.pothole_id] = 'processed';
-      });
-      
-      // Initialize crack images to 'processed' by default
-      dashboardData.cracks.latest.forEach(crack => {
-        crackImages[crack.crack_id] = 'processed';
-      });
-      
-      // Initialize kerb images to 'processed' by default
-      dashboardData.kerbs.latest.forEach(kerb => {
-        kerbImages[kerb.kerb_id] = 'processed';
-      });
-      
-      // Update the state with initialized images
-      setDisplayedImages({
-        potholes: potholeImages,
-        cracks: crackImages,
-        kerbs: kerbImages
-      });
-    }
-  }, [dashboardData]);
-
-  // Updated toggle image function with console logging for debugging
-  const toggleImage = (type, id, imageType) => {
-    console.log(`Toggling ${type} image for ID ${id} to ${imageType}`);
-    
-    setDisplayedImages(prev => {
-      // Create a copy of the specific defect type object
-      const updatedTypeImages = { ...prev[type] };
-      
-      // Update only the specific ID
-      updatedTypeImages[id] = imageType;
-      
-      // Return the complete updated state
-      return {
-        ...prev,
-        [type]: updatedTypeImages
-      };
-    });
   };
 
   return (
@@ -688,60 +709,13 @@ function Dashboard() {
                     <Tab eventKey="potholes" title={`Potholes (${dashboardData.potholes.latest.length})`}>
                       <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                         <Row>
-                          {dashboardData.potholes.latest.map((pothole, index) => (
-                            <Col md={4} className="mb-4" key={`pothole-${index}`}>
-                              <Card className="h-100 shadow-sm">
-                                <Card.Header>
-                                  <h6 className="mb-0">Pothole #{pothole.pothole_id}</h6>
-                                </Card.Header>
-                                <Card.Body>
-                                  <div className="mb-2 text-center">
-                                    {pothole.processed_image_id ? (
-                                      <img 
-                                        src={`/api/pavement/get-image/${
-                                          displayedImages.potholes && displayedImages.potholes[pothole.pothole_id] === 'original'
-                                            ? pothole.original_image_id 
-                                            : pothole.processed_image_id
-                                        }`}
-                                        alt={`Pothole ${pothole.pothole_id}`}
-                                        className="img-fluid mb-2 border"
-                                        style={{ maxHeight: "200px" }}
-                                      />
-                                    ) : (
-                                      <div className="text-muted">No image available</div>
-                                    )}
-                                  </div>
-                                  <div className="small">
-                                    <p className="mb-1"><strong>Area:</strong> {pothole.area_cm2.toFixed(2)} cm²</p>
-                                    <p className="mb-1"><strong>Depth:</strong> {pothole.depth_cm.toFixed(2)} cm</p>
-                                    <p className="mb-1"><strong>Volume:</strong> {pothole.volume.toFixed(2)}</p>
-                                    <p className="mb-1"><strong>Uploaded by:</strong> {pothole.username}</p>
-                                    <p className="mb-1"><strong>Timestamp:</strong> {new Date(pothole.timestamp).toLocaleString()}</p>
-                                    <div className="mt-2">
-                                      <Button
-                                        variant={displayedImages.potholes && displayedImages.potholes[pothole.pothole_id] === 'original' 
-                                          ? 'primary' 
-                                          : 'outline-primary'}
-                                        size="sm"
-                                        className="me-2"
-                                        onClick={() => toggleImage('potholes', pothole.pothole_id, 'original')}
-                                      >
-                                        Original
-                                      </Button>
-                                      <Button
-                                        variant={displayedImages.potholes && displayedImages.potholes[pothole.pothole_id] !== 'original' 
-                                          ? 'success' 
-                                          : 'outline-success'}
-                                        size="sm"
-                                        onClick={() => toggleImage('potholes', pothole.pothole_id, 'processed')}
-                                      >
-                                        Processed
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </Card.Body>
-                              </Card>
-                            </Col>
+                          {dashboardData.potholes.latest.map((pothole) => (
+                            <ImageCard 
+                              key={`pothole-${pothole.pothole_id}`}
+                              defect={pothole} 
+                              defectType="potholes" 
+                              defectIdKey="pothole_id" 
+                            />
                           ))}
                         </Row>
                       </div>
@@ -749,60 +723,13 @@ function Dashboard() {
                     <Tab eventKey="cracks" title={`Cracks (${dashboardData.cracks.latest.length})`}>
                       <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                         <Row>
-                          {dashboardData.cracks.latest.map((crack, index) => (
-                            <Col md={4} className="mb-4" key={`crack-${index}`}>
-                              <Card className="h-100 shadow-sm">
-                                <Card.Header>
-                                  <h6 className="mb-0">{crack.crack_type} #{crack.crack_id}</h6>
-                                </Card.Header>
-                                <Card.Body>
-                                  <div className="mb-2 text-center">
-                                    {crack.processed_image_id ? (
-                                      <img 
-                                        src={`/api/pavement/get-image/${
-                                          displayedImages.cracks && displayedImages.cracks[crack.crack_id] === 'original' 
-                                            ? crack.original_image_id 
-                                            : crack.processed_image_id
-                                        }`}
-                                        alt={`Crack ${crack.crack_id}`}
-                                        className="img-fluid mb-2 border"
-                                        style={{ maxHeight: "200px" }}
-                                      />
-                                    ) : (
-                                      <div className="text-muted">No image available</div>
-                                    )}
-                                  </div>
-                                  <div className="small">
-                                    <p className="mb-1"><strong>Type:</strong> {crack.crack_type}</p>
-                                    <p className="mb-1"><strong>Area:</strong> {crack.area_cm2.toFixed(2)} cm²</p>
-                                    <p className="mb-1"><strong>Range:</strong> {crack.area_range}</p>
-                                    <p className="mb-1"><strong>Uploaded by:</strong> {crack.username}</p>
-                                    <p className="mb-1"><strong>Timestamp:</strong> {new Date(crack.timestamp).toLocaleString()}</p>
-                                    <div className="mt-2">
-                                      <Button
-                                        variant={displayedImages.cracks && displayedImages.cracks[crack.crack_id] === 'original' 
-                                          ? 'primary' 
-                                          : 'outline-primary'}
-                                        size="sm"
-                                        className="me-2"
-                                        onClick={() => toggleImage('cracks', crack.crack_id, 'original')}
-                                      >
-                                        Original
-                                      </Button>
-                                      <Button
-                                        variant={displayedImages.cracks && displayedImages.cracks[crack.crack_id] !== 'original' 
-                                          ? 'success' 
-                                          : 'outline-success'}
-                                        size="sm"
-                                        onClick={() => toggleImage('cracks', crack.crack_id, 'processed')}
-                                      >
-                                        Processed
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </Card.Body>
-                              </Card>
-                            </Col>
+                          {dashboardData.cracks.latest.map((crack) => (
+                            <ImageCard 
+                              key={`crack-${crack.crack_id}`}
+                              defect={crack} 
+                              defectType="cracks" 
+                              defectIdKey="crack_id" 
+                            />
                           ))}
                         </Row>
                       </div>
@@ -811,60 +738,13 @@ function Dashboard() {
                       <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                         <Row>
                           {dashboardData.kerbs && dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0 ? (
-                            dashboardData.kerbs.latest.map((kerb, index) => (
-                              <Col md={4} className="mb-4" key={`kerb-${index}`}>
-                                <Card className="h-100 shadow-sm">
-                                  <Card.Header>
-                                    <h6 className="mb-0">{kerb.condition} #{kerb.kerb_id}</h6>
-                                  </Card.Header>
-                                  <Card.Body>
-                                    <div className="mb-2 text-center">
-                                      {kerb.processed_image_id ? (
-                                        <img 
-                                          src={`/api/pavement/get-image/${
-                                            displayedImages.kerbs && displayedImages.kerbs[kerb.kerb_id] === 'original' 
-                                              ? kerb.original_image_id 
-                                              : kerb.processed_image_id
-                                          }`}
-                                          alt={`Kerb ${kerb.kerb_id}`}
-                                          className="img-fluid mb-2 border"
-                                          style={{ maxHeight: "200px" }}
-                                        />
-                                      ) : (
-                                        <div className="text-muted">No image available</div>
-                                      )}
-                                    </div>
-                                    <div className="small">
-                                      <p className="mb-1"><strong>Type:</strong> {kerb.kerb_type}</p>
-                                      <p className="mb-1"><strong>Length:</strong> {kerb.length_m && kerb.length_m.toFixed(2)} m</p>
-                                      <p className="mb-1"><strong>Condition:</strong> {kerb.condition}</p>
-                                      <p className="mb-1"><strong>Uploaded by:</strong> {kerb.username}</p>
-                                      <p className="mb-1"><strong>Timestamp:</strong> {new Date(kerb.timestamp).toLocaleString()}</p>
-                                      <div className="mt-2">
-                                        <Button
-                                          variant={displayedImages.kerbs && displayedImages.kerbs[kerb.kerb_id] === 'original' 
-                                            ? 'primary' 
-                                            : 'outline-primary'}
-                                          size="sm"
-                                          className="me-2"
-                                          onClick={() => toggleImage('kerbs', kerb.kerb_id, 'original')}
-                                        >
-                                          Original
-                                        </Button>
-                                        <Button
-                                          variant={displayedImages.kerbs && displayedImages.kerbs[kerb.kerb_id] !== 'original' 
-                                            ? 'success' 
-                                            : 'outline-success'}
-                                          size="sm"
-                                          onClick={() => toggleImage('kerbs', kerb.kerb_id, 'processed')}
-                                        >
-                                          Processed
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  </Card.Body>
-                                </Card>
-                              </Col>
+                            dashboardData.kerbs.latest.map((kerb) => (
+                              <ImageCard 
+                                key={`kerb-${kerb.kerb_id}`}
+                                defect={kerb} 
+                                defectType="kerbs" 
+                                defectIdKey="kerb_id" 
+                              />
                             ))
                           ) : (
                             <Col>
