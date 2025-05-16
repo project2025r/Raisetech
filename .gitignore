@@ -29,6 +29,7 @@ instance/
 .mp4
 backend/processed_videos/
 backend/routes/temp_video.mp4
+backend/requirements.txt
 
 # Node.js
 node_modules/
@@ -37,6 +38,8 @@ yarn-debug.log*
 yarn-error.log*
 yarn.lock
 package-lock.json
+
+
 
 # React
 /frontend/build
