@@ -25,6 +25,11 @@ var/
 instance/
 .webassets-cache
 
+# VideoFiles
+.mp4
+backend/processed_videos/
+backend/routes/temp_video.mp4
+
 # Node.js
 node_modules/
 npm-debug.log
