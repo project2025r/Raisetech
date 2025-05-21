@@ -130,6 +130,7 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
     detection_frame = frame.copy()
     current_frame_detections = []
     continuous_frame_flags = {cls: False for cls in continuous_classes}
+    all_detections = []
     
     # Run detection
     results = models["road_infra"](frame, conf=0.3)
@@ -157,6 +158,13 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
                 
             x1, y1, x2, y2 = map(int, box)
             bbox = [x1, y1, x2, y2]
+            
+            # Add to all detections list for return value
+            all_detections.append({
+                'class': detection_class,
+                'bbox': bbox,
+                'confidence': float(conf)
+            })
             
             if detection_class in distinct_classes:
                 current_frame_detections.append({
@@ -217,15 +225,6 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
             cv2.putText(detection_frame, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
-    # Convert frame to base64 for streaming
-    success, buffer = cv2.imencode('.jpg', detection_frame)
-    if not success:
-        logger.error(f'Frame {frame_count}: JPEG encoding failed!')
-        frame_base64 = ''
-    else:
-        frame_base64 = base64.b64encode(buffer).decode('utf-8')
-    logger.debug(f'Frame {frame_count} base64 length: {len(frame_base64)}')
-    
     # Log GPU memory after processing
     if torch.cuda.is_available():
         logger.debug(f"GPU Memory after frame {frame_count}:")
@@ -233,7 +232,9 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
         logger.debug(f"Cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
     
     logger.debug(f"Frame {frame_count} processed successfully")
-    return frame_base64, current_frame_detections, continuous_frame_flags
+    
+    # Return both the processed frame and the detections
+    return detection_frame, all_detections
 
 def haversine(coord1, coord2):
     # Calculate the great circle distance between two points on the earth (specified in decimal degrees)
@@ -541,44 +542,80 @@ def detect_infrastructure():
 
     logger.info("Received detection request")
     
-    # Check if we have video data
-    if 'video' not in request.files:
-        logger.error("No video data provided")
-        return jsonify({
-            "success": False,
-            "message": "No video data provided"
-        }), 400
-
-    # Get video file and other parameters
-    video_file = request.files['video']
+    # Get common parameters
     coordinates = request.form.get('coordinates', 'Not Available')
     selected_classes = request.form.get('selectedClasses', '[]')
     selected_classes = json.loads(selected_classes)
-
-    logger.info(f"Processing video with coordinates: {coordinates}")
+    
+    logger.info(f"Processing with coordinates: {coordinates}")
     logger.info(f"Selected classes: {selected_classes}")
-
+    
     try:
-        # Save video temporarily
-        temp_video_path = os.path.join(os.path.dirname(__file__), "temp_video.mp4")
-        logger.info(f"Saving video to temporary path: {temp_video_path}")
-        video_file.save(temp_video_path)
-
-        # Start processing in a separate thread
-        with processing_lock:
-            if processing_thread is not None and processing_thread.is_alive():
-                return jsonify({"success": False, "message": "Another video is being processed"}), 400
-            def target():
-                global current_processing
-                current_processing = process_video(temp_video_path, coordinates, selected_classes)
-                # The generator will run and yield data for SSE
-            processing_thread = Thread(target=target)
-            processing_thread.start()
-
-        return jsonify({"success": True, "message": "Video processing started"})
+        # Check if we have video data
+        if 'video' in request.files and request.files['video']:
+            # Process video input
+            video_file = request.files['video']
+            logger.info(f"Processing video input")
+            
+            # Save video temporarily
+            temp_video_path = os.path.join(os.path.dirname(__file__), "temp_video.mp4")
+            logger.info(f"Saving video to temporary path: {temp_video_path}")
+            video_file.save(temp_video_path)
+            
+            # Start processing in a separate thread
+            with processing_lock:
+                if processing_thread is not None and processing_thread.is_alive():
+                    return jsonify({"success": False, "message": "Another media is being processed"}), 400
+                def target():
+                    global current_processing
+                    current_processing = process_video(temp_video_path, coordinates, selected_classes)
+                processing_thread = Thread(target=target)
+                processing_thread.start()
+                
+            return jsonify({"success": True, "message": "Video processing started"})
+            
+        # Check if we have image data
+        elif 'image' in request.files and request.files['image']:
+            # Process image input
+            image_file = request.files['image']
+            logger.info(f"Processing image input")
+            
+            # Save image temporarily
+            temp_image_path = os.path.join(os.path.dirname(__file__), "temp_image.jpg")
+            logger.info(f"Saving image to temporary path: {temp_image_path}")
+            image_file.save(temp_image_path)
+            
+            # Read the image
+            frame = cv2.imread(temp_image_path)
+            if frame is None:
+                return jsonify({"success": False, "message": "Could not read image file"}), 400
+                
+            # Process the image
+            models = get_models()
+            frame_count = 0
+            results, detections = process_video_frame(frame, frame_count, coordinates, selected_classes, models)
+            
+            # Encode the processed image
+            _, buffer = cv2.imencode('.jpg', results)
+            img_str = base64.b64encode(buffer).decode('utf-8')
+            
+            # Return the processed image and detections
+            return jsonify({
+                "success": True,
+                "message": "Image processed successfully",
+                "frame": f"data:image/jpeg;base64,{img_str}",
+                "detections": detections
+            })
+            
+        else:
+            logger.error("No media data provided")
+            return jsonify({
+                "success": False,
+                "message": "No media data provided"
+            }), 400
 
     except Exception as e:
-        logger.error(f"Error during video setup: {str(e)}", exc_info=True)
+        logger.error(f"Error during processing: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @road_infrastructure_bp.route('/data', methods=['GET'])

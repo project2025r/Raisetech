@@ -193,40 +193,43 @@ function RoadInfrastructure() {
       setError('Please select input media and at least one detection class');
       return;
     }
-  
+
     console.log('Starting detection process...');
     console.log('Selected classes:', selectedClasses);
     console.log('Input source:', inputSource);
     console.log('Coordinates:', coordinates);
-  
+
     setLoading(true);
     setError('');
-    setIsProcessing(true);
-    setShouldStop(false);
-    setIsBuffering(true);
-    setIsPlaying(false);
-    setFrameBuffer([]);
-    setCurrentFrameIndex(0);
     setProcessedImage(null);
-  
+
     try {
       const formData = new FormData();
       formData.append('type', 'road_infra');
       formData.append('selectedClasses', JSON.stringify(selectedClasses));
       formData.append('coordinates', coordinates);
-  
+
+      // Handle different input sources
       if (inputSource === 'video' && videoFile) {
+        // Video processing setup
         console.log('Processing video file:', videoFile.name);
         formData.append('video', videoFile);
+        setIsProcessing(true);
+        setShouldStop(false);
+        setIsBuffering(true);
+        setIsPlaying(false);
+        setFrameBuffer([]);
+        setCurrentFrameIndex(0);
       } else if ((inputSource === 'image' || inputSource === 'camera') && imagePreview) {
+        // Image/camera processing setup
         console.log('Processing image/camera input');
         const blob = await (await fetch(imagePreview)).blob();
         formData.append('image', blob, 'capture.jpg');
       }
-  
+
       console.log('Sending request to backend...');
       
-      // First, upload the video file and start processing
+      // Send the request to the backend
       const uploadResponse = await axios.post('/api/road-infrastructure/detect', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
@@ -239,93 +242,114 @@ function RoadInfrastructure() {
         throw new Error(uploadResponse.data.message);
       }
       
-      // Then, establish SSE connection
-      const eventSource = new EventSource('/api/road-infrastructure/detect');
-      eventSourceRef.current = eventSource;
-      
-      eventSource.onmessage = (event) => {
-        if (eventSourceRef.current === null) return; // If stopped, ignore
-        const data = JSON.parse(event.data);
-        console.log('Received frame data:', data);
+      // Handle different responses based on input type
+      if (inputSource === 'video') {
+        // For video, establish SSE connection for streaming results
+        const eventSource = new EventSource('/api/road-infrastructure/detect');
+        eventSourceRef.current = eventSource;
         
-        if (data.success === false) {
-          setError(data.message || 'Detection failed');
-          eventSource.close();
-          eventSourceRef.current = null;
-          setIsProcessing(false);
-          setLoading(false);
-          return;
-        }
-        
-        if (data.frame && typeof data.frame === 'string' && data.frame.length > 1000) {
-          setFrameBuffer(prev => {
-            const newBuffer = [...prev, data.frame];
-            if (newBuffer.length >= BUFFER_SIZE && !isPlaying) {
-              setIsBuffering(false);
-              setIsPlaying(true);
-            }
-            return newBuffer;
-          });
-        } else if (data.frame && data.frame.length <= 1000) {
-          console.warn('Received a frame, but it is too short to be valid. Skipping.');
-        }
-        
-        // Update detection results
-        if (data.detections) {
-          setDetectionResults(prev => ({
-            ...prev,
-            total_frames: data.total_frames,
-            processed_frames: data.frame_count,
-            detections: [...(prev?.detections || []), ...data.detections],
-            continuous_lengths: data.continuous_lengths,
-            output_path: data.output_path
-          }));
-        }
-        
-        // Update live tables
-        if (data.live_distinct_table) setLiveDistinctTable(data.live_distinct_table);
-        if (data.live_continuous_table) setLiveContinuousTable(data.live_continuous_table);
-        
-        if (data.class_names && Array.isArray(data.class_names)) {
-          setClassNames(data.class_names);
-        }
-        
-        // Check if this is the final message
-        if (data.tracked_objects) {
-          eventSource.close();
-          eventSourceRef.current = null;
-          setIsProcessing(false);
-          setLoading(false);
-        }
-
-        if (data.stopped_early !== undefined) {
-          console.log('Processing ended:', data.stopped_early ? 'stopped early' : 'completed');
-          setIsProcessing(false);
-          setIsBuffering(false);
-          setLoading(false);
-          if (data.output_path) {
-            // setError(`Processing ${data.stopped_early ? 'stopped' : 'completed'}. Video saved to: ${data.output_path}`);
+        eventSource.onmessage = (event) => {
+          if (eventSourceRef.current === null) return; // If stopped, ignore
+          const data = JSON.parse(event.data);
+          console.log('Received frame data:', data);
+          
+          if (data.success === false) {
+            setError(data.message || 'Detection failed');
+            eventSource.close();
+            eventSourceRef.current = null;
+            setIsProcessing(false);
+            setLoading(false);
+            return;
           }
+          
+          if (data.frame && typeof data.frame === 'string' && data.frame.length > 1000) {
+            setFrameBuffer(prev => {
+              const newBuffer = [...prev, data.frame];
+              if (newBuffer.length >= BUFFER_SIZE && !isPlaying) {
+                setIsBuffering(false);
+                setIsPlaying(true);
+              }
+              return newBuffer;
+            });
+          } else if (data.frame && data.frame.length <= 1000) {
+            console.warn('Received a frame, but it is too short to be valid. Skipping.');
+          }
+          
+          // Update detection results
+          if (data.detections) {
+            setDetectionResults(prev => ({
+              ...prev,
+              total_frames: data.total_frames,
+              processed_frames: data.frame_count,
+              detections: [...(prev?.detections || []), ...data.detections],
+              continuous_lengths: data.continuous_lengths,
+              output_path: data.output_path
+            }));
+          }
+          
+          // Update live tables
+          if (data.live_distinct_table) setLiveDistinctTable(data.live_distinct_table);
+          if (data.live_continuous_table) setLiveContinuousTable(data.live_continuous_table);
+          
+          if (data.class_names && Array.isArray(data.class_names)) {
+            setClassNames(data.class_names);
+          }
+          
+          // Check if this is the final message
+          if (data.tracked_objects) {
+            eventSource.close();
+            eventSourceRef.current = null;
+            setIsProcessing(false);
+            setLoading(false);
+          }
+
+          if (data.stopped_early !== undefined) {
+            console.log('Processing ended:', data.stopped_early ? 'stopped early' : 'completed');
+            setIsProcessing(false);
+            setIsBuffering(false);
+            setLoading(false);
+            if (data.output_path) {
+              // setError(`Processing ${data.stopped_early ? 'stopped' : 'completed'}. Video saved to: ${data.output_path}`);
+            }
+          }
+        };
+        
+        eventSource.onerror = (error) => {
+          console.error('EventSource error:', error);
+          eventSource.close();
+          eventSourceRef.current = null;
+          setIsProcessing(false);
+          setLoading(false);
+        };
+        
+        // Handle stop request
+        if (shouldStop) {
+          eventSource.close();
+          eventSourceRef.current = null;
+          setIsProcessing(false);
+          setLoading(false);
         }
-      };
-      
-      eventSource.onerror = (error) => {
-        console.error('EventSource error:', error);
-        eventSource.close();
-        eventSourceRef.current = null;
-        // setError('Error during video processing');
-        setIsProcessing(false);
-        setLoading(false);
-      };
-      
-      // Handle stop request
-      if (shouldStop) {
-        eventSource.close();
-        eventSourceRef.current = null;
-        setIsProcessing(false);
+      } else if (inputSource === 'image' || inputSource === 'camera') {
+        // For image/camera, process the direct response
+        console.log('Processing image response:', uploadResponse.data);
+        
+        // Set the processed image
+        if (uploadResponse.data.frame) {
+          setProcessedImage(uploadResponse.data.frame);
+        }
+        
+        // Set detection results
+        if (uploadResponse.data.detections) {
+          setDetectionResults({
+            detections: uploadResponse.data.detections,
+            total_frames: 1,
+            processed_frames: 1
+          });
+        }
+        
         setLoading(false);
       }
-  
+
     } catch (error) {
       console.error('Detection error:', error);
       setError(
@@ -333,8 +357,8 @@ function RoadInfrastructure() {
         error.message ||
         'An error occurred during detection. Please try again.'
       );
-      setIsProcessing(false);
       setLoading(false);
+      setIsProcessing(false);
     }
   };
 
@@ -633,7 +657,7 @@ function RoadInfrastructure() {
                         </div>
                       )}
                       <img
-                        src={processedImage && processedImage.length > 1000 ? `data:image/jpeg;base64,${processedImage}` : ''}
+                        src={processedImage ? (processedImage.startsWith('data:') ? processedImage : `data:image/jpeg;base64,${processedImage}`) : ''}
                         alt="Processed"
                         style={{ maxWidth: '100%' }}
                         onError={(e) => { e.target.onerror = null; e.target.src = ''; setError('Failed to display processed frame.'); }}
