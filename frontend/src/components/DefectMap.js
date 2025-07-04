@@ -35,7 +35,7 @@ const icons = {
   kerb: createCustomIcon('#0066FF'),    // Blue for kerb defects
 };
 
-function DefectMap() {
+function DefectMap({ user }) {
   const [defects, setDefects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -63,6 +63,7 @@ function DefectMap() {
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
       if (selectedUser) params.username = selectedUser;
+      if (user?.role) params.user_role = user.role;
       
       const response = await axios.get('/api/dashboard/image-stats', { params });
       
@@ -111,7 +112,10 @@ function DefectMap() {
   // Fetch the list of users for the filter dropdown
   const fetchUsers = async () => {
     try {
-      const response = await axios.get('/api/users/all');
+      const params = {};
+      if (user?.role) params.user_role = user.role;
+      
+      const response = await axios.get('/api/users/all', { params });
       if (response.data.success) {
         setUsersList(response.data.users);
       }
@@ -134,7 +138,7 @@ function DefectMap() {
   useEffect(() => {
     fetchDefectData();
     fetchUsers();
-  }, []);
+  }, [user]);
 
   // Handle filter application
   const handleApplyFilters = () => {

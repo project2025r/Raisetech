@@ -69,7 +69,7 @@ function App() {
             />
             <Route 
               path="/dashboard" 
-              element={authenticated ? <Dashboard /> : <Navigate to="/login" />} 
+              element={authenticated ? <Dashboard user={currentUser} /> : <Navigate to="/login" />} 
             />
             <Route 
               path="/view/:imageId" 

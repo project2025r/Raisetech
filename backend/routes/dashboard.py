@@ -4,14 +4,17 @@ import os
 import json
 from config.db import connect_to_db
 import datetime
+from utils.rbac import get_allowed_roles, create_role_filter, validate_user_role
+from utils.auth_middleware import validate_rbac_access
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
 def parse_filters():
-    """Helper function to parse filter parameters"""
+    """Helper function to parse filter parameters including RBAC"""
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     username = request.args.get('username')
+    user_role = request.args.get('user_role')
     
     # Initialize filters dict
     filters = {}
@@ -42,9 +45,15 @@ def parse_filters():
     if username:
         filters["username"] = username
     
+    # Handle role-based access control
+    if user_role and validate_user_role(user_role):
+        role_filter = create_role_filter(user_role)
+        filters.update(role_filter)
+    
     return filters if filters else {}
 
 @dashboard_bp.route('/summary', methods=['GET'])
+@validate_rbac_access
 def get_dashboard_summary():
     """
     Get summary statistics for the dashboard
@@ -521,6 +530,7 @@ def get_kerb_data():
         }), 500
 
 @dashboard_bp.route('/image-stats', methods=['GET'])
+@validate_rbac_access
 def get_image_stats():
     """
     Get statistics about all captured images
@@ -705,6 +715,7 @@ def get_image_stats():
         }), 500
 
 @dashboard_bp.route('/statistics', methods=['GET'])
+@validate_rbac_access
 def get_statistics():
     """
     Get statistics for different types of issues
@@ -868,6 +879,7 @@ def get_statistics():
         }), 500
 
 @dashboard_bp.route('/issues-by-type', methods=['GET'])
+@validate_rbac_access
 def get_issues_by_type():
     """
     Get issue counts by type for charts
@@ -966,6 +978,7 @@ def get_issues_by_type():
         }), 500
 
 @dashboard_bp.route('/weekly-trend', methods=['GET'])
+@validate_rbac_access
 def get_weekly_trend():
     """
     Get weekly trend data for chart
@@ -987,6 +1000,10 @@ def get_weekly_trend():
         if 'username' in query_filter:
             username_filter = query_filter['username']
             base_query['username'] = username_filter
+        
+        # Extract role filter if present (for RBAC)
+        if 'role' in query_filter:
+            base_query['role'] = query_filter['role']
         
         # Extract date filter if present
         date_filter = None

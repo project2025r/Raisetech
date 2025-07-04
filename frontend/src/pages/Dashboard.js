@@ -88,7 +88,7 @@ const ImageCard = ({ defect, defectType, defectIdKey }) => {
   );
 };
 
-function Dashboard() {
+function Dashboard({ user }) {
   const [statistics, setStatistics] = useState({
     potholesDetected: 0,
     cracksDetected: 0,
@@ -173,6 +173,7 @@ function Dashboard() {
       if (filters.startDate) params.start_date = filters.startDate;
       if (filters.endDate) params.end_date = filters.endDate;
       if (filters.username) params.username = filters.username;
+      if (user?.role) params.user_role = user.role;
       
       // Get overview statistics
       const statsResponse = await axios.get('/api/dashboard/statistics', { params });
@@ -248,8 +249,12 @@ function Dashboard() {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        const response = await axios.get('/api/users/all');
+        const params = {};
+        if (user?.role) params.user_role = user.role;
+        
+        const response = await axios.get('/api/users/all', { params });
         if (response.data.success) {
+          // Users are already filtered by the backend based on RBAC
           setUsersList(response.data.users);
         }
       } catch (error) {
@@ -258,7 +263,7 @@ function Dashboard() {
     };
     
     fetchUsers();
-  }, []);
+  }, [user]);
 
   // Handle date filter application
   const handleApplyDateFilter = () => {
@@ -695,7 +700,7 @@ function Dashboard() {
           </Row>
           
           {/* Defect Map Section */}
-          <DefectMap />
+                          <DefectMap user={user} />
           
           {/* Recently Uploaded Images Section */}
           <Row className="mb-4">
