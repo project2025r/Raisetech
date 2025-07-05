@@ -10,6 +10,7 @@ const Pavement = () => {
   const [detectionType, setDetectionType] = useState('potholes');
   const [imageFiles, setImageFiles] = useState([]);
   const [imagePreviewsMap, setImagePreviewsMap] = useState({});
+  const [imageLocationMap, setImageLocationMap] = useState({});
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [processedImage, setProcessedImage] = useState(null);
   const [results, setResults] = useState(null);
@@ -18,6 +19,9 @@ const Pavement = () => {
   const [cameraActive, setCameraActive] = useState(false);
   const [coordinates, setCoordinates] = useState('Not Available');
   const [cameraOrientation, setCameraOrientation] = useState('environment');
+  const [locationPermission, setLocationPermission] = useState('unknown');
+  const [locationError, setLocationError] = useState('');
+  const [locationLoading, setLocationLoading] = useState(false);
   
   // Add state for batch processing results
   const [batchResults, setBatchResults] = useState([]);
@@ -34,13 +38,127 @@ const Pavement = () => {
   const fileInputRef = useRef(null);
   const { isMobile } = useResponsive();
 
+  // Safari-compatible geolocation permission check
+  const checkLocationPermission = async () => {
+    if (!navigator.permissions || !navigator.permissions.query) {
+      // Fallback for older browsers
+      return 'prompt';
+    }
+    
+    try {
+      const permission = await navigator.permissions.query({ name: 'geolocation' });
+      return permission.state;
+    } catch (err) {
+      console.warn('Permission API not supported or failed:', err);
+      return 'prompt';
+    }
+  };
+
+  // Safari-compatible geolocation request
+  const requestLocation = () => {
+    return new Promise((resolve, reject) => {
+      // Check if geolocation is supported
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation is not supported by this browser'));
+        return;
+      }
+
+      // Check if we're in a secure context (HTTPS)
+      if (!window.isSecureContext) {
+        reject(new Error('Geolocation requires a secure context (HTTPS)'));
+        return;
+      }
+
+      const options = {
+        enableHighAccuracy: true,
+        timeout: 15000, // 15 seconds timeout
+        maximumAge: 60000 // Accept cached position up to 1 minute old
+      };
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve(position);
+        },
+        (error) => {
+          let errorMessage = 'Unable to retrieve location';
+          
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              errorMessage = 'Location access denied. Please enable location permissions in your browser settings.';
+              break;
+            case error.POSITION_UNAVAILABLE:
+              errorMessage = 'Location information is unavailable. Please try again.';
+              break;
+            case error.TIMEOUT:
+              errorMessage = 'Location request timed out. Please try again.';
+              break;
+            default:
+              errorMessage = `Location error: ${error.message}`;
+              break;
+          }
+          
+          reject(new Error(errorMessage));
+        },
+        options
+      );
+    });
+  };
+
+  // Enhanced location handler with Safari-specific fixes
+  const handleLocationRequest = async () => {
+    setLocationLoading(true);
+    setLocationError('');
+    
+    try {
+      // First check permission state
+      const permissionState = await checkLocationPermission();
+      setLocationPermission(permissionState);
+      
+      // If permission is denied, provide user guidance
+      if (permissionState === 'denied') {
+        const errorMsg = 'Location access denied. To enable location access:\n' +
+                        '• Safari: Settings > Privacy & Security > Location Services\n' +
+                        '• Chrome: Settings > Privacy > Location\n' +
+                        '• Firefox: Settings > Privacy > Location\n' +
+                        'Then refresh this page and try again.';
+        setLocationError(errorMsg);
+        setCoordinates('Permission Denied');
+        return;
+      }
+      
+      // Request location
+      const position = await requestLocation();
+      const { latitude, longitude } = position.coords;
+      
+      // Format coordinates with better precision
+      const formattedCoords = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      setCoordinates(formattedCoords);
+      setLocationPermission('granted');
+      setLocationError('');
+      
+      console.log('Location acquired:', { latitude, longitude, accuracy: position.coords.accuracy });
+      
+    } catch (error) {
+      console.error('Location request failed:', error);
+      setLocationError(error.message);
+      setCoordinates('Location Error');
+      
+      // Update permission state based on error
+      if (error.message.includes('denied')) {
+        setLocationPermission('denied');
+      }
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
   // Handle multiple file input change
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
       setImageFiles([...imageFiles, ...files]);
       
-      // Create previews for each file
+      // Create previews and location data for each file
       files.forEach(file => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -50,6 +168,12 @@ const Pavement = () => {
           }));
         };
         reader.readAsDataURL(file);
+        
+        // Store location as "Not Available" for uploaded files
+        setImageLocationMap(prev => ({
+          ...prev,
+          [file.name]: 'Not Available'
+        }));
       });
       
       // Reset results
@@ -59,42 +183,64 @@ const Pavement = () => {
     }
   };
 
-  // Handle camera capture
-  const handleCapture = () => {
+  // Handle camera capture with location validation
+  const handleCapture = async () => {
     const imageSrc = webcamRef.current.getScreenshot();
     if (imageSrc) {
+      // If we don't have location data, try to get it before capturing
+      if (coordinates === 'Not Available' || coordinates === 'Location Error') {
+        await handleLocationRequest();
+      }
+      
       const timestamp = new Date().toISOString();
       const filename = `camera_capture_${timestamp}.jpg`;
+      const captureCoordinates = coordinates; // Capture current coordinates
       
       setImageFiles([...imageFiles, filename]);
       setImagePreviewsMap(prev => ({
         ...prev,
         [filename]: imageSrc
       }));
+      setImageLocationMap(prev => ({
+        ...prev,
+        [filename]: captureCoordinates
+      }));
       setCurrentImageIndex(imageFiles.length);
       
       setProcessedImage(null);
       setResults(null);
       setError('');
-      // Note: We intentionally don't reset coordinates here to preserve location data from the camera
+      
+      // Log capture with current coordinates
+      console.log('Photo captured with coordinates:', captureCoordinates);
     }
   };
 
-  // Toggle camera
-  const toggleCamera = () => {
-    setCameraActive(!cameraActive);
-    if (!cameraActive) {
+  // Get location data for currently selected image
+  const getCurrentImageLocation = () => {
+    if (Object.keys(imagePreviewsMap).length === 0) {
+      return coordinates; // Use current coordinates if no images
+    }
+    
+    const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+    return imageLocationMap[currentFilename] || 'Not Available';
+  };
+
+  // Toggle camera with improved location handling
+  const toggleCamera = async () => {
+    const newCameraState = !cameraActive;
+    setCameraActive(newCameraState);
+    
+    if (newCameraState) {
       // Get location when camera is activated
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const { latitude, longitude } = position.coords;
-            setCoordinates(`${latitude}, ${longitude}`);
-          },
-          (err) => {
-            console.error("Error getting location:", err);
-          }
-        );
+      await handleLocationRequest();
+    } else {
+      // Only reset location if no images are captured
+      // This preserves location data for captured images
+      if (Object.keys(imagePreviewsMap).length === 0) {
+        setCoordinates('Not Available');
+        setLocationError('');
+        setLocationPermission('unknown');
       }
     }
   };
@@ -123,10 +269,13 @@ const Pavement = () => {
         return;
       }
       
+      // Get coordinates for the current image
+      const imageCoordinates = getCurrentImageLocation();
+      
       // Prepare request data
       const requestData = {
         image: currentImagePreview,
-        coordinates: coordinates,
+        coordinates: imageCoordinates,
         username: user?.username || 'Unknown',
         role: user?.role || 'Unknown'
       };
@@ -213,10 +362,13 @@ const Pavement = () => {
           // Update current image index to show which image is being processed
           setCurrentImageIndex(i);
           
+          // Get coordinates for this specific image
+          const imageCoordinates = imageLocationMap[filename] || 'Not Available';
+          
           // Prepare request data
           const requestData = {
             image: imageData,
-            coordinates: coordinates,
+            coordinates: imageCoordinates,
             username: user?.username || 'Unknown',
             role: user?.role || 'Unknown'
           };
@@ -274,6 +426,7 @@ const Pavement = () => {
   const handleReset = () => {
     setImageFiles([]);
     setImagePreviewsMap({});
+    setImageLocationMap({});
     setCurrentImageIndex(0);
     setProcessedImage(null);
     setResults(null);
@@ -282,10 +435,10 @@ const Pavement = () => {
     setProcessedCount(0);
     setTotalToProcess(0);
     
-    // Only reset coordinates if the camera is not active
-    if (!cameraActive) {
-      setCoordinates('Not Available');
-    }
+    // Reset coordinates when clearing all images
+    setCoordinates('Not Available');
+    setLocationError('');
+    setLocationPermission('unknown');
     
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -353,6 +506,57 @@ const Pavement = () => {
     };
   }, []);
 
+  // Handle location permission changes
+  useEffect(() => {
+    if (cameraActive && locationPermission === 'unknown') {
+      // Try to get location when camera is first activated
+      handleLocationRequest();
+    }
+  }, [cameraActive]);
+
+  // Listen for permission changes if supported
+  useEffect(() => {
+    let permissionWatcher = null;
+    
+    const watchPermissions = async () => {
+      try {
+        if (navigator.permissions && navigator.permissions.query) {
+          const permission = await navigator.permissions.query({ name: 'geolocation' });
+          
+          permissionWatcher = () => {
+            setLocationPermission(permission.state);
+            if (permission.state === 'granted' && cameraActive && coordinates === 'Not Available') {
+              handleLocationRequest();
+            }
+          };
+          
+          permission.addEventListener('change', permissionWatcher);
+        }
+      } catch (err) {
+        console.warn('Permission watching not supported:', err);
+      }
+    };
+    
+    watchPermissions();
+    
+    return () => {
+      if (permissionWatcher) {
+        try {
+          const permission = navigator.permissions.query({ name: 'geolocation' });
+          permission.then(p => p.removeEventListener('change', permissionWatcher));
+        } catch (err) {
+          console.warn('Error removing permission listener:', err);
+        }
+      }
+    };
+  }, [cameraActive, coordinates]);
+
+  // Force re-render when current image changes to update location display
+  useEffect(() => {
+    // This effect ensures the UI updates when switching between images
+    // The getCurrentImageLocation function will return the correct location for the selected image
+  }, [currentImageIndex, imageLocationMap]);
+
   // Stop auto-navigation
   const stopAutoNavigation = () => {
     if (autoNavigationRef.current) {
@@ -387,12 +591,20 @@ const Pavement = () => {
 
               <div className="mb-3">
                 <Form.Label>Image Source</Form.Label>
-                <div className="d-flex gap-2">
+                <div className="d-flex gap-2 mb-2">
                   <Button 
                     variant={cameraActive ? "primary" : "outline-primary"}
                     onClick={toggleCamera}
+                    disabled={locationLoading}
                   >
-                    {cameraActive ? "Disable Camera" : "Enable Camera"}
+                    {locationLoading ? (
+                      <>
+                        <Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" />
+                        <span className="ms-2">Getting Location...</span>
+                      </>
+                    ) : (
+                      cameraActive ? "Disable Camera" : "Enable Camera"
+                    )}
                   </Button>
                   <div className="file-input-container">
                     <label className="file-input-label">
@@ -409,6 +621,45 @@ const Pavement = () => {
                     </label>
                   </div>
                 </div>
+                
+                {/* Location Status Display */}
+                {cameraActive && (
+                  <div className="location-status mb-3">
+                    <small className="text-muted">
+                      <strong>Location Status:</strong> 
+                      {locationPermission === 'granted' && <span className="text-success ms-1">✓ Enabled</span>}
+                      {locationPermission === 'denied' && <span className="text-danger ms-1">✗ Denied</span>}
+                      {locationPermission === 'prompt' && <span className="text-warning ms-1">⚠ Requesting...</span>}
+                      {locationPermission === 'unknown' && <span className="text-secondary ms-1">? Unknown</span>}
+                    </small>
+                    {(coordinates !== 'Not Available' || Object.keys(imagePreviewsMap).length > 0) && (
+                      <div className="mt-1">
+                        <small className="text-muted">
+                          <strong>Current Location:</strong> <span className="text-primary">{coordinates}</span>
+                        </small>
+                        {Object.keys(imagePreviewsMap).length > 0 && (
+                          <div className="mt-1">
+                            <small className="text-muted">
+                              <strong>Selected Image Location:</strong> <span className="text-primary">{getCurrentImageLocation()}</span>
+                            </small>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {locationError && (
+                      <Alert variant="warning" className="mt-2 mb-0" style={{ fontSize: '0.875rem' }}>
+                        <Alert.Heading as="h6">Location Access Issue</Alert.Heading>
+                        <div style={{ whiteSpace: 'pre-line' }}>{locationError}</div>
+                        <hr />
+                        <div className="d-flex justify-content-end">
+                          <Button variant="outline-warning" size="sm" onClick={handleLocationRequest}>
+                            Retry Location Access
+                          </Button>
+                        </div>
+                      </Alert>
+                    )}
+                  </div>
+                )}
               </div>
 
               {cameraActive && (
@@ -465,9 +716,12 @@ const Pavement = () => {
                             e.stopPropagation();
                             const newFiles = imageFiles.filter((_, i) => i !== index);
                             const newPreviewsMap = {...imagePreviewsMap};
+                            const newLocationMap = {...imageLocationMap};
                             delete newPreviewsMap[name];
+                            delete newLocationMap[name];
                             setImageFiles(newFiles);
                             setImagePreviewsMap(newPreviewsMap);
+                            setImageLocationMap(newLocationMap);
                             if (currentImageIndex >= newFiles.length) {
                               setCurrentImageIndex(Math.max(0, newFiles.length - 1));
                             }
@@ -538,6 +792,32 @@ const Pavement = () => {
             <Card className="mb-4">
               <Card.Body>
                 <h4 className="mb-3">Detection Results</h4>
+                
+                {/* Location status in results */}
+                <div className="mb-3">
+                  {(() => {
+                    const imageLocation = getCurrentImageLocation();
+                    return imageLocation !== 'Not Available' && imageLocation !== 'Location Error' && imageLocation !== 'Permission Denied' ? (
+                      <Alert variant="success" className="py-2">
+                        <small>
+                          <i className="fas fa-map-marker-alt me-2"></i>
+                          <strong>Image Location Data:</strong> {imageLocation}
+                        </small>
+                      </Alert>
+                    ) : (
+                      <Alert variant="warning" className="py-2">
+                        <small>
+                          <i className="fas fa-exclamation-triangle me-2"></i>
+                          <strong>Location Warning:</strong> Location data was not available for this image. 
+                          {Object.keys(imagePreviewsMap).length > 0 && Object.keys(imagePreviewsMap)[currentImageIndex].includes('camera_capture') 
+                            ? 'The camera may have been disabled before capturing, or location access was denied.'
+                            : 'Uploaded images do not contain GPS data. Use the live camera for location-tagged captures.'}
+                        </small>
+                      </Alert>
+                    );
+                  })()}
+                </div>
+                
                 <div className="processed-image-container mb-3">
                   <img 
                     src={processedImage} 
@@ -827,10 +1107,42 @@ const Pavement = () => {
                 <li>Damaged Kerbs - Physically damaged or broken kerbs requiring repair</li>
               </ul>
               
+              <h5>Location Services & GPS Data</h5>
+              <p>
+                When using the live camera option, the application can capture GPS coordinates 
+                to provide precise geolocation data for detected defects. This helps in:
+              </p>
+              <ul>
+                <li>Accurately mapping defect locations</li>
+                <li>Creating location-based reports</li>
+                <li>Enabling field teams to find specific issues</li>
+                <li>Tracking defect patterns by geographic area</li>
+              </ul>
+              
+              <h6>Location Requirements:</h6>
+              <ul>
+                <li><strong>Secure Connection:</strong> Location services require HTTPS</li>
+                <li><strong>Browser Permissions:</strong> You must allow location access when prompted</li>
+                <li><strong>Safari Users:</strong> Enable location services in Safari settings</li>
+                <li><strong>Mobile Devices:</strong> Ensure location services are enabled in device settings</li>
+              </ul>
+              
+              <div className="alert alert-info">
+                <h6><i className="fas fa-info-circle me-2"></i>Troubleshooting Location Issues</h6>
+                <p><strong>If location access is denied:</strong></p>
+                <ul className="mb-2">
+                  <li><strong>Safari:</strong> Settings → Privacy & Security → Location Services</li>
+                  <li><strong>Chrome:</strong> Settings → Privacy and security → Site Settings → Location</li>
+                  <li><strong>Firefox:</strong> Settings → Privacy & Security → Permissions → Location</li>
+                </ul>
+                <p><strong>On mobile devices:</strong> Also check your device's location settings and ensure the browser has location permission.</p>
+              </div>
+
               <h5>How to Use This Module</h5>
               <ol>
                 <li>Select the detection type (Potholes, Alligator Cracks, or Kerbs)</li>
                 <li>Upload an image or use the camera to capture a photo</li>
+                <li>If using the camera, allow location access when prompted for GPS coordinates</li>
                 <li>Click the Detect button to analyze the image</li>
                 <li>Review the detection results and measurements</li>
               </ol>
