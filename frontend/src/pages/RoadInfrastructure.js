@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Container, Row, Col, Card, Button, Form, Alert, Spinner, Tab, Tabs } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Form, Alert, Spinner, Tab, Tabs, OverlayTrigger, Popover } from 'react-bootstrap';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import Webcam from 'react-webcam';
+import './RoadInfrastructure.css';
 import useResponsive from '../hooks/useResponsive';
 
 // Fix the marker icon issue with Leaflet in React
@@ -46,6 +47,24 @@ function RoadInfrastructure() {
   const fileInputRef = useRef(null);
   const { isMobile } = useResponsive();
   const eventSourceRef = useRef(null);
+
+  // Create the popover content for road infrastructure
+  const reminderPopover = (
+    <Popover id="reminder-popover" style={{ maxWidth: '300px' }}>
+      <Popover.Header as="h3">📸 Image Upload Guidelines</Popover.Header>
+      <Popover.Body>
+        <p style={{ marginBottom: '10px' }}>
+          Please ensure your uploaded images are:
+        </p>
+        <ul style={{ marginBottom: '0', paddingLeft: '20px' }}>
+          <li>Focused directly on the road surface</li>
+          <li>Well-lit and clear</li>
+          <li>Showing the entire area of concern</li>
+          <li>Taken from a reasonable distance to capture context</li>
+        </ul>
+      </Popover.Body>
+    </Popover>
+  );
 
   // Road infrastructure classes (from the Python model)
   const roadInfraClasses = [
@@ -502,6 +521,25 @@ function RoadInfrastructure() {
                       <option value="camera">Live Camera</option>
                     </Form.Select>
                   </Form.Group>
+
+                  {/* Sticky note reminder */}
+                  <OverlayTrigger 
+                    trigger="click" 
+                    placement="right" 
+                    overlay={reminderPopover}
+                    rootClose
+                  >
+                    <div 
+                      className="sticky-note-icon mb-3"
+                      style={{ cursor: 'pointer', display: 'inline-block' }}
+                    >
+                      <img 
+                        src="/remindericon.svg" 
+                        alt="Image Upload Guidelines" 
+                        style={{ width: '32px', height: '32px' }}
+                      />
+                    </div>
+                  </OverlayTrigger>
 
                   {inputSource === 'video' && (
                     <Form.Group className="mb-3">

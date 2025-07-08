@@ -52,3 +52,134 @@
   background-color: #c82333;
   border-color: #bd2130;
 } 
+
+/* Sticky note reminder icon styles with animations */
+.sticky-note-icon {
+  display: inline-block;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 8px;
+  padding: 8px;
+  position: relative;
+  animation: gentleBounce 3s ease-in-out infinite;
+}
+
+/* Gentle bounce animation to draw attention */
+@keyframes gentleBounce {
+  0%, 20%, 50%, 80%, 100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-3px);
+  }
+  60% {
+    transform: translateY(-2px);
+  }
+}
+
+/* Hover effects */
+.sticky-note-icon:hover {
+  transform: translateY(-4px) scale(1.05);
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.2));
+  animation: none; /* Stop the bounce on hover */
+}
+
+/* Active/click effect */
+.sticky-note-icon:active {
+  transform: translateY(-1px) scale(1.02);
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.15));
+  transition: all 0.1s ease;
+}
+
+/* Icon image styles */
+.sticky-note-icon img {
+  display: block;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 4px;
+}
+
+/* Hover effect for the image */
+.sticky-note-icon:hover img {
+  transform: rotate(5deg);
+  filter: brightness(1.1);
+}
+
+/* Pulse effect for the icon background */
+.sticky-note-icon::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(circle, rgba(255, 193, 7, 0.2) 0%, transparent 70%);
+  border-radius: 50%;
+  opacity: 0;
+  animation: pulse 2s ease-in-out infinite;
+  z-index: -1;
+}
+
+/* Pulse animation */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+/* Wiggle animation on hover */
+.sticky-note-icon:hover::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  background: #ff6b6b;
+  border-radius: 50%;
+  animation: wiggle 0.5s ease-in-out infinite;
+}
+
+@keyframes wiggle {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(5deg);
+  }
+  75% {
+    transform: rotate(-5deg);
+  }
+}
+
+/* Custom popover styles for reminder */
+.popover#reminder-popover {
+  max-width: 320px !important;
+}
+
+.popover#reminder-popover .popover-header {
+  background-color: #fff3cd;
+  border-bottom: 1px solid #ffeaa7;
+  color: #856404;
+  font-weight: 600;
+}
+
+.popover#reminder-popover .popover-body {
+  color: #495057;
+  line-height: 1.5;
+}
+
+.popover#reminder-popover .popover-body ul {
+  margin-bottom: 0;
+}
+
+.popover#reminder-popover .popover-body li {
+  margin-bottom: 4px;
+}
+
+.popover#reminder-popover .popover-body li:last-child {
+  margin-bottom: 0;
+} 
