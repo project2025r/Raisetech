@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner } from 'react-bootstrap';
+import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner, OverlayTrigger, Popover } from 'react-bootstrap';
 import axios from 'axios';
 import Webcam from 'react-webcam';
 import './Pavement.css';
@@ -37,6 +37,24 @@ const Pavement = () => {
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   const { isMobile } = useResponsive();
+
+  // Create the popover content
+  const reminderPopover = (
+    <Popover id="reminder-popover" style={{ maxWidth: '300px' }}>
+      <Popover.Header as="h3">📸 Image Upload Guidelines</Popover.Header>
+      <Popover.Body>
+        <p style={{ marginBottom: '10px' }}>
+          Please ensure your uploaded images are:
+        </p>
+        <ul style={{ marginBottom: '0', paddingLeft: '20px' }}>
+          <li>Focused directly on the road surface</li>
+          <li>Well-lit and clear</li>
+          <li>Showing the entire area of concern</li>
+          <li>Taken from a reasonable distance to capture context</li>
+        </ul>
+      </Popover.Body>
+    </Popover>
+  );
 
   // Safari-compatible geolocation permission check
   const checkLocationPermission = async () => {
@@ -588,6 +606,25 @@ const Pavement = () => {
                   <option value="kerbs">Kerbs</option>
                 </Form.Select>
               </Form.Group>
+
+                              {/* Sticky note reminder */}
+                <OverlayTrigger 
+                  trigger="click" 
+                  placement="right" 
+                  overlay={reminderPopover}
+                  rootClose
+                >
+                  <div 
+                    className="sticky-note-icon mb-3"
+                    style={{ cursor: 'pointer', display: 'inline-block' }}
+                  >
+                    <img 
+                      src="/remindericon.svg" 
+                      alt="Image Upload Guidelines" 
+                      style={{ width: '32px', height: '32px' }}
+                    />
+                  </div>
+                </OverlayTrigger>
 
               <div className="mb-3">
                 <Form.Label>Image Source</Form.Label>
