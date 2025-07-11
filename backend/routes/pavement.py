@@ -1249,50 +1249,678 @@ def get_image_details(image_id):
                 "message": "Failed to connect to database"
             }), 500
         
-        # Check in pothole_images collection
+        # Initialize combined image data
+        combined_image_data = None
+        image_type = None
+        detected_defects = []
+        
+        # Check in all collections for this image_id
         pothole_image = db.pothole_images.find_one({"image_id": image_id})
-        if pothole_image:
-            # Convert ObjectId to string
-            pothole_image["_id"] = str(pothole_image["_id"])
-            
-            return jsonify({
-                "success": True,
-                "image": pothole_image,
-                "type": "pothole"
-            })
-        
-        # Check in crack_images collection
         crack_image = db.crack_images.find_one({"image_id": image_id})
-        if crack_image:
-            # Convert ObjectId to string
-            crack_image["_id"] = str(crack_image["_id"])
-            
-            return jsonify({
-                "success": True,
-                "image": crack_image,
-                "type": "crack"
-            })
-        
-        # Check in kerb_images collection
         kerb_image = db.kerb_images.find_one({"image_id": image_id})
-        if kerb_image:
-            # Convert ObjectId to string
-            kerb_image["_id"] = str(kerb_image["_id"])
-            
-            return jsonify({
-                "success": True,
-                "image": kerb_image,
-                "type": "kerb"
-            })
         
-        # Image not found in any collection
+        # If no image found in any collection
+        if not pothole_image and not crack_image and not kerb_image:
+            return jsonify({
+                "success": False,
+                "message": f"Image with ID {image_id} not found"
+            }), 404
+        
+        # Use the first available image as base and combine defect data
+        base_image = pothole_image or crack_image or kerb_image
+        combined_image_data = {
+            "_id": str(base_image["_id"]),
+            "image_id": base_image["image_id"],
+            "timestamp": base_image["timestamp"],
+            "coordinates": base_image["coordinates"],
+            "username": base_image.get("username", "Unknown"),
+            "role": base_image.get("role", "Unknown"),
+            "original_image_id": base_image.get("original_image_id"),
+            "processed_image_id": base_image.get("processed_image_id"),
+            "detection_type": base_image.get("detection_type", "unknown"),
+            # Initialize all defect arrays
+            "potholes": [],
+            "cracks": [],
+            "kerbs": [],
+            "pothole_count": 0,
+            "crack_count": 0,
+            "kerb_count": 0,
+            "type_counts": {},
+            "condition_counts": {},
+            "detected_defects": [],
+            "multi_defect_image": False
+        }
+        
+        # Add pothole data if present
+        if pothole_image:
+            detected_defects.append("potholes")
+            combined_image_data["potholes"] = pothole_image.get("potholes", [])
+            combined_image_data["pothole_count"] = pothole_image.get("pothole_count", 0)
+            
+        # Add crack data if present
+        if crack_image:
+            detected_defects.append("cracks")
+            combined_image_data["cracks"] = crack_image.get("cracks", [])
+            combined_image_data["crack_count"] = crack_image.get("crack_count", 0)
+            combined_image_data["type_counts"] = crack_image.get("type_counts", {})
+            
+        # Add kerb data if present
+        if kerb_image:
+            detected_defects.append("kerbs")
+            combined_image_data["kerbs"] = kerb_image.get("kerbs", [])
+            combined_image_data["kerb_count"] = kerb_image.get("kerb_count", 0)
+            combined_image_data["condition_counts"] = kerb_image.get("condition_counts", {})
+        
+        # Set combined metadata
+        combined_image_data["detected_defects"] = detected_defects
+        combined_image_data["multi_defect_image"] = len(detected_defects) > 1
+        
+        # Determine primary type (for backward compatibility)
+        if pothole_image:
+            image_type = "pothole"
+        elif crack_image:
+            image_type = "crack"
+        elif kerb_image:
+            image_type = "kerb"
+        else:
+            image_type = "unknown"
+            
         return jsonify({
-            "success": False,
-            "message": f"Image with ID {image_id} not found"
-        }), 404
+            "success": True,
+            "image": combined_image_data,
+            "type": image_type
+        })
     
     except Exception as e:
         return jsonify({
             "success": False,
             "message": f"Error retrieving image details: {str(e)}"
+        }), 500 
+
+@pavement_bp.route('/detect-all', methods=['POST'])
+def detect_all():
+    """
+    API endpoint to detect all types of defects (potholes, cracks, kerbs) in an uploaded image
+    
+    CRITICAL FIX: Model Isolation Implementation
+    ===========================================
+    
+    This function implements complete model isolation to prevent interference between
+    the three AI models (potholes, cracks, kerbs) when processing the same image.
+    
+    Key Isolation Strategies:
+    1. **Image Data Isolation**: Each model receives a completely independent copy 
+       of the original image via fresh .copy() operations
+    2. **Processing Independence**: Models run on separate image instances, preventing
+       cross-contamination from preprocessing or inference modifications
+    3. **Visualization Separation**: All overlays are applied to a separate display_image
+       that is not used for inference, only for visualization
+    4. **Memory Management**: Each model works with its own memory space without
+       sharing variables or objects
+    
+    This ensures that the "All" option produces identical detection results as if 
+    each model was run individually on the same clean image.
+    """
+    # Get models
+    models, midas, midas_transform = get_models()
+    
+    if not models or any(model_type not in models for model_type in ["potholes", "cracks", "kerbs"]):
+        return jsonify({
+            "success": False,
+            "message": "Failed to load one or more detection models"
+        }), 500
+    
+    if 'image' not in request.json:
+        return jsonify({
+            "success": False,
+            "message": "No image data provided"
+        }), 400
+    
+    # Extract coordinates if provided
+    client_coordinates = request.json.get('coordinates', 'Not Available')
+    
+    # Get user information
+    username = request.json.get('username', 'Unknown')
+    role = request.json.get('role', 'Unknown')
+    
+    # Get image data
+    try:
+        image_data = request.json['image']
+        image = decode_base64_image(image_data)
+        
+        if image is None:
+            return jsonify({
+                "success": False,
+                "message": "Invalid image data"
+            }), 400
+            
+        # Try to extract EXIF GPS data from the image
+        lat, lon = get_gps_coordinates(image_data)
+        coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+        
+        # CRITICAL FIX: Create separate copies for each model to prevent interference
+        # Keep original image unchanged for model processing
+        original_image = image.copy()
+        
+        # Debug: Log image shape and hash for verification
+        print(f"MODEL ISOLATION DEBUG: Original image shape: {original_image.shape}")
+        original_hash = hash(original_image.tobytes())
+        print(f"MODEL ISOLATION DEBUG: Original image hash: {original_hash}")
+        
+        # Run depth estimation if MiDaS is available (using original image)
+        depth_map = None
+        if midas and midas_transform:
+            depth_map = estimate_depth(original_image, midas, midas_transform)
+        else:
+            print("MiDaS model not available, skipping depth estimation")
+        
+        # Initialize results containers
+        all_results = {
+            "potholes": [],
+            "cracks": [],
+            "kerbs": [],
+            "model_errors": {},
+            "processed_image": None,
+            "success": True,
+            "coordinates": coordinates,
+            "username": username,
+            "role": role
+        }
+        
+        timestamp = pd.Timestamp.now().isoformat()
+        image_upload_id = str(uuid.uuid4())  # Create a unique ID for this image upload
+        
+        # Store the original image once for all detections
+        fs = get_gridfs()
+        _, original_buffer = cv2.imencode('.jpg', image)
+        original_image_bytes = original_buffer.tobytes()
+        original_image_id = fs.put(
+            original_image_bytes, 
+            filename=f"image_{image_upload_id}_original.jpg",
+            content_type="image/jpeg"
+        )
+        
+        # Track which models succeeded
+        successful_models = []
+        
+        # Initialize visualization image for overlays (separate from inference)
+        display_image = original_image.copy()
+        print(f"MODEL ISOLATION DEBUG: Display image initialized with hash: {hash(display_image.tobytes())}")
+        
+        # === POTHOLE DETECTION ===
+        try:
+            # CRITICAL FIX: Use fresh copy of original image for pothole detection
+            pothole_inference_image = original_image.copy()
+            pothole_hash = hash(pothole_inference_image.tobytes())
+            print(f"MODEL ISOLATION DEBUG: Pothole model receiving image with hash: {pothole_hash}")
+            print(f"MODEL ISOLATION DEBUG: Pothole image matches original: {pothole_hash == original_hash}")
+            
+            pothole_results = models["potholes"](pothole_inference_image, conf=0.2)
+            pothole_id = 1
+            
+            for result in pothole_results:
+                if result.masks is None:
+                    continue
+                    
+                masks = result.masks.data.cpu().numpy()
+                boxes = result.boxes.xyxy.cpu().numpy()
+                
+                for mask, box in zip(masks, boxes):
+                    # Process the segmentation mask
+                    binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                    binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
+                    
+                    # Create colored overlay for potholes (red) - apply to display image only
+                    colored_mask = np.zeros_like(display_image)
+                    colored_mask[:, :, 2] = binary_mask  # Red channel
+                    
+                    # Blend the display image with the mask (not the inference image)
+                    display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
+                    
+                    # Calculate dimensions
+                    dimensions = calculate_pothole_dimensions(binary_mask)
+                    
+                    # Calculate depth metrics if depth map is available
+                    depth_metrics = None
+                    if depth_map is not None:
+                        depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                    else:
+                        # Provide default depth values when MiDaS is not available
+                        depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
+                    
+                    if dimensions and depth_metrics:
+                        # Get detection box coordinates
+                        x1, y1, x2, y2 = map(int, box[:4])
+                        volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
+                        
+                        # Determine volume range
+                        if volume < 1000:
+                            volume_range = "Small (<1k)"
+                        elif volume < 10000:
+                            volume_range = "Medium (1k - 10k)"
+                        else:
+                            volume_range = "Big (>10k)"
+                        
+                        # Store pothole data in database
+                        pothole_data = {
+                            "pothole_id": pothole_id,
+                            "area_cm2": dimensions["area_cm2"],
+                            "depth_cm": depth_metrics["max_depth_cm"],
+                            "volume": volume,
+                            "volume_range": volume_range,
+                            "coordinates": coordinates,
+                            "timestamp": timestamp,
+                            "bbox": [x1, y1, x2, y2],
+                            "username": username,
+                            "role": role,
+                            "original_image_id": str(original_image_id),
+                            "image_upload_id": image_upload_id
+                        }
+                        
+                        # Create a copy for JSON response (without ObjectId references)
+                        pothole_data_for_response = {
+                            "pothole_id": pothole_id,
+                            "area_cm2": dimensions["area_cm2"],
+                            "depth_cm": depth_metrics["max_depth_cm"],
+                            "volume": volume,
+                            "volume_range": volume_range,
+                            "coordinates": coordinates,
+                            "bbox": [x1, y1, x2, y2]
+                        }
+                        
+                        # Insert into database
+                        db = connect_to_db()
+                        if db is not None:
+                            db.potholes.insert_one(pothole_data)
+                        
+                        all_results["potholes"].append(pothole_data_for_response)
+                        pothole_id += 1
+            
+            successful_models.append("potholes")
+            
+        except Exception as e:
+            print(f"Error in pothole detection: {str(e)}")
+            all_results["model_errors"]["potholes"] = str(e)
+        
+        # === CRACK DETECTION ===
+        try:
+            # CRITICAL FIX: Use fresh copy of original image for crack detection
+            crack_inference_image = original_image.copy()
+            crack_hash = hash(crack_inference_image.tobytes())
+            print(f"MODEL ISOLATION DEBUG: Crack model receiving image with hash: {crack_hash}")
+            print(f"MODEL ISOLATION DEBUG: Crack image matches original: {crack_hash == original_hash}")
+            
+            crack_results = models["cracks"](crack_inference_image, conf=0.2)
+            crack_id = 1
+            
+            # Define crack types mapping (same as original code)
+            CRACK_TYPES = {
+                0: {"name": "Alligator Crack", "color": (0, 0, 255)},
+                1: {"name": "Edge Crack", "color": (0, 255, 255)},
+                2: {"name": "Hairline Cracks", "color": (255, 0, 0)},
+                3: {"name": "Longitudinal Cracking", "color": (0, 255, 0)},
+                4: {"name": "Transverse Cracking", "color": (128, 0, 128)}
+            }
+            
+            # Track crack types
+            type_counts = {v["name"]: 0 for v in CRACK_TYPES.values()}
+            
+            for result in crack_results:
+                if result.masks is None:
+                    continue
+                    
+                masks = result.masks.data.cpu().numpy()
+                boxes = result.boxes.xyxy.cpu().numpy()
+                classes = result.boxes.cls.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
+                
+                for mask, box, cls, conf in zip(masks, boxes, classes, confidences):
+                    # Process the segmentation mask
+                    binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                    binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
+                    
+                    # Create colored overlay for cracks (green) - apply to display image only
+                    colored_mask = np.zeros_like(display_image)
+                    colored_mask[:, :, 1] = binary_mask  # Green channel
+                    
+                    # Blend the display image with the mask (not the inference image)
+                    display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
+                    
+                    # Calculate area safely
+                    area_data = calculate_area(binary_mask)
+                    area_cm2 = area_data["area_cm2"] if area_data else 0
+                    
+                    # Determine area range
+                    if area_cm2 < 50:
+                        area_range = "Small (<50 cm²)"
+                    elif area_cm2 < 200:
+                        area_range = "Medium (50-200 cm²)"
+                    else:
+                        area_range = "Large (>200 cm²)"
+                    
+                    # Get crack type safely using dictionary lookup
+                    crack_type_info = CRACK_TYPES.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
+                    crack_type = crack_type_info["name"]
+                    type_counts[crack_type] += 1
+                    
+                    # Get detection box coordinates
+                    x1, y1, x2, y2 = map(int, box[:4])
+                    
+                    # Store crack data
+                    crack_data = {
+                        "crack_id": crack_id,
+                        "crack_type": crack_type,
+                        "area_cm2": area_cm2,
+                        "area_range": area_range,
+                        "confidence": float(conf),
+                        "coordinates": coordinates,
+                        "timestamp": timestamp,
+                        "bbox": [x1, y1, x2, y2],
+                        "username": username,
+                        "role": role,
+                        "original_image_id": str(original_image_id),
+                        "image_upload_id": image_upload_id
+                    }
+                    
+                    # Create a copy for JSON response (without ObjectId references)
+                    crack_data_for_response = {
+                        "crack_id": crack_id,
+                        "crack_type": crack_type,
+                        "area_cm2": area_cm2,
+                        "area_range": area_range,
+                        "confidence": float(conf),
+                        "coordinates": coordinates,
+                        "bbox": [x1, y1, x2, y2]
+                    }
+                        
+                    # Insert into database
+                    db = connect_to_db()
+                    if db is not None:
+                        db.cracks.insert_one(crack_data)
+                        
+                    all_results["cracks"].append(crack_data_for_response)
+                    crack_id += 1
+            
+            all_results["type_counts"] = type_counts
+            successful_models.append("cracks")
+            
+        except Exception as e:
+            print(f"Error in crack detection: {str(e)}")
+            all_results["model_errors"]["cracks"] = str(e)
+        
+        # === KERB DETECTION ===
+        try:
+            # CRITICAL FIX: Use fresh copy of original image for kerb detection
+            kerb_inference_image = original_image.copy()
+            kerb_hash = hash(kerb_inference_image.tobytes())
+            print(f"MODEL ISOLATION DEBUG: Kerb model receiving image with hash: {kerb_hash}")
+            print(f"MODEL ISOLATION DEBUG: Kerb image matches original: {kerb_hash == original_hash}")
+            
+            kerb_results = models["kerbs"](kerb_inference_image, conf=0.5)
+            kerb_id = 1
+            
+            # Define kerb types mapping (same as original code)
+            kerb_types = {
+                0: {"name": "Damaged Kerbs", "color": (0, 0, 255)},   # Red (in BGR)
+                1: {"name": "Faded Kerbs", "color": (0, 165, 255)},   # Orange
+                2: {"name": "Normal Kerbs", "color": (0, 255, 0)}     # Green
+            }
+            
+            # Track kerb conditions
+            condition_counts = {
+                "Normal Kerbs": 0,
+                "Faded Kerbs": 0,
+                "Damaged Kerbs": 0
+            }
+            
+            for result in kerb_results:
+                # Handle both mask-based and box-based results
+                if hasattr(result, 'masks') and result.masks is not None:
+                    # Mask-based processing
+                    masks = result.masks.data.cpu().numpy()
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    classes = result.boxes.cls.cpu().numpy()
+                    confidences = result.boxes.conf.cpu().numpy()
+                    
+                    for mask, box, cls, conf in zip(masks, boxes, classes, confidences):
+                        # Process the segmentation mask
+                        binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                        binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
+                        
+                        # Create colored overlay for kerbs (blue) - apply to display image only
+                        colored_mask = np.zeros_like(display_image)
+                        colored_mask[:, :, 0] = binary_mask  # Blue channel
+                        
+                        # Blend the display image with the mask (not the inference image)
+                        display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
+                        
+                        # Calculate length based on mask perimeter
+                        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        if contours:
+                            perimeter = cv2.arcLength(contours[0], True)
+                            estimated_length_m = perimeter / 100  # Convert pixels to meters (approximate)
+                        else:
+                            estimated_length_m = 1.0  # Default value
+                        
+                        # Get kerb condition safely
+                        kerb_type_info = kerb_types.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
+                        kerb_condition = kerb_type_info["name"]
+                        condition_counts[kerb_condition] += 1
+                        
+                        # Get detection box coordinates
+                        x1, y1, x2, y2 = map(int, box[:4])
+                        
+                        # Store kerb data
+                        kerb_data = {
+                            "kerb_id": kerb_id,
+                            "kerb_type": "Concrete Kerb",  # Default type
+                            "length_m": estimated_length_m,
+                            "condition": kerb_condition,
+                            "confidence": float(conf),
+                            "coordinates": coordinates,
+                            "timestamp": timestamp,
+                            "bbox": [x1, y1, x2, y2],
+                            "username": username,
+                            "role": role,
+                            "original_image_id": str(original_image_id),
+                            "image_upload_id": image_upload_id
+                        }
+                        
+                        # Create a copy for JSON response (without ObjectId references)
+                        kerb_data_for_response = {
+                            "kerb_id": kerb_id,
+                            "kerb_type": "Concrete Kerb",  # Default type
+                            "length_m": estimated_length_m,
+                            "condition": kerb_condition,
+                            "confidence": float(conf),
+                            "coordinates": coordinates,
+                            "bbox": [x1, y1, x2, y2]
+                        }
+                        
+                        # Insert into database
+                        db = connect_to_db()
+                        if db is not None:
+                            db.kerbs.insert_one(kerb_data)
+                        
+                        all_results["kerbs"].append(kerb_data_for_response)
+                        kerb_id += 1
+                        
+                else:
+                    # Box-based processing (fallback)
+                    if hasattr(result, 'boxes') and result.boxes is not None:
+                        boxes = result.boxes.xyxy.cpu().numpy()
+                        classes = result.boxes.cls.cpu().numpy()
+                        confidences = result.boxes.conf.cpu().numpy()
+                        
+                        for box, cls, conf in zip(boxes, classes, confidences):
+                            x1, y1, x2, y2 = map(int, box[:4])
+                            
+                            # Calculate approximate length based on box dimensions
+                            estimated_length_m = max((x2 - x1), (y2 - y1)) / 100  # Convert pixels to meters
+                            
+                            # Get kerb condition safely
+                            kerb_type_info = kerb_types.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
+                            kerb_condition = kerb_type_info["name"]
+                            condition_counts[kerb_condition] += 1
+                            
+                            # Store kerb data
+                            kerb_data = {
+                                "kerb_id": kerb_id,
+                                "kerb_type": "Concrete Kerb",  # Default type
+                                "length_m": estimated_length_m,
+                                "condition": kerb_condition,
+                                "confidence": float(conf),
+                                "coordinates": coordinates,
+                                "timestamp": timestamp,
+                                "bbox": [x1, y1, x2, y2],
+                                "username": username,
+                                "role": role,
+                                "original_image_id": str(original_image_id),
+                                "image_upload_id": image_upload_id
+                            }
+                            
+                            # Create a copy for JSON response (without ObjectId references)
+                            kerb_data_for_response = {
+                                "kerb_id": kerb_id,
+                                "kerb_type": "Concrete Kerb",  # Default type
+                                "length_m": estimated_length_m,
+                                "condition": kerb_condition,
+                                "confidence": float(conf),
+                                "coordinates": coordinates,
+                                "bbox": [x1, y1, x2, y2]
+                            }
+                            
+                            # Insert into database
+                            db = connect_to_db()
+                            if db is not None:
+                                db.kerbs.insert_one(kerb_data)
+                            
+                            all_results["kerbs"].append(kerb_data_for_response)
+                            kerb_id += 1
+            
+            all_results["condition_counts"] = condition_counts
+            successful_models.append("kerbs")
+            
+        except Exception as e:
+            print(f"Error in kerb detection: {str(e)}")
+            all_results["model_errors"]["kerbs"] = str(e)
+        
+        # Store processed image
+        processed_image_id = None
+        try:
+            _, processed_buffer = cv2.imencode('.jpg', display_image)
+            processed_image_bytes = processed_buffer.tobytes()
+            processed_image_id = fs.put(
+                processed_image_bytes,
+                filename=f"image_{image_upload_id}_processed_all.jpg",
+                content_type="image/jpeg"
+            )
+        except Exception as e:
+            print(f"Error storing processed image: {str(e)}")
+        
+        # Encode processed image for response
+        all_results["processed_image"] = encode_processed_image(display_image)
+        
+        # Final validation: Ensure original image integrity is maintained
+        final_hash = hash(original_image.tobytes())
+        print(f"MODEL ISOLATION DEBUG: Original image hash after all processing: {final_hash}")
+        print(f"MODEL ISOLATION DEBUG: Original image integrity maintained: {final_hash == original_hash}")
+        
+        if final_hash != original_hash:
+            print("⚠️  WARNING: Original image was modified during processing - this indicates a bug!")
+        else:
+            print("✅ SUCCESS: Original image integrity maintained throughout processing")
+        
+        # Smart categorization logic - Store image in appropriate categories based on detected defects
+        db = connect_to_db()
+        if db is not None:
+            # Base image data for all categories
+            image_data_base = {
+                "image_id": image_upload_id,
+                "timestamp": timestamp,
+                "coordinates": coordinates,
+                "username": username,
+                "role": role,
+                "original_image_id": str(original_image_id),
+                "processed_image_id": str(processed_image_id) if processed_image_id else None,
+                "detection_type": "all"
+            }
+            
+            # Determine which defects were actually detected (non-zero counts)
+            detected_defects = []
+            
+            # Check if potholes were detected
+            if "potholes" in successful_models and len(all_results["potholes"]) > 0:
+                detected_defects.append("potholes")
+            
+            # Check if cracks were detected
+            if "cracks" in successful_models and len(all_results["cracks"]) > 0:
+                detected_defects.append("cracks")
+            
+            # Check if kerbs were detected
+            if "kerbs" in successful_models and len(all_results["kerbs"]) > 0:
+                detected_defects.append("kerbs")
+            
+            # Store image in each category that has detected defects
+            # This enables smart categorization where images appear in multiple categories
+            # if they contain multiple defect types
+            
+            if "potholes" in detected_defects:
+                pothole_image_data = image_data_base.copy()
+                pothole_image_data.update({
+                    "pothole_count": len(all_results["potholes"]),
+                    "potholes": all_results["potholes"],  # Store individual pothole data
+                    "detected_defects": detected_defects,  # Track all defects in this image
+                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
+                })
+                db.pothole_images.insert_one(pothole_image_data)
+            
+            if "cracks" in detected_defects:
+                crack_image_data = image_data_base.copy()
+                crack_image_data.update({
+                    "crack_count": len(all_results["cracks"]),
+                    "cracks": all_results["cracks"],  # Store individual crack data
+                    "type_counts": all_results.get("type_counts", {}),
+                    "detected_defects": detected_defects,  # Track all defects in this image
+                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
+                })
+                db.crack_images.insert_one(crack_image_data)
+            
+            if "kerbs" in detected_defects:
+                kerb_image_data = image_data_base.copy()
+                kerb_image_data.update({
+                    "kerb_count": len(all_results["kerbs"]),
+                    "kerbs": all_results["kerbs"],  # Store individual kerb data
+                    "condition_counts": all_results.get("condition_counts", {}),
+                    "detected_defects": detected_defects,  # Track all defects in this image
+                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
+                })
+                db.kerb_images.insert_one(kerb_image_data)
+            
+            # Add categorization info to response
+            all_results["categorization"] = {
+                "detected_defects": detected_defects,
+                "categories_stored": len(detected_defects),
+                "multi_defect_image": len(detected_defects) > 1
+            }
+        
+        # Determine overall success
+        if not successful_models:
+            all_results["success"] = False
+            all_results["message"] = "All detection models failed"
+        elif len(successful_models) < 3:
+            # Partial success
+            failed_models = set(["potholes", "cracks", "kerbs"]) - set(successful_models)
+            all_results["message"] = f"Partial success. Failed models: {', '.join(failed_models)}"
+        else:
+            all_results["message"] = "All detection models completed successfully"
+        
+        return jsonify(all_results)
+        
+    except Exception as e:
+        print(f"Error in detect_all: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "message": f"Error during detection: {str(e)}"
         }), 500 

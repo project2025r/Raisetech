@@ -2,10 +2,13 @@ from flask import Blueprint, jsonify, request
 import pandas as pd
 import os
 import json
+import logging
 from config.db import connect_to_db
 import datetime
 from utils.rbac import get_allowed_roles, create_role_filter, validate_user_role
 from utils.auth_middleware import validate_rbac_access
+
+logger = logging.getLogger(__name__)
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -64,7 +67,7 @@ def get_dashboard_summary():
             "success": False,
             "message": "Database connection failed"
         }), 500
-    
+
     try:
         # Get filters
         query_filter = parse_filters()
@@ -100,151 +103,181 @@ def get_dashboard_summary():
         
         # Count potholes from pothole_images collection (sum of all pothole_count fields)
         pothole_count = 0
-        pothole_pipeline = [
-            {"$match": query_filter} if query_filter else {"$match": {}},
-            {"$group": {"_id": None, "total": {"$sum": "$pothole_count"}}}
-        ]
-        pothole_result = list(db.pothole_images.aggregate(pothole_pipeline))
-        if pothole_result:
-            pothole_count = pothole_result[0]["total"]
+        try:
+            pothole_pipeline = [
+                {"$match": query_filter} if query_filter else {"$match": {}},
+                {"$group": {"_id": None, "total": {"$sum": "$pothole_count"}}}
+            ]
+            pothole_result = list(db.pothole_images.aggregate(pothole_pipeline))
+            if pothole_result and len(pothole_result) > 0:
+                pothole_count = pothole_result[0].get("total", 0) or 0
+        except Exception as e:
+            logger.error(f"Error aggregating potholes: {e}")
+            pothole_count = 0
         
         dashboard_data["potholes"]["count"] = pothole_count
         
         # Get data from pothole images
         if pothole_count > 0:
-            # Get pothole images sorted by timestamp
-            pothole_images = list(db.pothole_images.find(query_filter).sort([("timestamp", -1)]))
-            
-            # Calculate total volume and count for average
-            total_volume = 0
-            total_count = 0
-            
-            for image in pothole_images:
-                # Add all potholes from this image to the latest list
-                for pothole in image["potholes"]:
-                    # Add image metadata to each pothole
-                    pothole_data = {
-                        **pothole,
-                        "image_id": image["image_id"],
-                        "timestamp": image["timestamp"],
-                        "original_image_id": image["original_image_id"],
-                        "processed_image_id": image["processed_image_id"]
-                    }
-                    dashboard_data["potholes"]["latest"].append(pothole_data)
-                    
-                    # Update size distribution
-                    if "volume_range" in pothole and pothole["volume_range"] in dashboard_data["potholes"]["by_size"]:
-                        dashboard_data["potholes"]["by_size"][pothole["volume_range"]] += 1
-                    
-                    # Add to volume calculations
-                    if "volume" in pothole:
-                        total_volume += pothole["volume"]
-                        total_count += 1
-            
-            # Calculate average volume
-            if total_count > 0:
-                dashboard_data["potholes"]["avg_volume"] = round(total_volume / total_count, 2)
+            try:
+                # Get pothole images sorted by timestamp
+                pothole_images = list(db.pothole_images.find(query_filter).sort([("timestamp", -1)]))
+                
+                # Calculate total volume and count for average
+                total_volume = 0
+                total_count = 0
+                
+                for image in pothole_images:
+                    # Add all potholes from this image to the latest list
+                    for pothole in image.get("potholes", []):
+                        # Add image metadata to each pothole
+                        pothole_data = {
+                            **pothole,
+                            "image_id": image.get("image_id"),
+                            "timestamp": image.get("timestamp"),
+                            "original_image_id": image.get("original_image_id"),
+                            "processed_image_id": image.get("processed_image_id")
+                        }
+                        dashboard_data["potholes"]["latest"].append(pothole_data)
+                        
+                        # Update size distribution
+                        if "volume_range" in pothole and pothole["volume_range"] in dashboard_data["potholes"]["by_size"]:
+                            dashboard_data["potholes"]["by_size"][pothole["volume_range"]] += 1
+                        
+                        # Add to volume calculations
+                        if "volume" in pothole:
+                            total_volume += pothole["volume"]
+                            total_count += 1
+                
+                # Calculate average volume
+                if total_count > 0:
+                    dashboard_data["potholes"]["avg_volume"] = round(total_volume / total_count, 2)
+            except Exception as e:
+                logger.error(f"Error processing pothole images: {e}")
         
         # Sort all potholes by timestamp, newest first
-        dashboard_data["potholes"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        try:
+            dashboard_data["potholes"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting potholes: {e}")
         
         # --- CRACKS ---
         
         # Count cracks in the new structure (sum of all crack_count fields)
         crack_count = 0
-        crack_pipeline = [
-            {"$match": query_filter} if query_filter else {"$match": {}},
-            {"$group": {"_id": None, "total": {"$sum": "$crack_count"}}}
-        ]
-        crack_result = list(db.crack_images.aggregate(crack_pipeline))
-        if crack_result:
-            crack_count = crack_result[0]["total"]
+        try:
+            crack_pipeline = [
+                {"$match": query_filter} if query_filter else {"$match": {}},
+                {"$group": {"_id": None, "total": {"$sum": "$crack_count"}}}
+            ]
+            crack_result = list(db.crack_images.aggregate(crack_pipeline))
+            if crack_result and len(crack_result) > 0:
+                crack_count = crack_result[0].get("total", 0) or 0
+        except Exception as e:
+            logger.error(f"Error aggregating cracks: {e}")
+            crack_count = 0
         
         dashboard_data["cracks"]["count"] = crack_count
         
         # Get data from crack images
         if crack_count > 0:
-            # Get crack images sorted by timestamp
-            crack_images = list(db.crack_images.find(query_filter).sort([("timestamp", -1)]))
-            
-            for image in crack_images:
-                # Add type counts if available
-                if "type_counts" in image:
-                    for crack_type, count in image["type_counts"].items():
-                        if crack_type in dashboard_data["cracks"]["by_type"]:
-                            dashboard_data["cracks"]["by_type"][crack_type] += count
+            try:
+                # Get crack images sorted by timestamp
+                crack_images = list(db.crack_images.find(query_filter).sort([("timestamp", -1)]))
                 
-                # Add all cracks from this image to the latest list
-                for crack in image["cracks"]:
-                    # Add image metadata to each crack
-                    crack_data = {
-                        **crack,
-                        "image_id": image["image_id"],
-                        "timestamp": image["timestamp"],
-                        "original_image_id": image["original_image_id"],
-                        "processed_image_id": image["processed_image_id"]
-                    }
-                    dashboard_data["cracks"]["latest"].append(crack_data)
+                for image in crack_images:
+                    # Add type counts if available
+                    if "type_counts" in image:
+                        for crack_type, count in image["type_counts"].items():
+                            if crack_type in dashboard_data["cracks"]["by_type"]:
+                                dashboard_data["cracks"]["by_type"][crack_type] += count
                     
-                    # Update size distribution if not counted in type_counts
-                    if "type_counts" not in image and "area_range" in crack:
-                        key = crack["area_range"]
-                        if "Small" in key:
-                            dashboard_data["cracks"]["by_size"]["Small (<50)"] += 1
-                        elif "Medium" in key:
-                            dashboard_data["cracks"]["by_size"]["Medium (50-200)"] += 1
-                        elif "Large" in key:
-                            dashboard_data["cracks"]["by_size"]["Large (>200)"] += 1
+                    # Add all cracks from this image to the latest list
+                    for crack in image.get("cracks", []):
+                        # Add image metadata to each crack
+                        crack_data = {
+                            **crack,
+                            "image_id": image.get("image_id"),
+                            "timestamp": image.get("timestamp"),
+                            "original_image_id": image.get("original_image_id"),
+                            "processed_image_id": image.get("processed_image_id")
+                        }
+                        dashboard_data["cracks"]["latest"].append(crack_data)
+                        
+                        # Update size distribution if not counted in type_counts
+                        if "type_counts" not in image and "area_range" in crack:
+                            key = crack["area_range"]
+                            if "Small" in key:
+                                dashboard_data["cracks"]["by_size"]["Small (<50)"] += 1
+                            elif "Medium" in key:
+                                dashboard_data["cracks"]["by_size"]["Medium (50-200)"] += 1
+                            elif "Large" in key:
+                                dashboard_data["cracks"]["by_size"]["Large (>200)"] += 1
+            except Exception as e:
+                logger.error(f"Error processing crack images: {e}")
         
         # Sort all cracks by timestamp, newest first
-        dashboard_data["cracks"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        try:
+            dashboard_data["cracks"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting cracks: {e}")
         
         # --- KERBS ---
         
         # Count kerbs in the new structure (sum of all kerb_count fields)
         kerb_count = 0
-        kerb_pipeline = [
-            {"$match": query_filter} if query_filter else {"$match": {}},
-            {"$group": {"_id": None, "total": {"$sum": "$kerb_count"}}}
-        ]
-        kerb_result = list(db.kerb_images.aggregate(kerb_pipeline))
-        if kerb_result:
-            kerb_count = kerb_result[0]["total"]
+        try:
+            kerb_pipeline = [
+                {"$match": query_filter} if query_filter else {"$match": {}},
+                {"$group": {"_id": None, "total": {"$sum": "$kerb_count"}}}
+            ]
+            kerb_result = list(db.kerb_images.aggregate(kerb_pipeline))
+            if kerb_result and len(kerb_result) > 0:
+                kerb_count = kerb_result[0].get("total", 0) or 0
+        except Exception as e:
+            logger.error(f"Error aggregating kerbs: {e}")
+            kerb_count = 0
         
         dashboard_data["kerbs"]["count"] = kerb_count
         
         # Get data from kerb images
         if kerb_count > 0:
-            # Get kerb images sorted by timestamp
-            kerb_images = list(db.kerb_images.find(query_filter).sort([("timestamp", -1)]))
-            
-            for image in kerb_images:
-                # Add condition counts if available
-                if "condition_counts" in image:
-                    for condition, count in image["condition_counts"].items():
-                        if condition in dashboard_data["kerbs"]["by_condition"]:
-                            dashboard_data["kerbs"]["by_condition"][condition] += count
+            try:
+                # Get kerb images sorted by timestamp
+                kerb_images = list(db.kerb_images.find(query_filter).sort([("timestamp", -1)]))
                 
-                # Add all kerbs from this image to the latest list
-                for kerb in image["kerbs"]:
-                    # Add image metadata to each kerb
-                    kerb_data = {
-                        **kerb,
-                        "image_id": image["image_id"],
-                        "timestamp": image["timestamp"],
-                        "original_image_id": image["original_image_id"],
-                        "processed_image_id": image["processed_image_id"]
-                    }
-                    dashboard_data["kerbs"]["latest"].append(kerb_data)
+                for image in kerb_images:
+                    # Add condition counts if available
+                    if "condition_counts" in image:
+                        for condition, count in image["condition_counts"].items():
+                            if condition in dashboard_data["kerbs"]["by_condition"]:
+                                dashboard_data["kerbs"]["by_condition"][condition] += count
                     
-                    # Update condition distribution if not counted in condition_counts
-                    if "condition_counts" not in image and "condition" in kerb:
-                        condition = kerb["condition"]
-                        if condition in dashboard_data["kerbs"]["by_condition"]:
-                            dashboard_data["kerbs"]["by_condition"][condition] += 1
+                    # Add all kerbs from this image to the latest list
+                    for kerb in image.get("kerbs", []):
+                        # Add image metadata to each kerb
+                        kerb_data = {
+                            **kerb,
+                            "image_id": image.get("image_id"),
+                            "timestamp": image.get("timestamp"),
+                            "original_image_id": image.get("original_image_id"),
+                            "processed_image_id": image.get("processed_image_id")
+                        }
+                        dashboard_data["kerbs"]["latest"].append(kerb_data)
+                        
+                        # Update condition distribution if not counted in condition_counts
+                        if "condition_counts" not in image and "condition" in kerb:
+                            condition = kerb["condition"]
+                            if condition in dashboard_data["kerbs"]["by_condition"]:
+                                dashboard_data["kerbs"]["by_condition"][condition] += 1
+            except Exception as e:
+                logger.error(f"Error processing kerb images: {e}")
         
         # Sort all kerbs by timestamp, newest first
-        dashboard_data["kerbs"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        try:
+            dashboard_data["kerbs"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting kerbs: {e}")
         
         return jsonify({
             "success": True,

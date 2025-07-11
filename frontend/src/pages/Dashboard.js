@@ -14,15 +14,33 @@ const ImageCard = ({ defect, defectType, defectIdKey }) => {
     setIsOriginal(showOriginal);
   };
   
+  // Check if this is a multi-defect image
+  const isMultiDefect = defect.detected_defects && defect.detected_defects.length > 1;
+  const detectedDefects = defect.detected_defects || [];
+  
   return (
     <Col md={4} className="mb-4" key={`${defectType}-${defect[defectIdKey]}`}>
-      <Card className="h-100 shadow-sm">
-        <Card.Header>
-          <h6 className="mb-0">
-            {defectType === 'cracks' ? `${defect.crack_type} #${defect.crack_id}` : 
-             defectType === 'kerbs' ? `${defect.condition} #${defect.kerb_id}` : 
-             `Pothole #${defect.pothole_id}`}
-          </h6>
+      <Card className={`h-100 shadow-sm ${isMultiDefect ? 'border-warning' : ''}`}>
+        <Card.Header className={isMultiDefect ? 'bg-warning bg-opacity-10' : ''}>
+          <div className="d-flex justify-content-between align-items-center">
+            <h6 className="mb-0">
+              {defectType === 'cracks' ? `${defect.crack_type} #${defect.crack_id}` : 
+               defectType === 'kerbs' ? `${defect.condition} #${defect.kerb_id}` : 
+               `Pothole #${defect.pothole_id}`}
+            </h6>
+            {isMultiDefect && (
+              <small className="text-warning fw-bold">
+                🔀 Multi-Defect
+              </small>
+            )}
+          </div>
+          {isMultiDefect && (
+            <div className="mt-1">
+              <small className="text-muted">
+                Also contains: {detectedDefects.filter(d => d !== defectType).join(', ')}
+              </small>
+            </div>
+          )}
         </Card.Header>
         <Card.Body>
           <div className="mb-2 text-center">
@@ -203,7 +221,38 @@ function Dashboard({ user }) {
       // Get detailed dashboard data including latest images
       const dashboardResponse = await axios.get('/api/dashboard/summary', { params });
       if (dashboardResponse.data.success) {
-        setDashboardData(dashboardResponse.data.data);
+        const dashboardData = dashboardResponse.data.data;
+        
+        // Calculate multi-defect statistics
+        const multiDefectStats = {
+          totalImages: 0,
+          multiDefectImages: 0,
+          singleDefectImages: 0,
+          categoryBreakdown: {
+            potholes: 0,
+            cracks: 0,
+            kerbs: 0
+          }
+        };
+        
+        // Count multi-defect images from each category
+        ['potholes', 'cracks', 'kerbs'].forEach(category => {
+          const categoryImages = dashboardData[category].latest || [];
+          categoryImages.forEach(item => {
+            if (item.multi_defect_image) {
+              multiDefectStats.multiDefectImages++;
+            }
+            multiDefectStats.totalImages++;
+            multiDefectStats.categoryBreakdown[category]++;
+          });
+        });
+        
+        multiDefectStats.singleDefectImages = multiDefectStats.totalImages - multiDefectStats.multiDefectImages;
+        
+        // Add multi-defect statistics to dashboard data
+        dashboardData.multiDefectStats = multiDefectStats;
+        
+        setDashboardData(dashboardData);
       }
       
       // Get users data
@@ -507,6 +556,8 @@ function Dashboard({ user }) {
               </Card>
             </Col>
           </Row>
+
+
           
           {/* Users Overview Section */}
           <Row className="mb-4">

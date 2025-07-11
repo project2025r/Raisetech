@@ -7,7 +7,7 @@ import useResponsive from '../hooks/useResponsive';
 
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
-  const [detectionType, setDetectionType] = useState('potholes');
+  const [detectionType, setDetectionType] = useState('all');
   const [imageFiles, setImageFiles] = useState([]);
   const [imagePreviewsMap, setImagePreviewsMap] = useState({});
   const [imageLocationMap, setImageLocationMap] = useState({});
@@ -301,6 +301,9 @@ const Pavement = () => {
       // Determine endpoint based on detection type
       let endpoint;
       switch(detectionType) {
+        case 'all':
+          endpoint = '/api/pavement/detect-all';
+          break;
         case 'potholes':
           endpoint = '/api/pavement/detect-potholes';
           break;
@@ -311,7 +314,7 @@ const Pavement = () => {
           endpoint = '/api/pavement/detect-kerbs';
           break;
         default:
-          endpoint = '/api/pavement/detect-potholes';
+          endpoint = '/api/pavement/detect-all';
       }
 
       // Make API request
@@ -355,6 +358,9 @@ const Pavement = () => {
       // Determine endpoint based on detection type
       let endpoint;
       switch(detectionType) {
+        case 'all':
+          endpoint = '/api/pavement/detect-all';
+          break;
         case 'potholes':
           endpoint = '/api/pavement/detect-potholes';
           break;
@@ -365,7 +371,7 @@ const Pavement = () => {
           endpoint = '/api/pavement/detect-kerbs';
           break;
         default:
-          endpoint = '/api/pavement/detect-potholes';
+          endpoint = '/api/pavement/detect-all';
       }
       
       const results = [];
@@ -601,6 +607,7 @@ const Pavement = () => {
                   value={detectionType}
                   onChange={(e) => setDetectionType(e.target.value)}
                 >
+                  <option value="all">All (Potholes + Cracks + Kerbs)</option>
                   <option value="potholes">Potholes</option>
                   <option value="cracks">Alligator Cracks</option>
                   <option value="kerbs">Kerbs</option>
@@ -865,6 +872,197 @@ const Pavement = () => {
 
                 {results && (
                   <div className="results-summary">
+                    {detectionType === 'all' && (
+                      <div className="detection-summary-card">
+                        <h4 className="mb-4 text-center">🔍 All Defects Detection Results</h4>
+                        
+                        {/* Display any error messages for failed models */}
+                        {results.model_errors && Object.keys(results.model_errors).length > 0 && (
+                          <Alert variant="warning" className="mb-3 model-error-alert">
+                            <Alert.Heading as="h6">⚠️ Partial Detection Results</Alert.Heading>
+                            <p>Some detection models encountered errors:</p>
+                            <ul className="mb-0">
+                              {Object.entries(results.model_errors).map(([model, error]) => (
+                                <li key={model}><strong>{model}:</strong> {error}</li>
+                              ))}
+                            </ul>
+                          </Alert>
+                        )}
+                        
+                        {/* Potholes Section */}
+                        <div className="defect-section potholes">
+                          <h5 className="text-danger">
+                            <span className="emoji">🕳️</span>
+                            Potholes Detected: {results.potholes ? results.potholes.length : 0}
+                          </h5>
+                          {results.potholes && results.potholes.length > 0 ? (
+                            <div className="scrollable-table mb-3">
+                              <table className="table table-striped table-bordered">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>Area (cm²)</th>
+                                    <th>Depth (cm)</th>
+                                    <th>Volume</th>
+                                    <th>Volume Range</th>
+                                    <th>Coordinates</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {results.potholes.map((pothole) => (
+                                    <tr key={pothole.pothole_id}>
+                                      <td>{pothole.pothole_id}</td>
+                                      <td>{pothole.area_cm2.toFixed(2)}</td>
+                                      <td>{pothole.depth_cm.toFixed(2)}</td>
+                                      <td>{pothole.volume.toFixed(2)}</td>
+                                      <td>{pothole.volume_range}</td>
+                                      <td>{pothole.coordinates}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <div className="no-defects-message">No potholes detected in this image.</div>
+                          )}
+                        </div>
+
+                        {/* Cracks Section */}
+                        <div className="defect-section cracks">
+                          <h5 className="text-success">
+                            <span className="emoji">🪨</span>
+                            Alligator Cracks Detected: {results.cracks ? results.cracks.length : 0}
+                          </h5>
+                          {results.cracks && results.cracks.length > 0 ? (
+                            <>
+                              <div className="scrollable-table mb-3">
+                                <table className="table table-striped table-bordered">
+                                  <thead>
+                                    <tr>
+                                      <th>ID</th>
+                                      <th>Type</th>
+                                      <th>Area (cm²)</th>
+                                      <th>Area Range</th>
+                                      <th>Confidence</th>
+                                      <th>Coordinates</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {results.cracks.map((crack) => (
+                                      <tr key={crack.crack_id}>
+                                        <td>{crack.crack_id}</td>
+                                        <td>{crack.crack_type}</td>
+                                        <td>{crack.area_cm2.toFixed(2)}</td>
+                                        <td>{crack.area_range}</td>
+                                        <td>{(crack.confidence * 100).toFixed(1)}%</td>
+                                        <td>{crack.coordinates}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              
+                              {results.type_counts && (
+                                <div>
+                                  <h6>Crack Types Summary</h6>
+                                  <ul className="crack-types-list">
+                                    {Object.entries(results.type_counts).map(([type, count]) => (
+                                      count > 0 && (
+                                        <li key={type}>
+                                          <strong>{type}:</strong> {count}
+                                        </li>
+                                      )
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="no-defects-message">No cracks detected in this image.</div>
+                          )}
+                        </div>
+
+                        {/* Kerbs Section */}
+                        <div className="defect-section kerbs">
+                          <h5 className="text-primary">
+                            <span className="emoji">🚧</span>
+                            Kerbs Detected: {results.kerbs ? results.kerbs.length : 0}
+                          </h5>
+                          {results.kerbs && results.kerbs.length > 0 ? (
+                            <>
+                              <div className="scrollable-table mb-3">
+                                <table className="table table-striped table-bordered">
+                                  <thead>
+                                    <tr>
+                                      <th>ID</th>
+                                      <th>Type</th>
+                                      <th>Length (m)</th>
+                                      <th>Condition</th>
+                                      <th>Confidence</th>
+                                      <th>Coordinates</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {results.kerbs.map((kerb) => (
+                                      <tr key={kerb.kerb_id}>
+                                        <td>{kerb.kerb_id}</td>
+                                        <td>{kerb.kerb_type}</td>
+                                        <td>{kerb.length_m.toFixed(2)}</td>
+                                        <td>{kerb.condition}</td>
+                                        <td>{(kerb.confidence * 100).toFixed(1)}%</td>
+                                        <td>{kerb.coordinates}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              
+                              {results.condition_counts && (
+                                <div>
+                                  <h6>Kerb Condition Summary</h6>
+                                  <ul className="kerb-types-list">
+                                    {Object.entries(results.condition_counts).map(([condition, count]) => (
+                                      count > 0 && (
+                                        <li key={condition}>
+                                          <strong>{condition}:</strong> {count}
+                                        </li>
+                                      )
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="no-defects-message">No kerbs detected in this image.</div>
+                          )}
+                        </div>
+
+                        {/* Overall Summary */}
+                        <div className="summary-stats">
+                          <h6 className="mb-3">📊 Detection Summary</h6>
+                          <div className="row">
+                            <div className="col-md-4 stat-item">
+                              <div className="stat-value text-danger">{results.potholes ? results.potholes.length : 0}</div>
+                              <div className="stat-label">Potholes</div>
+                            </div>
+                            <div className="col-md-4 stat-item">
+                              <div className="stat-value text-success">{results.cracks ? results.cracks.length : 0}</div>
+                              <div className="stat-label">Cracks</div>
+                            </div>
+                            <div className="col-md-4 stat-item">
+                              <div className="stat-value text-primary">{results.kerbs ? results.kerbs.length : 0}</div>
+                              <div className="stat-label">Kerbs</div>
+                            </div>
+                          </div>
+                          <div className="text-center mt-3">
+                            <span className="total-defects-badge">
+                              Total Defects: {(results.potholes ? results.potholes.length : 0) + (results.cracks ? results.cracks.length : 0) + (results.kerbs ? results.kerbs.length : 0)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
                     {detectionType === 'potholes' && results.potholes && (
                       <div>
                         <h5>Detected Potholes: {results.potholes.length}</h5>

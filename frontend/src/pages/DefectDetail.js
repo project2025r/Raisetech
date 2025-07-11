@@ -312,9 +312,10 @@ function DefectDetail() {
                           <li>Compact thoroughly</li>
                         </ul>
                         <p><strong>Priority:</strong> {
-                          defectData.image.potholes && 
+                          defectData.image.potholes && defectData.image.potholes.length > 0 && 
                           defectData.image.potholes.some(p => p.area_cm2 > 1000) ? 
-                          'High' : defectData.image.potholes.some(p => p.area_cm2 > 500) ? 
+                          'High' : defectData.image.potholes && defectData.image.potholes.length > 0 && 
+                          defectData.image.potholes.some(p => p.area_cm2 > 500) ? 
                           'Medium' : 'Low'
                         }</p>
                       </div>
