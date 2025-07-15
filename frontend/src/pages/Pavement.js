@@ -4,6 +4,7 @@ import axios from 'axios';
 import Webcam from 'react-webcam';
 import './Pavement.css';
 import useResponsive from '../hooks/useResponsive';
+import VideoDefectDetection from '../components/VideoDefectDetection';
 
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
@@ -598,7 +599,7 @@ const Pavement = () => {
         onSelect={(k) => setActiveTab(k)}
         className="mb-4"
       >
-        <Tab eventKey="detection" title="Detection">
+        <Tab eventKey="detection" title="Image Detection">
           <Card className="mb-4">
             <Card.Body>
               <Form.Group className="mb-3">
@@ -1296,6 +1297,11 @@ const Pavement = () => {
             </div>
           )}
         </Tab>
+        
+        <Tab eventKey="video" title="Video Detection">
+          <VideoDefectDetection />
+        </Tab>
+        
         <Tab eventKey="information" title="Information">
           <Card>
             <Card.Body>

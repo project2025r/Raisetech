@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 import cv2
 import numpy as np
 import base64
@@ -6,12 +6,17 @@ import os
 import json
 import traceback
 from config.db import connect_to_db, get_gridfs
-from utils.models import load_yolo_models, load_midas, estimate_depth, calculate_real_depth, calculate_pothole_dimensions, calculate_area
+from utils.models import load_yolo_models, load_midas, estimate_depth, calculate_real_depth, calculate_pothole_dimensions, calculate_area, get_device
 from utils.exif_utils import get_gps_coordinates, format_coordinates
 import pandas as pd
 import io
 from bson import ObjectId
 import uuid
+import logging
+import time
+import torch
+from datetime import datetime
+from collections import defaultdict
 
 pavement_bp = Blueprint('pavement', __name__)
 
@@ -20,9 +25,180 @@ models = None
 midas = None
 midas_transform = None
 
+# Tracking helper functions
+def calculate_iou(box1, box2):
+    """Calculate Intersection over Union (IoU) of two bounding boxes"""
+    x1_min, y1_min, x1_max, y1_max = box1
+    x2_min, y2_min, x2_max, y2_max = box2
+    
+    # Calculate intersection area
+    intersection_x_min = max(x1_min, x2_min)
+    intersection_y_min = max(y1_min, y2_min)
+    intersection_x_max = min(x1_max, x2_max)
+    intersection_y_max = min(y1_max, y2_max)
+    
+    if intersection_x_max <= intersection_x_min or intersection_y_max <= intersection_y_min:
+        return 0.0
+    
+    intersection_area = (intersection_x_max - intersection_x_min) * (intersection_y_max - intersection_y_min)
+    
+    # Calculate union area
+    box1_area = (x1_max - x1_min) * (y1_max - y1_min)
+    box2_area = (x2_max - x2_min) * (y2_max - y2_min)
+    union_area = box1_area + box2_area - intersection_area
+    
+    return intersection_area / union_area if union_area > 0 else 0.0
+
+def calculate_box_center(box):
+    """Calculate center point of a bounding box"""
+    x1, y1, x2, y2 = box
+    return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+def calculate_distance(point1, point2):
+    """Calculate Euclidean distance between two points"""
+    return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+
+def match_detections_to_tracks(detections, tracks, iou_threshold=0.3, distance_threshold=100):
+    """Match new detections to existing tracks based on IoU and distance"""
+    matched_pairs = []
+    unmatched_detections = []
+    unmatched_tracks = list(tracks.keys())
+    
+    for detection in detections:
+        best_match_id = None
+        best_iou = 0.0
+        best_distance = float('inf')
+        
+        detection_center = calculate_box_center(detection['bbox'])
+        
+        for track_id in tracks:
+            if track_id not in unmatched_tracks:
+                continue
+                
+            track = tracks[track_id]
+            
+            # Only match same type of detections
+            if track['type'] != detection['type']:
+                continue
+            
+            # Calculate IoU
+            iou = calculate_iou(detection['bbox'], track['bbox'])
+            
+            # Calculate distance between centers
+            track_center = calculate_box_center(track['bbox'])
+            distance = calculate_distance(detection_center, track_center)
+            
+            # Consider it a match if IoU is above threshold OR distance is small
+            if iou > iou_threshold or distance < distance_threshold:
+                if iou > best_iou or (iou == best_iou and distance < best_distance):
+                    best_match_id = track_id
+                    best_iou = iou
+                    best_distance = distance
+        
+        if best_match_id:
+            matched_pairs.append((detection, best_match_id))
+            unmatched_tracks.remove(best_match_id)
+        else:
+            unmatched_detections.append(detection)
+    
+    return matched_pairs, unmatched_detections, unmatched_tracks
+
+class DefectTracker:
+    """Class to track defects across video frames"""
+    
+    def __init__(self, max_missing_frames=30, confidence_threshold=0.4):
+        self.tracks = {}
+        self.next_id = 1
+        self.max_missing_frames = max_missing_frames
+        self.confidence_threshold = confidence_threshold
+        self.unique_detections = []  # Store unique detections for final output
+    
+    def update(self, detections, frame_count):
+        """Update tracks with new detections"""
+        # Filter detections by confidence
+        filtered_detections = [d for d in detections if d['confidence'] >= self.confidence_threshold]
+        
+        # Match detections to existing tracks
+        matched_pairs, unmatched_detections, unmatched_tracks = match_detections_to_tracks(
+            filtered_detections, self.tracks
+        )
+        
+        # Update matched tracks
+        for detection, track_id in matched_pairs:
+            self.tracks[track_id].update({
+                'bbox': detection['bbox'],
+                'confidence': max(self.tracks[track_id]['confidence'], detection['confidence']),
+                'last_seen': frame_count,
+                'times_seen': self.tracks[track_id]['times_seen'] + 1
+            })
+        
+        # Create new tracks for unmatched detections
+        for detection in unmatched_detections:
+            track_id = self.next_id
+            self.next_id += 1
+            
+            self.tracks[track_id] = {
+                'type': detection['type'],
+                'bbox': detection['bbox'],
+                'confidence': detection['confidence'],
+                'first_seen': frame_count,
+                'last_seen': frame_count,
+                'times_seen': 1,
+                'track_id': track_id
+            }
+            
+            # Add to unique detections (only add once per track)
+            unique_detection = detection.copy()
+            unique_detection['track_id'] = track_id
+            unique_detection['first_detected_frame'] = frame_count
+            self.unique_detections.append(unique_detection)
+        
+        # Remove old tracks that haven't been seen for too long
+        tracks_to_remove = []
+        for track_id, track in self.tracks.items():
+            if frame_count - track['last_seen'] > self.max_missing_frames:
+                tracks_to_remove.append(track_id)
+        
+        for track_id in tracks_to_remove:
+            del self.tracks[track_id]
+        
+        # Return current frame detections (only for display)
+        current_frame_detections = []
+        for detection, track_id in matched_pairs:
+            current_detection = detection.copy()
+            current_detection['track_id'] = track_id
+            current_detection['is_tracked'] = True
+            current_frame_detections.append(current_detection)
+        
+        for detection in unmatched_detections:
+            current_detection = detection.copy()
+            current_detection['is_tracked'] = False
+            current_frame_detections.append(current_detection)
+        
+        return current_frame_detections
+    
+    def get_unique_detections(self):
+        """Get list of unique detections (one per track)"""
+        return self.unique_detections
+    
+    def get_active_tracks(self):
+        """Get currently active tracks"""
+        return self.tracks
+
+# Video processing global variables
+video_processing_stop_flag = False
+
+# Create processed_videos directory if it doesn't exist
+PROCESSED_VIDEOS_DIR = os.path.join(os.path.dirname(__file__), '..', 'processed_videos')
+os.makedirs(PROCESSED_VIDEOS_DIR, exist_ok=True)
+
+# Configure logging for video processing
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 def preload_models_on_startup():
     """Eagerly preload YOLO and MiDaS models when the Flask server starts"""
-    global models, midas, midas_transform
+    global models, midas, midast_transform
 
     print("Preloading pavement models on server startup...")
     
@@ -84,13 +260,431 @@ def encode_processed_image(image):
     return f"data:image/jpeg;base64,{encoded_image}"
 
 
+def process_video_frame_pavement(frame, frame_count, selected_model, models, midas, midas_transform, tracker=None):
+    """Process a single video frame for pavement defect detection with tracking and CUDA optimization"""
+    logger.debug(f"Processing pavement frame {frame_count}")
+    
+    start_time = time.time()
+    detection_frame = frame.copy()
+    original_frame = frame.copy()
+    all_detections = []
+    device = get_device()
+    
+    try:
+        # Determine which models to use based on selection
+        models_to_use = []
+        if selected_model == "All":
+            models_to_use = [("potholes", "Pothole"), ("cracks", "Crack"), ("kerbs", "Kerb")]
+        elif selected_model == "Potholes":
+            models_to_use = [("potholes", "Pothole")]
+        elif selected_model == "Alligator Cracks":
+            models_to_use = [("cracks", "Crack")]
+        elif selected_model == "Kerbs":
+            models_to_use = [("kerbs", "Kerb")]
+        else:
+            # Default to all models
+            models_to_use = [("potholes", "Pothole"), ("cracks", "Crack"), ("kerbs", "Kerb")]
+        
+        # Process each selected model
+        for model_key, display_name in models_to_use:
+            if model_key not in models:
+                logger.warning(f"Model {model_key} not available, skipping")
+                continue
+                
+            # Use a fresh copy of the original frame for each model
+            inference_frame = original_frame.copy()
+            
+            # CUDA optimization: Run inference with optimal settings
+            with torch.no_grad():  # Disable gradient computation for inference
+                # Clear GPU cache if using CUDA
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                
+                # Run detection with the model
+                results = models[model_key](inference_frame, conf=0.2, device=device)
+            
+            # Process results based on model type
+            if model_key == "potholes":
+                # Handle pothole detection (bounding boxes and segmentation masks)
+                for result in results:
+                    if result.boxes is not None:
+                        boxes = result.boxes.xyxy.cpu().numpy()
+                        confidences = result.boxes.conf.cpu().numpy()
+                        
+                        # Check if segmentation masks are available
+                        if result.masks is not None:
+                            # Process with segmentation masks
+                            masks = result.masks.data.cpu().numpy()
+                            
+                            for mask, box, conf in zip(masks, boxes, confidences):
+                                # Resize mask to frame dimensions
+                                binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                                binary_mask = cv2.resize(binary_mask, (detection_frame.shape[1], detection_frame.shape[0]))
+                                
+                                # Apply colored overlay only where mask exists (blue for potholes)
+                                mask_indices = binary_mask > 0
+                                detection_frame[mask_indices] = cv2.addWeighted(
+                                    detection_frame[mask_indices], 0.7, 
+                                    np.full_like(detection_frame[mask_indices], (255, 0, 0)), 0.3, 0
+                                )
+                                
+                                # Draw bounding box
+                                x1, y1, x2, y2 = map(int, box)
+                                cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                
+                                # Add detection to results
+                                all_detections.append({
+                                    'type': 'Pothole',
+                                    'bbox': [x1, y1, x2, y2],
+                                    'confidence': float(conf),
+                                    'frame': frame_count,
+                                    'timestamp': frame_count / 30.0,  # Assuming 30 FPS
+                                    'has_mask': True
+                                })
+                        else:
+                            # Process only bounding boxes (fallback)
+                            for box, conf in zip(boxes, confidences):
+                                x1, y1, x2, y2 = map(int, box)
+                                
+                                # Draw bounding box
+                                cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                
+                                # Add detection to results
+                                all_detections.append({
+                                    'type': 'Pothole',
+                                    'bbox': [x1, y1, x2, y2],
+                                    'confidence': float(conf),
+                                    'frame': frame_count,
+                                    'timestamp': frame_count / 30.0,  # Assuming 30 FPS
+                                    'has_mask': False
+                                })
+            
+            elif model_key == "cracks":
+                # Handle crack detection (segmentation masks)
+                CRACK_TYPES = {
+                    0: {"name": "Alligator Crack", "color": (0, 0, 255)},
+                    1: {"name": "Edge Crack", "color": (0, 255, 255)},
+                    2: {"name": "Hairline Cracks", "color": (255, 0, 0)},
+                    3: {"name": "Longitudinal Cracking", "color": (0, 255, 0)},
+                    4: {"name": "Transverse Cracking", "color": (128, 0, 128)}
+                }
+                
+                for result in results:
+                    if result.masks is not None:
+                        masks = result.masks.data.cpu().numpy()
+                        boxes = result.boxes.xyxy.cpu().numpy()
+                        classes = result.boxes.cls.cpu().numpy()
+                        confidences = result.boxes.conf.cpu().numpy()
+                        
+                        for mask, box, cls, conf in zip(masks, boxes, classes, confidences):
+                            # Resize mask to frame dimensions
+                            binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                            binary_mask = cv2.resize(binary_mask, (detection_frame.shape[1], detection_frame.shape[0]))
+                            
+                            # Get crack type
+                            crack_type = CRACK_TYPES.get(int(cls), {"name": "Unknown Crack", "color": (128, 128, 128)})
+                            
+                            # Create colored mask overlay
+                            colored_mask = np.zeros_like(detection_frame)
+                            colored_mask[binary_mask > 0] = crack_type["color"]
+                            
+                            # Apply mask with transparency
+                            detection_frame = cv2.addWeighted(detection_frame, 0.7, colored_mask, 0.3, 0)
+                            
+                            # Draw bounding box
+                            x1, y1, x2, y2 = map(int, box)
+                            cv2.rectangle(detection_frame, (x1, y1), (x2, y2), crack_type["color"], 2)
+                            cv2.putText(detection_frame, f"{crack_type['name']} {conf:.2f}", (x1, y1 - 10),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, crack_type["color"], 2)
+                            
+                            # Add detection to results
+                            all_detections.append({
+                                'type': crack_type['name'],
+                                'bbox': [x1, y1, x2, y2],
+                                'confidence': float(conf),
+                                'frame': frame_count,
+                                'timestamp': frame_count / 30.0,
+                                'has_mask': True
+                            })
+            
+            elif model_key == "kerbs":
+                # Handle kerb detection (bounding boxes)
+                kerb_types = {
+                    0: {"name": "Damaged Kerbs", "color": (0, 0, 255)},
+                    1: {"name": "Faded Kerbs", "color": (0, 165, 255)},
+                    2: {"name": "Normal Kerbs", "color": (0, 255, 0)}
+                }
+                
+                for result in results:
+                    if result.boxes is not None:
+                        boxes = result.boxes.xyxy.cpu().numpy()
+                        classes = result.boxes.cls.cpu().numpy()
+                        confidences = result.boxes.conf.cpu().numpy()
+                        
+                        for box, cls, conf in zip(boxes, classes, confidences):
+                            x1, y1, x2, y2 = map(int, box)
+                            
+                            # Get kerb type
+                            kerb_type = kerb_types.get(int(cls), {"name": "Unknown Kerb", "color": (128, 128, 128)})
+                            
+                            # Draw bounding box
+                            cv2.rectangle(detection_frame, (x1, y1), (x2, y2), kerb_type["color"], 2)
+                            cv2.putText(detection_frame, f"{kerb_type['name']} {conf:.2f}", (x1, y1 - 10),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, kerb_type["color"], 2)
+                            
+                            # Add detection to results
+                            all_detections.append({
+                                'type': kerb_type['name'],
+                                'bbox': [x1, y1, x2, y2],
+                                'confidence': float(conf),
+                                'frame': frame_count,
+                                'timestamp': frame_count / 30.0
+                            })
+        
+        # Apply tracking if tracker is provided
+        if tracker:
+            # Update tracker with current detections
+            tracked_detections = tracker.update(all_detections, frame_count)
+            
+            # Use tracked detections for display (includes track IDs)
+            display_detections = tracked_detections
+        else:
+            # No tracking - use raw detections
+            display_detections = all_detections
+        
+        # Log processing time and performance metrics
+        processing_time = time.time() - start_time
+        logger.debug(f"Frame {frame_count} processed in {processing_time:.3f} seconds")
+        
+        # Log GPU memory usage if CUDA is being used
+        if device.type == 'cuda':
+            gpu_memory_used = torch.cuda.memory_allocated() / 1024**2  # MB
+            logger.debug(f"GPU memory used: {gpu_memory_used:.1f} MB")
+        
+        return detection_frame, display_detections
+        
+    except Exception as e:
+        logger.error(f"Error processing frame {frame_count}: {str(e)}")
+        return frame, []
+
+
+def process_pavement_video(video_path, selected_model, coordinates):
+    """Process pavement video and yield frames with detection results using CUDA optimization"""
+    global video_processing_stop_flag
+    
+    try:
+        # Reset stop flag
+        video_processing_stop_flag = False
+        
+        # Get models and device info
+        models, midas, midas_transform = get_models()
+        device = get_device()
+        
+        if not models:
+            yield "data: " + json.dumps({"success": False, "message": "Failed to load models"}) + "\n\n"
+            return
+        
+        # Log device and model information
+        logger.info(f"Starting video processing on device: {device}")
+        if device.type == 'cuda':
+            logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+            logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            # Clear GPU cache before processing
+            torch.cuda.empty_cache()
+        
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            yield "data: " + json.dumps({"success": False, "message": "Could not open video file"}) + "\n\n"
+            return
+        
+        # Get video properties
+        frame_rate = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        logger.info(f"Video properties: {frame_width}x{frame_height}, {frame_rate} FPS, {total_frames} frames")
+        
+        # Set up output video writer
+        output_filename = f"processed_video_{uuid.uuid4().hex}.mp4"
+        output_path = os.path.join("processed_videos", output_filename)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, frame_rate, (frame_width, frame_height))
+        
+        # Initialize variables
+        frame_count = 0
+        all_detections = []
+        processing_times = []
+        
+        # Initialize tracking
+        tracker = DefectTracker(max_missing_frames=30, confidence_threshold=0.3)
+        
+        # Performance monitoring
+        start_time = time.time()
+        
+        while cap.isOpened() and not video_processing_stop_flag:
+            ret, frame = cap.read()
+            if not ret:
+                logger.info("End of video reached")
+                break
+            
+            frame_count += 1
+            frame_start_time = time.time()
+            
+            # Process frame with tracking
+            detection_frame, detections = process_video_frame_pavement(
+                frame, frame_count, selected_model, models, midas, midas_transform, tracker
+            )
+            
+            # Add detections to overall list (these include track IDs)
+            all_detections.extend(detections)
+            
+            # Write frame to output video
+            out.write(detection_frame)
+            
+            # Track processing time
+            frame_processing_time = time.time() - frame_start_time
+            processing_times.append(frame_processing_time)
+            
+            # Convert frame to base64 for streaming (compress for better performance)
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]  # Reduce quality for faster streaming
+            success, buffer = cv2.imencode('.jpg', detection_frame, encode_params)
+            if success:
+                frame_base64 = base64.b64encode(buffer).decode('utf-8')
+                
+                logger.debug(f"Streaming frame {frame_count}/{total_frames}, Progress: {(frame_count / total_frames) * 100:.1f}%")
+                
+                # Calculate performance metrics
+                avg_processing_time = np.mean(processing_times[-10:])  # Last 10 frames
+                estimated_remaining = avg_processing_time * (total_frames - frame_count)
+                
+                # Send frame data with performance metrics
+                frame_data = {
+                    "frame": frame_base64,
+                    "frame_count": frame_count,
+                    "total_frames": total_frames,
+                    "detections": detections,
+                    "progress": (frame_count / total_frames) * 100,
+                    "output_path": output_path,
+                    "performance": {
+                        "avg_frame_time": avg_processing_time,
+                        "estimated_remaining": estimated_remaining,
+                        "fps": 1.0 / avg_processing_time if avg_processing_time > 0 else 0,
+                        "device": str(device)
+                    }
+                }
+                
+                # Add GPU memory info if using CUDA
+                if device.type == 'cuda':
+                    frame_data["performance"]["gpu_memory_used"] = torch.cuda.memory_allocated() / 1024**2  # MB
+                    frame_data["performance"]["gpu_memory_reserved"] = torch.cuda.memory_reserved() / 1024**2  # MB
+                
+                yield f"data: {json.dumps(frame_data)}\n\n"
+            else:
+                logger.warning(f"Failed to encode frame {frame_count}")
+            
+            # Periodic GPU memory cleanup
+            if device.type == 'cuda' and frame_count % 50 == 0:
+                torch.cuda.empty_cache()
+        
+        # Handle early stop case
+        if video_processing_stop_flag:
+            logger.info("Video processing stopped by user")
+            unique_detections = tracker.get_unique_detections()
+            stop_data = {
+                "success": True,
+                "message": "Processing stopped by user",
+                "total_frames": frame_count,
+                "all_detections": unique_detections,
+                "frame_detections": all_detections,
+                "total_unique_detections": len(unique_detections),
+                "total_frame_detections": len(all_detections),
+                "stopped_early": True
+            }
+            yield f"data: {json.dumps(stop_data)}\n\n"
+        
+        # Release resources
+        cap.release()
+        out.release()
+        
+        # Get unique detections from tracker (removes duplicates)
+        unique_detections = tracker.get_unique_detections()
+        
+        # Calculate final performance metrics
+        total_processing_time = time.time() - start_time
+        avg_fps = frame_count / total_processing_time if total_processing_time > 0 else 0
+        
+        # Send final results with performance summary
+        final_data = {
+            "success": True,
+            "total_frames": frame_count,
+            "all_detections": unique_detections,
+            "frame_detections": all_detections,
+            "total_unique_detections": len(unique_detections),
+            "total_frame_detections": len(all_detections),
+            "output_path": output_path,
+            "stopped_early": video_processing_stop_flag,
+            "selected_model": selected_model,
+            "coordinates": coordinates,
+            "completed": True,
+            "performance_summary": {
+                "total_time": total_processing_time,
+                "avg_fps": avg_fps,
+                "avg_frame_time": np.mean(processing_times) if processing_times else 0,
+                "device": str(device)
+            }
+        }
+        
+        # Add final GPU memory info
+        if device.type == 'cuda':
+            final_data["performance_summary"]["final_gpu_memory"] = torch.cuda.memory_allocated() / 1024**2
+        
+        yield f"data: {json.dumps(final_data)}\n\n"
+        
+        # Send explicit end signal
+        yield f"data: {json.dumps({'end': True})}\n\n"
+        
+        logger.info(f"Video processing completed: {frame_count} frames in {total_processing_time:.2f}s (avg {avg_fps:.1f} FPS)")
+        
+    except Exception as e:
+        logger.error(f"Error during video processing: {str(e)}", exc_info=True)
+        yield f"data: {json.dumps({'success': False, 'message': str(e)})}\n\n"
+        # Send end signal even on error
+        yield f"data: {json.dumps({'end': True})}\n\n"
+    finally:
+        if 'cap' in locals():
+            cap.release()
+        if 'out' in locals():
+            out.release()
+        video_processing_stop_flag = False
+        
+        # Clean up GPU memory if using CUDA
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        
+        # Clean up temporary file
+        try:
+            if os.path.exists(video_path):
+                os.remove(video_path)
+                logger.info(f"Cleaned up temporary video file: {video_path}")
+        except Exception as e:
+            logger.warning(f"Could not remove temporary file {video_path}: {e}")
+
 @pavement_bp.route('/detect-potholes', methods=['POST'])
 def detect_potholes():
     """
-    API endpoint to detect potholes in an uploaded image
+    API endpoint to detect potholes in an uploaded image with CUDA optimization
     """
-    # Get models
+    # Get models and device info
     models, midas, midas_transform = get_models()
+    device = get_device()
     
     if not models or "potholes" not in models:
         return jsonify({
@@ -136,8 +730,11 @@ def detect_potholes():
         else:
             print("MiDaS model not available, skipping depth estimation")
         
-        # Detect potholes
-        results = models["potholes"](processed_image, conf=0.2)
+        # Detect potholes with CUDA optimization
+        with torch.no_grad():
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+            results = models["potholes"](processed_image, conf=0.2, device=device)
         
         # Process results
         pothole_results = []
@@ -156,66 +753,96 @@ def detect_potholes():
         )
         
         for result in results:
-            if result.masks is None:
-                continue
+            if result.boxes is not None:
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
                 
-            masks = result.masks.data.cpu().numpy()
-            boxes = result.boxes.xyxy.cpu().numpy()
-            
-            for mask, box in zip(masks, boxes):
-                # Process the segmentation mask
-                binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                binary_mask = cv2.resize(binary_mask, (processed_image.shape[1], processed_image.shape[0]))
-                
-                # Create colored overlay
-                colored_mask = np.zeros_like(processed_image)
-                colored_mask[:, :, 2] = binary_mask  # Red channel
-                
-                # Blend the original image with the mask
-                processed_image = cv2.addWeighted(processed_image, 1.0, colored_mask, 0.4, 0)
-                
-                # Calculate dimensions
-                dimensions = calculate_pothole_dimensions(binary_mask)
-                
-                # Calculate depth metrics if depth map is available
-                depth_metrics = None
-                if depth_map is not None:
-                    depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                # Check if segmentation masks are available
+                if result.masks is not None:
+                    # Process with segmentation masks
+                    masks = result.masks.data.cpu().numpy()
+                    
+                    for mask, box, conf in zip(masks, boxes, confidences):
+                        # Process the segmentation mask
+                        binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                        binary_mask = cv2.resize(binary_mask, (processed_image.shape[1], processed_image.shape[0]))
+                        
+                        # Apply colored overlay only where mask exists (blue for potholes)
+                        mask_indices = binary_mask > 0
+                        processed_image[mask_indices] = cv2.addWeighted(
+                            processed_image[mask_indices], 0.7, 
+                            np.full_like(processed_image[mask_indices], (255, 0, 0)), 0.3, 0
+                        )
+                        
+                        # Calculate dimensions
+                        dimensions = calculate_pothole_dimensions(binary_mask)
+                        
+                        # Calculate depth metrics if depth map is available
+                        depth_metrics = None
+                        if depth_map is not None:
+                            depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                        else:
+                            # Provide default depth values when MiDaS is not available
+                            depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
+                        
+                        if dimensions and depth_metrics:
+                            # Get detection box coordinates
+                            x1, y1, x2, y2 = map(int, box[:4])
+                            volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
+                            
+                            # Determine volume range
+                            if volume < 1000:
+                                volume_range = "Small (<1k)"
+                            elif volume < 10000:
+                                volume_range = "Medium (1k - 10k)"
+                            else:
+                                volume_range = "Big (>10k)"
+                            
+                            # Draw bounding box and label
+                            cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            text = f"ID {pothole_id}, A:{dimensions['area_cm2']}cm², D:{depth_metrics['max_depth_cm']}cm, V:{volume}, C:{conf:.2f}"
+                            cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            
+                            # Collect pothole data for later batch insertion
+                            pothole_info = {
+                                "pothole_id": pothole_id,
+                                "area_cm2": float(dimensions["area_cm2"]),
+                                "depth_cm": float(depth_metrics["max_depth_cm"]),
+                                "volume": float(volume),
+                                "volume_range": volume_range,
+                                "confidence": float(conf),
+                                "coordinates": coordinates,
+                                "username": username,
+                                "role": role,
+                                "has_mask": True
+                            }
+                            pothole_results.append(pothole_info)
+                            pothole_id += 1
                 else:
-                    # Provide default depth values when MiDaS is not available
-                    depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
-                
-                if dimensions and depth_metrics:
-                    # Get detection box coordinates
-                    x1, y1, x2, y2 = map(int, box[:4])
-                    volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
-                    
-                    # Determine volume range
-                    if volume < 1000:
-                        volume_range = "Small (<1k)"
-                    elif volume < 10000:
-                        volume_range = "Medium (1k - 10k)"
-                    else:
-                        volume_range = "Big (>10k)"
-                    
-                    # Draw bounding box and label
-                    cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    text = f"ID {pothole_id}, A:{dimensions['area_cm2']}cm², D:{depth_metrics['max_depth_cm']}cm, V:{volume}"
-                    cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                    
-                    # Collect pothole data for later batch insertion
-                    pothole_info = {
-                        "pothole_id": pothole_id,
-                        "area_cm2": float(dimensions["area_cm2"]),
-                        "depth_cm": float(depth_metrics["max_depth_cm"]),
-                        "volume": float(volume),
-                        "volume_range": volume_range,
-                        "coordinates": coordinates,
-                        "username": username,
-                        "role": role
-                    }
-                    pothole_results.append(pothole_info)
-                    pothole_id += 1
+                    # Process only bounding boxes (fallback)
+                    for box, conf in zip(boxes, confidences):
+                        x1, y1, x2, y2 = map(int, box[:4])
+                        
+                        # Draw bounding box only
+                        cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        text = f"ID {pothole_id}, Pothole, C:{conf:.2f}"
+                        cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        
+                        # Collect pothole data (without detailed measurements)
+                        pothole_info = {
+                            "pothole_id": pothole_id,
+                            "area_cm2": 0.0,  # Not available without mask
+                            "depth_cm": 0.0,  # Not available without mask
+                            "volume": 0.0,    # Not available without mask
+                            "volume_range": "Unknown",
+                            "confidence": float(conf),
+                            "coordinates": coordinates,
+                            "username": username,
+                            "role": role,
+                            "has_mask": False
+                        }
+                        pothole_results.append(pothole_info)
+                        pothole_id += 1
         
         # Store processed image with all potholes marked
         _, processed_buffer = cv2.imencode('.jpg', processed_image)
@@ -264,9 +891,10 @@ def detect_potholes():
 @pavement_bp.route('/detect-cracks', methods=['POST'])
 def detect_cracks():
     """
-    API endpoint to detect cracks in an uploaded image using segmentation masks
+    API endpoint to detect cracks in an uploaded image using segmentation masks with CUDA optimization
     """
     models, _, _ = get_models()
+    device = get_device()
 
     if not models or "cracks" not in models:
         return jsonify({
@@ -298,7 +926,11 @@ def detect_cracks():
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         processed_image = image.copy()
 
-        results = models["cracks"](processed_image, conf=0.2)
+        # Run crack detection with CUDA optimization
+        with torch.no_grad():
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+            results = models["cracks"](processed_image, conf=0.2, device=device)
 
         CRACK_TYPES = {
             0: {"name": "Alligator Crack", "color": (0, 0, 255)},
@@ -457,10 +1089,11 @@ def detect_cracks():
 @pavement_bp.route('/detect-kerbs', methods=['POST'])
 def detect_kerbs():
     """
-    API endpoint to detect kerbs and assess their condition in an uploaded image
+    API endpoint to detect kerbs and assess their condition in an uploaded image with CUDA optimization
     """
-    # Get models
+    # Get models and device info
     models, _, _ = get_models()
+    device = get_device()
     
     if not models or "kerbs" not in models:
         return jsonify({
@@ -499,8 +1132,11 @@ def detect_kerbs():
         # Process the image
         processed_image = image.copy()
         
-        # Detect kerbs using YOLOv8 model
-        results = models["kerbs"](processed_image, conf=0.5)
+        # Detect kerbs using YOLOv8 model with CUDA optimization
+        with torch.no_grad():
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+            results = models["kerbs"](processed_image, conf=0.5, device=device)
         
         # Process results
         kerb_results = []
@@ -1340,7 +1976,7 @@ def get_image_details(image_id):
 @pavement_bp.route('/detect-all', methods=['POST'])
 def detect_all():
     """
-    API endpoint to detect all types of defects (potholes, cracks, kerbs) in an uploaded image
+    API endpoint to detect all types of defects (potholes, cracks, kerbs) in an uploaded image with CUDA optimization
     
     CRITICAL FIX: Model Isolation Implementation
     ===========================================
@@ -1361,8 +1997,9 @@ def detect_all():
     This ensures that the "All" option produces identical detection results as if 
     each model was run individually on the same clean image.
     """
-    # Get models
+    # Get models and device info
     models, midas, midas_transform = get_models()
+    device = get_device()
     
     if not models or any(model_type not in models for model_type in ["potholes", "cracks", "kerbs"]):
         return jsonify({
@@ -1455,86 +2092,148 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Pothole model receiving image with hash: {pothole_hash}")
             print(f"MODEL ISOLATION DEBUG: Pothole image matches original: {pothole_hash == original_hash}")
             
-            pothole_results = models["potholes"](pothole_inference_image, conf=0.2)
+            # Run pothole detection with CUDA optimization
+            with torch.no_grad():
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device=device)
             pothole_id = 1
             
             for result in pothole_results:
-                if result.masks is None:
-                    continue
+                if result.boxes is not None:
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    confidences = result.boxes.conf.cpu().numpy()
                     
-                masks = result.masks.data.cpu().numpy()
-                boxes = result.boxes.xyxy.cpu().numpy()
-                
-                for mask, box in zip(masks, boxes):
-                    # Process the segmentation mask
-                    binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                    binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
-                    
-                    # Create colored overlay for potholes (red) - apply to display image only
-                    colored_mask = np.zeros_like(display_image)
-                    colored_mask[:, :, 2] = binary_mask  # Red channel
-                    
-                    # Blend the display image with the mask (not the inference image)
-                    display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
-                    
-                    # Calculate dimensions
-                    dimensions = calculate_pothole_dimensions(binary_mask)
-                    
-                    # Calculate depth metrics if depth map is available
-                    depth_metrics = None
-                    if depth_map is not None:
-                        depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                    # Check if segmentation masks are available
+                    if result.masks is not None:
+                        # Process with segmentation masks
+                        masks = result.masks.data.cpu().numpy()
+                        
+                        for mask, box, conf in zip(masks, boxes, confidences):
+                            # Process the segmentation mask
+                            binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                            binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
+                            
+                            # Apply colored overlay only where mask exists (blue for potholes)
+                            mask_indices = binary_mask > 0
+                            display_image[mask_indices] = cv2.addWeighted(
+                                display_image[mask_indices], 0.7, 
+                                np.full_like(display_image[mask_indices], (255, 0, 0)), 0.3, 0
+                            )
+                            
+                            # Calculate dimensions
+                            dimensions = calculate_pothole_dimensions(binary_mask)
+                            
+                            # Calculate depth metrics if depth map is available
+                            depth_metrics = None
+                            if depth_map is not None:
+                                depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                            else:
+                                # Provide default depth values when MiDaS is not available
+                                depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
+                            
+                            if dimensions and depth_metrics:
+                                # Get detection box coordinates
+                                x1, y1, x2, y2 = map(int, box[:4])
+                                volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
+                                
+                                # Determine volume range
+                                if volume < 1000:
+                                    volume_range = "Small (<1k)"
+                                elif volume < 10000:
+                                    volume_range = "Medium (1k - 10k)"
+                                else:
+                                    volume_range = "Big (>10k)"
+                                
+                                # Draw bounding box on display image
+                                cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                
+                                # Store pothole data in database
+                                pothole_data = {
+                                    "pothole_id": pothole_id,
+                                    "area_cm2": dimensions["area_cm2"],
+                                    "depth_cm": depth_metrics["max_depth_cm"],
+                                    "volume": volume,
+                                    "volume_range": volume_range,
+                                    "confidence": float(conf),
+                                    "coordinates": coordinates,
+                                    "timestamp": timestamp,
+                                    "bbox": [x1, y1, x2, y2],
+                                    "username": username,
+                                    "role": role,
+                                    "original_image_id": str(original_image_id),
+                                    "image_upload_id": image_upload_id,
+                                    "has_mask": True
+                                }
+                                
+                                # Create a copy for JSON response (without ObjectId references)
+                                pothole_data_for_response = {
+                                    "pothole_id": pothole_id,
+                                    "area_cm2": dimensions["area_cm2"],
+                                    "depth_cm": depth_metrics["max_depth_cm"],
+                                    "volume": volume,
+                                    "volume_range": volume_range,
+                                    "confidence": float(conf),
+                                    "coordinates": coordinates,
+                                    "bbox": [x1, y1, x2, y2],
+                                    "has_mask": True
+                                }
+                                
+                                # Insert into database
+                                db = connect_to_db()
+                                if db is not None:
+                                    db.potholes.insert_one(pothole_data)
+                                
+                                all_results["potholes"].append(pothole_data_for_response)
+                                pothole_id += 1
                     else:
-                        # Provide default depth values when MiDaS is not available
-                        depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
-                    
-                    if dimensions and depth_metrics:
-                        # Get detection box coordinates
-                        x1, y1, x2, y2 = map(int, box[:4])
-                        volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
-                        
-                        # Determine volume range
-                        if volume < 1000:
-                            volume_range = "Small (<1k)"
-                        elif volume < 10000:
-                            volume_range = "Medium (1k - 10k)"
-                        else:
-                            volume_range = "Big (>10k)"
-                        
-                        # Store pothole data in database
-                        pothole_data = {
-                            "pothole_id": pothole_id,
-                            "area_cm2": dimensions["area_cm2"],
-                            "depth_cm": depth_metrics["max_depth_cm"],
-                            "volume": volume,
-                            "volume_range": volume_range,
-                            "coordinates": coordinates,
-                            "timestamp": timestamp,
-                            "bbox": [x1, y1, x2, y2],
-                            "username": username,
-                            "role": role,
-                            "original_image_id": str(original_image_id),
-                            "image_upload_id": image_upload_id
-                        }
-                        
-                        # Create a copy for JSON response (without ObjectId references)
-                        pothole_data_for_response = {
-                            "pothole_id": pothole_id,
-                            "area_cm2": dimensions["area_cm2"],
-                            "depth_cm": depth_metrics["max_depth_cm"],
-                            "volume": volume,
-                            "volume_range": volume_range,
-                            "coordinates": coordinates,
-                            "bbox": [x1, y1, x2, y2]
-                        }
-                        
-                        # Insert into database
-                        db = connect_to_db()
-                        if db is not None:
-                            db.potholes.insert_one(pothole_data)
-                        
-                        all_results["potholes"].append(pothole_data_for_response)
-                        pothole_id += 1
+                        # Process only bounding boxes (fallback)
+                        for box, conf in zip(boxes, confidences):
+                            x1, y1, x2, y2 = map(int, box[:4])
+                            
+                            # Draw bounding box on display image
+                            cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(display_image, f"Pothole {conf:.2f}", (x1, y1 - 10),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            
+                            # Store pothole data in database (without detailed measurements)
+                            pothole_data = {
+                                "pothole_id": pothole_id,
+                                "area_cm2": 0.0,  # Not available without mask
+                                "depth_cm": 0.0,  # Not available without mask
+                                "volume": 0.0,    # Not available without mask
+                                "volume_range": "Unknown",
+                                "confidence": float(conf),
+                                "coordinates": coordinates,
+                                "timestamp": timestamp,
+                                "bbox": [x1, y1, x2, y2],
+                                "username": username,
+                                "role": role,
+                                "original_image_id": str(original_image_id),
+                                "image_upload_id": image_upload_id,
+                                "has_mask": False
+                            }
+                            
+                            # Create a copy for JSON response (without ObjectId references)
+                            pothole_data_for_response = {
+                                "pothole_id": pothole_id,
+                                "area_cm2": 0.0,
+                                "depth_cm": 0.0,
+                                "volume": 0.0,
+                                "volume_range": "Unknown",
+                                "confidence": float(conf),
+                                "coordinates": coordinates,
+                                "bbox": [x1, y1, x2, y2],
+                                "has_mask": False
+                            }
+                            
+                            # Insert into database
+                            db = connect_to_db()
+                            if db is not None:
+                                db.potholes.insert_one(pothole_data)
+                            
+                            all_results["potholes"].append(pothole_data_for_response)
+                            pothole_id += 1
             
             successful_models.append("potholes")
             
@@ -1550,7 +2249,11 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Crack model receiving image with hash: {crack_hash}")
             print(f"MODEL ISOLATION DEBUG: Crack image matches original: {crack_hash == original_hash}")
             
-            crack_results = models["cracks"](crack_inference_image, conf=0.2)
+            # Run crack detection with CUDA optimization
+            with torch.no_grad():
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                crack_results = models["cracks"](crack_inference_image, conf=0.2, device=device)
             crack_id = 1
             
             # Define crack types mapping (same as original code)
@@ -1656,7 +2359,11 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Kerb model receiving image with hash: {kerb_hash}")
             print(f"MODEL ISOLATION DEBUG: Kerb image matches original: {kerb_hash == original_hash}")
             
-            kerb_results = models["kerbs"](kerb_inference_image, conf=0.5)
+            # Run kerb detection with CUDA optimization
+            with torch.no_grad():
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device=device)
             kerb_id = 1
             
             # Define kerb types mapping (same as original code)
@@ -1924,3 +2631,73 @@ def detect_all():
             "success": False,
             "message": f"Error during detection: {str(e)}"
         }), 500 
+
+
+@pavement_bp.route('/detect-video', methods=['POST'])
+def detect_video():
+    """
+    API endpoint to detect pavement defects in uploaded video and return SSE stream
+    """
+    logger.info("Received video detection request")
+    
+    # Get parameters from request
+    coordinates = request.form.get('coordinates', 'Not Available')
+    selected_model = request.form.get('selectedModel', 'All')
+    
+    logger.info(f"Processing video with model: {selected_model}")
+    logger.info(f"Coordinates: {coordinates}")
+    
+    try:
+        # Check if we have video data
+        if 'video' not in request.files or not request.files['video']:
+            return jsonify({
+                "success": False,
+                "message": "No video file provided"
+            }), 400
+        
+        video_file = request.files['video']
+        logger.info(f"Processing video file: {video_file.filename}")
+        
+        # Save video temporarily
+        temp_video_path = os.path.join(os.path.dirname(__file__), f"temp_pavement_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+        logger.info(f"Saving video to temporary path: {temp_video_path}")
+        video_file.save(temp_video_path)
+        
+        # Return SSE stream directly
+        return Response(
+            stream_with_context(process_pavement_video(temp_video_path, selected_model, coordinates)),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Cache-Control'
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error during video processing setup: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@pavement_bp.route('/stop-video-processing', methods=['POST'])
+def stop_video_processing():
+    """
+    API endpoint to stop video processing
+    """
+    global video_processing_stop_flag
+    
+    try:
+        logger.info("Received request to stop video processing")
+        
+        # Set stop flag
+        video_processing_stop_flag = True
+        
+        return jsonify({
+            "success": True,
+            "message": "Video processing stop signal sent"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping video processing: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
