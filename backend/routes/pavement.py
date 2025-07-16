@@ -294,14 +294,26 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
             # Use a fresh copy of the original frame for each model
             inference_frame = original_frame.copy()
             
-            # CUDA optimization: Run inference with optimal settings
+            # CUDA optimization: Run inference with optimal settings and proper dtype handling
             with torch.no_grad():  # Disable gradient computation for inference
                 # Clear GPU cache if using CUDA
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
                 
-                # Run detection with the model
-                results = models[model_key](inference_frame, conf=0.2, device=device)
+                # Ensure image is in the correct format for the model
+                if inference_frame.shape[2] == 3:
+                    inference_frame = cv2.cvtColor(inference_frame, cv2.COLOR_BGR2RGB)
+                
+                # Run detection with the model with proper error handling
+                try:
+                    results = models[model_key](inference_frame, conf=0.2, device=device)
+                except RuntimeError as e:
+                    if "dtype" in str(e):
+                        print(f"⚠️ Video processing dtype error for {model_key}: {e}")
+                        print(f"🔄 Attempting video inference with CPU fallback for {model_key}...")
+                        results = models[model_key](inference_frame, conf=0.2, device='cpu')
+                    else:
+                        raise e
             
             # Process results based on model type
             if model_key == "potholes":
@@ -730,11 +742,30 @@ def detect_potholes():
         else:
             print("MiDaS model not available, skipping depth estimation")
         
-        # Detect potholes with CUDA optimization
+        # Detect potholes with CUDA optimization and proper dtype handling
         with torch.no_grad():
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
-            results = models["potholes"](processed_image, conf=0.2, device=device)
+            
+            # Ensure image is in the correct format for the model
+            # Convert to RGB if needed (OpenCV uses BGR by default)
+            if processed_image.shape[2] == 3:
+                # Check if image needs RGB conversion
+                inference_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+            else:
+                inference_image = processed_image
+            
+            # Run inference with proper error handling
+            try:
+                results = models["potholes"](inference_image, conf=0.2, device=device)
+            except RuntimeError as e:
+                if "dtype" in str(e):
+                    print(f"⚠️ Dtype error detected: {e}")
+                    print("🔄 Attempting inference with CPU fallback...")
+                    # Force CPU inference as fallback
+                    results = models["potholes"](inference_image, conf=0.2, device='cpu')
+                else:
+                    raise e
         
         # Process results
         pothole_results = []
@@ -926,11 +957,27 @@ def detect_cracks():
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         processed_image = image.copy()
 
-        # Run crack detection with CUDA optimization
+        # Run crack detection with CUDA optimization and proper dtype handling
         with torch.no_grad():
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
-            results = models["cracks"](processed_image, conf=0.2, device=device)
+            
+            # Ensure image is in the correct format for the model
+            if processed_image.shape[2] == 3:
+                inference_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+            else:
+                inference_image = processed_image
+            
+            # Run inference with proper error handling
+            try:
+                results = models["cracks"](inference_image, conf=0.2, device=device)
+            except RuntimeError as e:
+                if "dtype" in str(e):
+                    print(f"⚠️ Crack model dtype error: {e}")
+                    print("🔄 Attempting crack inference with CPU fallback...")
+                    results = models["cracks"](inference_image, conf=0.2, device='cpu')
+                else:
+                    raise e
 
         CRACK_TYPES = {
             0: {"name": "Alligator Crack", "color": (0, 0, 255)},
@@ -1132,11 +1179,27 @@ def detect_kerbs():
         # Process the image
         processed_image = image.copy()
         
-        # Detect kerbs using YOLOv8 model with CUDA optimization
+        # Detect kerbs using YOLOv8 model with CUDA optimization and proper dtype handling
         with torch.no_grad():
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
-            results = models["kerbs"](processed_image, conf=0.5, device=device)
+            
+            # Ensure image is in the correct format for the model
+            if processed_image.shape[2] == 3:
+                inference_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+            else:
+                inference_image = processed_image
+            
+            # Run inference with proper error handling
+            try:
+                results = models["kerbs"](inference_image, conf=0.5, device=device)
+            except RuntimeError as e:
+                if "dtype" in str(e):
+                    print(f"⚠️ Kerb model dtype error: {e}")
+                    print("🔄 Attempting kerb inference with CPU fallback...")
+                    results = models["kerbs"](inference_image, conf=0.5, device='cpu')
+                else:
+                    raise e
         
         # Process results
         kerb_results = []
@@ -2092,11 +2155,25 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Pothole model receiving image with hash: {pothole_hash}")
             print(f"MODEL ISOLATION DEBUG: Pothole image matches original: {pothole_hash == original_hash}")
             
-            # Run pothole detection with CUDA optimization
+            # Run pothole detection with CUDA optimization and proper dtype handling
             with torch.no_grad():
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
-                pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device=device)
+                
+                # Ensure image is in the correct format for the model
+                if pothole_inference_image.shape[2] == 3:
+                    pothole_inference_image = cv2.cvtColor(pothole_inference_image, cv2.COLOR_BGR2RGB)
+                
+                # Run inference with proper error handling
+                try:
+                    pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device=device)
+                except RuntimeError as e:
+                    if "dtype" in str(e):
+                        print(f"⚠️ Pothole model dtype error: {e}")
+                        print("🔄 Attempting pothole inference with CPU fallback...")
+                        pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device='cpu')
+                    else:
+                        raise e
             pothole_id = 1
             
             for result in pothole_results:
@@ -2249,11 +2326,25 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Crack model receiving image with hash: {crack_hash}")
             print(f"MODEL ISOLATION DEBUG: Crack image matches original: {crack_hash == original_hash}")
             
-            # Run crack detection with CUDA optimization
+            # Run crack detection with CUDA optimization and proper dtype handling
             with torch.no_grad():
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
-                crack_results = models["cracks"](crack_inference_image, conf=0.2, device=device)
+                
+                # Ensure image is in the correct format for the model
+                if crack_inference_image.shape[2] == 3:
+                    crack_inference_image = cv2.cvtColor(crack_inference_image, cv2.COLOR_BGR2RGB)
+                
+                # Run inference with proper error handling
+                try:
+                    crack_results = models["cracks"](crack_inference_image, conf=0.2, device=device)
+                except RuntimeError as e:
+                    if "dtype" in str(e):
+                        print(f"⚠️ Crack model dtype error: {e}")
+                        print("🔄 Attempting crack inference with CPU fallback...")
+                        crack_results = models["cracks"](crack_inference_image, conf=0.2, device='cpu')
+                    else:
+                        raise e
             crack_id = 1
             
             # Define crack types mapping (same as original code)
@@ -2359,11 +2450,25 @@ def detect_all():
             print(f"MODEL ISOLATION DEBUG: Kerb model receiving image with hash: {kerb_hash}")
             print(f"MODEL ISOLATION DEBUG: Kerb image matches original: {kerb_hash == original_hash}")
             
-            # Run kerb detection with CUDA optimization
+            # Run kerb detection with CUDA optimization and proper dtype handling
             with torch.no_grad():
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
-                kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device=device)
+                
+                # Ensure image is in the correct format for the model
+                if kerb_inference_image.shape[2] == 3:
+                    kerb_inference_image = cv2.cvtColor(kerb_inference_image, cv2.COLOR_BGR2RGB)
+                
+                # Run inference with proper error handling
+                try:
+                    kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device=device)
+                except RuntimeError as e:
+                    if "dtype" in str(e):
+                        print(f"⚠️ Kerb model dtype error: {e}")
+                        print("🔄 Attempting kerb inference with CPU fallback...")
+                        kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device='cpu')
+                    else:
+                        raise e
             kerb_id = 1
             
             # Define kerb types mapping (same as original code)

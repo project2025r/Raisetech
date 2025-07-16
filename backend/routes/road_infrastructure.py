@@ -132,8 +132,22 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
     continuous_frame_flags = {cls: False for cls in continuous_classes}
     all_detections = []
     
-    # Run detection
-    results = models["road_infra"](frame, conf=0.3)
+    # Run detection with proper dtype handling
+    # Ensure image is in the correct format for the model
+    if frame.shape[2] == 3:
+        inference_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    else:
+        inference_frame = frame
+    
+    try:
+        results = models["road_infra"](inference_frame, conf=0.3)
+    except RuntimeError as e:
+        if "dtype" in str(e):
+            print(f"⚠️ Road infrastructure model dtype error: {e}")
+            print("🔄 Attempting road infrastructure inference with CPU fallback...")
+            results = models["road_infra"](inference_frame, conf=0.3, device='cpu')
+        else:
+            raise e
     
     # Log inference time
     inference_time = time.time() - start_time
@@ -352,8 +366,22 @@ def process_video(video_path, coordinates, selected_classes):
             current_frame_detections = []
             continuous_frame_flags = {cls: False for cls in continuous_classes}
 
-            # Run detection
-            results = models["road_infra"](frame, conf=0.3)
+            # Run detection with proper dtype handling
+            # Ensure image is in the correct format for the model
+            if frame.shape[2] == 3:
+                inference_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                inference_frame = frame
+            
+            try:
+                results = models["road_infra"](inference_frame, conf=0.3)
+            except RuntimeError as e:
+                if "dtype" in str(e):
+                    print(f"⚠️ Road infrastructure model dtype error: {e}")
+                    print("🔄 Attempting road infrastructure inference with CPU fallback...")
+                    results = models["road_infra"](inference_frame, conf=0.3, device='cpu')
+                else:
+                    raise e
             
             # Process detections
             for result in results:

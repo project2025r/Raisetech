@@ -34,7 +34,7 @@ MODEL_PATHS = {
 
 def load_yolo_models():
     """
-    Load all YOLO models using ultralytics with CUDA optimization
+    Load all YOLO models using ultralytics with proper device and dtype handling
     """
     models = {}
     device = get_device()
@@ -44,25 +44,53 @@ def load_yolo_models():
         print(f"Looking for model at path: {model_path}")
         if os.path.exists(model_path):
             try:
+                # Load model with explicit device specification
                 model = YOLO(model_path)
                 
-                # Move model to GPU/CPU
+                # Move model to device early in the process
                 model.to(device)
                 
                 # Set model to evaluation mode for inference
-                model.model.eval()
+                try:
+                    model.model.eval()
+                except AttributeError:
+                    # Handle case where model.model might not exist
+                    if hasattr(model, 'eval'):
+                        model.eval()
                 
-                # Enable CUDA optimizations if available
+                # Apply device-specific optimizations
                 if device.type == 'cuda':
-                    # Enable mixed precision for faster inference
-                    model.model.half()  # Convert to FP16 for faster inference
-                    
-                    # Warm up the model with a dummy input
-                    dummy_input = torch.randn(1, 3, 640, 640).to(device).half()
-                    with torch.no_grad():
-                        _ = model.model(dummy_input)
-                    
-                    print(f"🚀 Model {model_name} optimized for CUDA with FP16")
+                    try:
+                        # Clear cache before optimization
+                        torch.cuda.empty_cache()
+                        
+                        # Convert model to half precision for CUDA
+                        model.model.half()
+                        
+                        # Warm up the model with a dummy input to ensure everything works
+                        dummy_input = torch.randn(1, 3, 640, 640, device=device, dtype=torch.half)
+                        with torch.no_grad():
+                            _ = model.model(dummy_input)
+                        
+                        print(f"🚀 Model {model_name} optimized for CUDA with FP16")
+                        
+                    except Exception as e:
+                        print(f"⚠️ CUDA optimization failed for {model_name}: {e}")
+                        print(f"🔄 Falling back to FP32 for {model_name}")
+                        
+                        # Fallback to FP32 on CUDA
+                        model.model.float()
+                        
+                        # Test with FP32 dummy input
+                        dummy_input = torch.randn(1, 3, 640, 640, device=device, dtype=torch.float32)
+                        with torch.no_grad():
+                            _ = model.model(dummy_input)
+                        
+                        print(f"✅ Model {model_name} loaded on CUDA with FP32")
+                else:
+                    # CPU optimization
+                    model.model.float()  # Ensure FP32 for CPU
+                    print(f"✅ Model {model_name} loaded on CPU with FP32")
                 
                 models[model_name] = model
                 models[f"{model_name}_classes"] = list(model.names.values())
@@ -70,12 +98,21 @@ def load_yolo_models():
                 
             except Exception as e:
                 print(f"❌ Error loading model {model_name}: {e}")
-                # Fallback to CPU if CUDA fails
+                
+                # Complete fallback to CPU if CUDA fails
                 if device.type == 'cuda':
                     try:
                         print(f"🔄 Retrying {model_name} on CPU...")
                         model = YOLO(model_path)
                         model.to(torch.device("cpu"))
+                        model.model.float()  # Ensure FP32 for CPU
+                        model.model.eval()
+                        
+                        # Test CPU inference
+                        dummy_input = torch.randn(1, 3, 640, 640, device=torch.device("cpu"), dtype=torch.float32)
+                        with torch.no_grad():
+                            _ = model.model(dummy_input)
+                        
                         models[model_name] = model
                         models[f"{model_name}_classes"] = list(model.names.values())
                         print(f"✅ Loaded model: {model_name} on CPU (fallback)")
@@ -88,7 +125,7 @@ def load_yolo_models():
 
 def load_midas():
     """
-    Load the MiDaS depth estimation model with CUDA support
+    Load the MiDaS depth estimation model with proper device and dtype handling
     """
     try:
         print("Loading MiDaS model...")
@@ -98,10 +135,21 @@ def load_midas():
         midas.to(device)
         midas.eval()
         
-        # Enable CUDA optimizations if available
+        # Apply device-specific optimizations
         if device.type == 'cuda':
-            midas.half()  # Convert to FP16 for faster inference
-            print("🚀 MiDaS model optimized for CUDA with FP16")
+            try:
+                # Clear cache before optimization
+                torch.cuda.empty_cache()
+                midas.half()  # Convert to FP16 for faster inference
+                print("🚀 MiDaS model optimized for CUDA with FP16")
+            except Exception as e:
+                print(f"⚠️ MiDaS CUDA optimization failed: {e}")
+                print("🔄 Falling back to FP32 for MiDaS")
+                midas.float()
+                print("✅ MiDaS model loaded on CUDA with FP32")
+        else:
+            midas.float()  # Ensure FP32 for CPU
+            print("✅ MiDaS model loaded on CPU with FP32")
         
         midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
         print(f"✅ MiDaS model loaded successfully on {device}")
@@ -109,6 +157,7 @@ def load_midas():
         
     except Exception as e:
         print(f"❌ Error loading MiDaS model: {e}")
+        
         # Fallback to CPU if CUDA fails
         if get_device().type == 'cuda':
             try:
@@ -116,6 +165,7 @@ def load_midas():
                 midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
                 midas.to(torch.device("cpu"))
                 midas.eval()
+                midas.float()  # Ensure FP32 for CPU
                 midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
                 print("✅ MiDaS model loaded successfully on CPU (fallback)")
                 return midas, midas_transform
@@ -125,16 +175,27 @@ def load_midas():
 
 def estimate_depth(frame, midas, midas_transform):
     """
-    Estimate depth from a single frame using MiDaS with CUDA support
+    Estimate depth from a single frame using MiDaS with proper dtype handling
     """
     device = get_device()
     
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     img_tensor = midas_transform(img).to(device)
     
-    # Use appropriate precision based on model
-    if device.type == 'cuda' and hasattr(midas, 'half'):
-        img_tensor = img_tensor.half()
+    # Use appropriate precision based on model dtype
+    if device.type == 'cuda':
+        try:
+            # Check if model is in half precision
+            model_dtype = next(midas.parameters()).dtype
+            if model_dtype == torch.float16:
+                img_tensor = img_tensor.half()
+            else:
+                img_tensor = img_tensor.float()
+        except Exception:
+            # Default to float32 if unsure
+            img_tensor = img_tensor.float()
+    else:
+        img_tensor = img_tensor.float()
     
     with torch.no_grad():
         prediction = midas(img_tensor)
