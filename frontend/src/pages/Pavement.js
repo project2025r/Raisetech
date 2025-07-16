@@ -904,9 +904,8 @@ const Pavement = () => {
                                     <th>ID</th>
                                     <th>Area (cm²)</th>
                                     <th>Depth (cm)</th>
-                                    <th>Volume</th>
+                                    <th>Volume (cm³)</th>
                                     <th>Volume Range</th>
-                                    <th>Coordinates</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -917,7 +916,6 @@ const Pavement = () => {
                                       <td>{pothole.depth_cm.toFixed(2)}</td>
                                       <td>{pothole.volume.toFixed(2)}</td>
                                       <td>{pothole.volume_range}</td>
-                                      <td>{pothole.coordinates}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -944,8 +942,6 @@ const Pavement = () => {
                                       <th>Type</th>
                                       <th>Area (cm²)</th>
                                       <th>Area Range</th>
-                                      <th>Confidence</th>
-                                      <th>Coordinates</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -955,8 +951,6 @@ const Pavement = () => {
                                         <td>{crack.crack_type}</td>
                                         <td>{crack.area_cm2.toFixed(2)}</td>
                                         <td>{crack.area_range}</td>
-                                        <td>{(crack.confidence * 100).toFixed(1)}%</td>
-                                        <td>{crack.coordinates}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -997,10 +991,8 @@ const Pavement = () => {
                                     <tr>
                                       <th>ID</th>
                                       <th>Type</th>
-                                      <th>Length (m)</th>
                                       <th>Condition</th>
-                                      <th>Confidence</th>
-                                      <th>Coordinates</th>
+                                      <th>Length</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -1008,10 +1000,8 @@ const Pavement = () => {
                                       <tr key={kerb.kerb_id}>
                                         <td>{kerb.kerb_id}</td>
                                         <td>{kerb.kerb_type}</td>
-                                        <td>{kerb.length_m.toFixed(2)}</td>
                                         <td>{kerb.condition}</td>
-                                        <td>{(kerb.confidence * 100).toFixed(1)}%</td>
-                                        <td>{kerb.coordinates}</td>
+                                        <td>{kerb.length_m.toFixed(2)}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -1020,7 +1010,7 @@ const Pavement = () => {
                               
                               {results.condition_counts && (
                                 <div>
-                                  <h6>Kerb Condition Summary</h6>
+                                  <h6>Kerb Conditions Summary</h6>
                                   <ul className="kerb-types-list">
                                     {Object.entries(results.condition_counts).map(([condition, count]) => (
                                       count > 0 && (
@@ -1075,9 +1065,8 @@ const Pavement = () => {
                                   <th>ID</th>
                                   <th>Area (cm²)</th>
                                   <th>Depth (cm)</th>
-                                  <th>Volume</th>
+                                  <th>Volume (cm³)</th>
                                   <th>Volume Range</th>
-                                  <th>Coordinates</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1088,7 +1077,6 @@ const Pavement = () => {
                                     <td>{pothole.depth_cm.toFixed(2)}</td>
                                     <td>{pothole.volume.toFixed(2)}</td>
                                     <td>{pothole.volume_range}</td>
-                                    <td>{pothole.coordinates}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1110,8 +1098,6 @@ const Pavement = () => {
                                   <th>Type</th>
                                   <th>Area (cm²)</th>
                                   <th>Area Range</th>
-                                  <th>Confidence</th>
-                                  <th>Coordinates</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1121,8 +1107,6 @@ const Pavement = () => {
                                     <td>{crack.crack_type}</td>
                                     <td>{crack.area_cm2.toFixed(2)}</td>
                                     <td>{crack.area_range}</td>
-                                    <td>{(crack.confidence * 100).toFixed(1)}%</td>
-                                    <td>{crack.coordinates}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1157,10 +1141,8 @@ const Pavement = () => {
                                 <tr>
                                   <th>ID</th>
                                   <th>Type</th>
-                                  <th>Length (m)</th>
                                   <th>Condition</th>
-                                  <th>Confidence</th>
-                                  <th>Coordinates</th>
+                                  <th>Length</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1168,10 +1150,8 @@ const Pavement = () => {
                                   <tr key={kerb.kerb_id}>
                                     <td>{kerb.kerb_id}</td>
                                     <td>{kerb.kerb_type}</td>
-                                    <td>{kerb.length_m.toFixed(2)}</td>
                                     <td>{kerb.condition}</td>
-                                    <td>{(kerb.confidence * 100).toFixed(1)}%</td>
-                                    <td>{kerb.coordinates}</td>
+                                    <td>{kerb.length_m.toFixed(2)}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1181,8 +1161,8 @@ const Pavement = () => {
 
                         {results.condition_counts && (
                           <div>
-                            <h5>Kerb Condition Summary</h5>
-                            <ul className="kerb-types-list">
+                            <h5>Kerb Conditions Summary</h5>
+                            <ul className="kerb-conditions-list">
                               {Object.entries(results.condition_counts).map(([condition, count]) => (
                                 count > 0 && (
                                   <li key={condition}>
