@@ -6,7 +6,7 @@ import os
 import json
 import traceback
 from config.db import connect_to_db, get_gridfs
-from utils.models import load_yolo_models, load_midas, estimate_depth, calculate_real_depth, calculate_pothole_dimensions, calculate_area, get_device
+from utils.models import load_yolo_models, load_midas, estimate_depth, calculate_real_depth, calculate_pothole_dimensions, calculate_area, get_device, classify_road_image
 from utils.exif_utils import get_gps_coordinates, format_coordinates
 import pandas as pd
 import io
@@ -734,7 +734,17 @@ def detect_potholes():
         
         # Process the image
         processed_image = image.copy()
-        
+
+        # First, classify the image to check if it contains a road
+        classification_result = classify_road_image(processed_image, models)
+
+        if not classification_result["is_road"]:
+            return jsonify({
+                "success": False,
+                "message": "No road detected in the image. Unable to process further.",
+                "classification": classification_result
+            }), 400
+
         # Run depth estimation if MiDaS is available
         depth_map = None
         if midas and midas_transform:
@@ -957,6 +967,16 @@ def detect_cracks():
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         processed_image = image.copy()
 
+        # First, classify the image to check if it contains a road
+        classification_result = classify_road_image(processed_image, models)
+
+        if not classification_result["is_road"]:
+            return jsonify({
+                "success": False,
+                "message": "No road detected in the image. Unable to process further.",
+                "classification": classification_result
+            }), 400
+
         # Run crack detection with CUDA optimization and proper dtype handling
         with torch.no_grad():
             if device.type == 'cuda':
@@ -1178,7 +1198,17 @@ def detect_kerbs():
             
         # Process the image
         processed_image = image.copy()
-        
+
+        # First, classify the image to check if it contains a road
+        classification_result = classify_road_image(processed_image, models)
+
+        if not classification_result["is_road"]:
+            return jsonify({
+                "success": False,
+                "message": "No road detected in the image. Unable to process further.",
+                "classification": classification_result
+            }), 400
+
         # Detect kerbs using YOLOv8 model with CUDA optimization and proper dtype handling
         with torch.no_grad():
             if device.type == 'cuda':
@@ -2101,12 +2131,22 @@ def detect_all():
         # CRITICAL FIX: Create separate copies for each model to prevent interference
         # Keep original image unchanged for model processing
         original_image = image.copy()
-        
+
+        # First, classify the image to check if it contains a road
+        classification_result = classify_road_image(original_image, models)
+
+        if not classification_result["is_road"]:
+            return jsonify({
+                "success": False,
+                "message": "No road detected in the image. Unable to process further.",
+                "classification": classification_result
+            }), 400
+
         # Debug: Log image shape and hash for verification
         print(f"MODEL ISOLATION DEBUG: Original image shape: {original_image.shape}")
         original_hash = hash(original_image.tobytes())
         print(f"MODEL ISOLATION DEBUG: Original image hash: {original_hash}")
-        
+
         # Run depth estimation if MiDaS is available (using original image)
         depth_map = None
         if midas and midas_transform:

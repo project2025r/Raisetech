@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner, OverlayTrigger, Popover } from 'react-bootstrap';
+import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner, OverlayTrigger, Popover, Modal } from 'react-bootstrap';
 import axios from 'axios';
 import Webcam from 'react-webcam';
 import './Pavement.css';
@@ -28,6 +28,10 @@ const Pavement = () => {
   const [batchResults, setBatchResults] = useState([]);
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
+
+  // Add state for classification error modal
+  const [showClassificationModal, setShowClassificationModal] = useState(false);
+  const [classificationError, setClassificationError] = useState('');
   const [totalToProcess, setTotalToProcess] = useState(0);
   
   // Add state for auto-navigation through results
@@ -269,6 +273,13 @@ const Pavement = () => {
     setCameraOrientation(prev => prev === 'environment' ? 'user' : 'environment');
   };
 
+  // Helper function to handle classification errors
+  const handleClassificationError = (errorMessage) => {
+    setClassificationError(errorMessage);
+    setShowClassificationModal(true);
+    setError(''); // Clear general error since we're showing specific modal
+  };
+
   // Process image for detection
   const handleProcess = async () => {
     setLoading(true);
@@ -329,10 +340,14 @@ const Pavement = () => {
         setError(response.data.message || 'Detection failed');
       }
     } catch (error) {
-      setError(
-        error.response?.data?.message || 
-        'An error occurred during detection. Please try again.'
-      );
+      const errorMessage = error.response?.data?.message || 'An error occurred during detection. Please try again.';
+
+      // Check if this is a classification error (no road detected)
+      if (errorMessage.includes('No road detected')) {
+        handleClassificationError(errorMessage);
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -413,17 +428,21 @@ const Pavement = () => {
               data: response.data
             });
           } else {
+            const errorMessage = response.data.message || 'Detection failed';
             results.push({
               filename,
               success: false,
-              error: response.data.message || 'Detection failed'
+              error: errorMessage,
+              isClassificationError: errorMessage.includes('No road detected')
             });
           }
         } catch (error) {
+          const errorMessage = error.response?.data?.message || 'An error occurred during detection';
           results.push({
             filename,
             success: false,
-            error: error.response?.data?.message || 'An error occurred during detection'
+            error: errorMessage,
+            isClassificationError: errorMessage.includes('No road detected')
           });
         }
         
@@ -1229,9 +1248,17 @@ const Pavement = () => {
             <div className="batch-complete-status mt-3">
               <Alert variant="success">
                 <i className="fas fa-check-circle me-2"></i>
-                Processed {batchResults.length} images. 
-                {batchResults.filter(r => r.success).length} successful, 
-                {batchResults.filter(r => !r.success).length} failed.
+                Processed {batchResults.length} images.
+                {batchResults.filter(r => r.success).length} successful,
+                {batchResults.filter(r => !r.success && !r.isClassificationError).length} failed.
+                {batchResults.filter(r => r.isClassificationError).length > 0 && (
+                  <div className="mt-2">
+                    <small className="text-warning">
+                      <i className="fas fa-exclamation-triangle me-1"></i>
+                      {batchResults.filter(r => r.isClassificationError).length} image(s) contained no road.
+                    </small>
+                  </div>
+                )}
               </Alert>
             </div>
           )}
@@ -1396,6 +1423,48 @@ const Pavement = () => {
           </Card>
         </Tab>
       </Tabs>
+
+      {/* Classification Error Modal */}
+      <Modal
+        show={showClassificationModal}
+        onHide={() => setShowClassificationModal(false)}
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>
+            <i className="fas fa-exclamation-triangle text-warning me-2"></i>
+            Road Detection Failed
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="text-center">
+            <div className="mb-3">
+              <i className="fas fa-road fa-3x text-muted"></i>
+            </div>
+            <h5 className="text-danger mb-3">No Road Detected</h5>
+            <p className="mb-3">
+              {classificationError || 'The uploaded image does not appear to contain a road. Please upload an image that clearly shows a road surface for defect detection.'}
+            </p>
+            <div className="alert alert-info">
+              <strong>Tips for better results:</strong>
+              <ul className="mb-0 mt-2 text-start">
+                <li>Ensure the image clearly shows a road surface</li>
+                <li>Avoid images with only buildings, sky, or vegetation</li>
+                <li>Make sure the road takes up a significant portion of the image</li>
+                <li>Use good lighting conditions for clearer road visibility</li>
+              </ul>
+            </div>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="primary"
+            onClick={() => setShowClassificationModal(false)}
+          >
+            Try Another Image
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 };

@@ -14,7 +14,7 @@ def get_db_connection():
     """
     Create a database connection to MongoDB
     """
-    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
     db_name = os.getenv("DB_NAME", "LTA")
     
     try:
