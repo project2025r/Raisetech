@@ -255,13 +255,14 @@
 }
 
 .no-defects-message {
+  text-align: center;
+  padding: 20px;
   color: #6c757d;
   font-style: italic;
-  padding: 15px;
-  background: #f8f9fa;
-  border-radius: 4px;
-  border: 1px dashed #dee2e6;
-  text-align: center;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  margin: 10px 0;
 }
 
 .model-error-alert {
@@ -500,4 +501,18 @@
 
 .popover#reminder-popover .popover-body li:last-child {
   margin-bottom: 0;
+}
+
+.defect-section {
+  margin-bottom: 20px;
+}
+
+.defect-section h5,
+.defect-section h6 {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.defect-section .emoji {
+  margin-right: 8px;
 }

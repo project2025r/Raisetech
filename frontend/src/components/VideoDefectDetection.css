@@ -192,4 +192,28 @@
 .spinner-border-sm {
   width: 1rem;
   height: 1rem;
+}
+
+.no-defects-message {
+  text-align: center;
+  padding: 20px;
+  color: #6c757d;
+  font-style: italic;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  margin: 10px 0;
+}
+
+.defect-section {
+  margin-bottom: 20px;
+}
+
+.defect-section h6 {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.defect-section .emoji {
+  margin-right: 8px;
 } 

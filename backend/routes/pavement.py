@@ -270,6 +270,15 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
     all_detections = []
     device = get_device()
     
+    # Calculate depth map for this frame if processing potholes and MiDaS is available
+    depth_map = None
+    if (selected_model == "All" or selected_model == "Potholes") and midas and midas_transform:
+        try:
+            depth_map = estimate_depth(original_frame, midas, midas_transform)
+        except Exception as e:
+            logger.warning(f"Failed to estimate depth for frame {frame_count}: {e}")
+            depth_map = None
+    
     try:
         # Determine which models to use based on selection
         models_to_use = []
@@ -340,21 +349,69 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                     np.full_like(detection_frame[mask_indices], (255, 0, 0)), 0.3, 0
                                 )
                                 
-                                # Draw bounding box
-                                x1, y1, x2, y2 = map(int, box)
-                                cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                # Calculate dimensions
+                                dimensions = calculate_pothole_dimensions(binary_mask)
                                 
-                                # Add detection to results
-                                all_detections.append({
-                                    'type': 'Pothole',
-                                    'bbox': [x1, y1, x2, y2],
-                                    'confidence': float(conf),
-                                    'frame': frame_count,
-                                    'timestamp': frame_count / 30.0,  # Assuming 30 FPS
-                                    'has_mask': True
-                                })
+                                # Calculate depth metrics if depth map is available
+                                depth_metrics = None
+                                if depth_map is not None:
+                                    depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                                else:
+                                    # Provide default depth values when MiDaS is not available
+                                    depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
+                                
+                                # Get detection box coordinates
+                                x1, y1, x2, y2 = map(int, box)
+                                
+                                # Calculate volume and range if we have dimensions
+                                if dimensions and depth_metrics:
+                                    volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
+                                    
+                                    # Determine volume range
+                                    if volume < 1000:
+                                        volume_range = "Small (<1k)"
+                                    elif volume < 10000:
+                                        volume_range = "Medium (1k - 10k)"
+                                    else:
+                                        volume_range = "Big (>10k)"
+                                    
+                                    # Draw bounding box
+                                    cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    
+                                    # Add detection to results with complete measurements
+                                    all_detections.append({
+                                        'type': 'Pothole',
+                                        'bbox': [x1, y1, x2, y2],
+                                        'confidence': float(conf),
+                                        'frame': frame_count,
+                                        'timestamp': frame_count / 30.0,
+                                        'has_mask': True,
+                                        'area_cm2': float(dimensions["area_cm2"]),
+                                        'depth_cm': float(depth_metrics["max_depth_cm"]),
+                                        'volume': float(volume),
+                                        'volume_range': volume_range
+                                    })
+                                else:
+                                    # Draw bounding box
+                                    cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    
+                                    # Add detection to results with default values
+                                    all_detections.append({
+                                        'type': 'Pothole',
+                                        'bbox': [x1, y1, x2, y2],
+                                        'confidence': float(conf),
+                                        'frame': frame_count,
+                                        'timestamp': frame_count / 30.0,
+                                        'has_mask': True,
+                                        'area_cm2': 0.0,
+                                        'depth_cm': 0.0,
+                                        'volume': 0.0,
+                                        'volume_range': 'Unknown'
+                                    })
                         else:
                             # Process only bounding boxes (fallback)
                             for box, conf in zip(boxes, confidences):
@@ -365,14 +422,18 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                                 
-                                # Add detection to results
+                                # Add detection to results without measurements
                                 all_detections.append({
                                     'type': 'Pothole',
                                     'bbox': [x1, y1, x2, y2],
                                     'confidence': float(conf),
                                     'frame': frame_count,
-                                    'timestamp': frame_count / 30.0,  # Assuming 30 FPS
-                                    'has_mask': False
+                                    'timestamp': frame_count / 30.0,
+                                    'has_mask': False,
+                                    'area_cm2': 0.0,
+                                    'depth_cm': 0.0,
+                                    'volume': 0.0,
+                                    'volume_range': 'Unknown'
                                 })
             
             elif model_key == "cracks":
@@ -407,6 +468,18 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                             # Apply mask with transparency
                             detection_frame = cv2.addWeighted(detection_frame, 0.7, colored_mask, 0.3, 0)
                             
+                            # Calculate area
+                            area_data = calculate_area(binary_mask)
+                            area_cm2 = area_data["area_cm2"] if area_data else 0
+                            
+                            # Determine area range
+                            if area_cm2 < 50:
+                                area_range = "Small (<50 cm²)"
+                            elif area_cm2 < 200:
+                                area_range = "Medium (50-200 cm²)"
+                            else:
+                                area_range = "Large (>200 cm²)"
+                            
                             # Draw bounding box
                             x1, y1, x2, y2 = map(int, box)
                             cv2.rectangle(detection_frame, (x1, y1), (x2, y2), crack_type["color"], 2)
@@ -420,7 +493,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'confidence': float(conf),
                                 'frame': frame_count,
                                 'timestamp': frame_count / 30.0,
-                                'has_mask': True
+                                'has_mask': True,
+                                'area_cm2': float(area_cm2),
+                                'area_range': area_range
                             })
             
             elif model_key == "kerbs":
@@ -443,6 +518,14 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                             # Get kerb type
                             kerb_type = kerb_types.get(int(cls), {"name": "Unknown Kerb", "color": (128, 128, 128)})
                             
+                            # Calculate approximate length from bounding box
+                            box_width = x2 - x1
+                            box_height = y2 - y1
+                            # Use the maximum dimension as approximation of length
+                            length_pixels = max(box_width, box_height)
+                            # Convert to meters (rough approximation, 1 pixel ≈ 0.01 meters)
+                            length_m = length_pixels * 0.01
+                            
                             # Draw bounding box
                             cv2.rectangle(detection_frame, (x1, y1), (x2, y2), kerb_type["color"], 2)
                             cv2.putText(detection_frame, f"{kerb_type['name']} {conf:.2f}", (x1, y1 - 10),
@@ -454,7 +537,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'bbox': [x1, y1, x2, y2],
                                 'confidence': float(conf),
                                 'frame': frame_count,
-                                'timestamp': frame_count / 30.0
+                                'timestamp': frame_count / 30.0,
+                                'kerb_type': 'Concrete Kerb',  # Default kerb type
+                                'condition': kerb_type['name'],
+                                'length_m': float(length_m)
                             })
         
         # Apply tracking if tracker is provided
@@ -1075,14 +1161,14 @@ def detect_cracks():
 
         for det in processed_detections:
             area_data = calculate_area(det["mask"])
-            area = area_data["area_cm2"] if area_data else 0
+            area_cm2 = area_data["area_cm2"] if area_data else 0
 
-            if area < 50:
-                area_range = "Small (<50)"
-            elif area < 200:
-                area_range = "Medium (50-200)"
+            if area_cm2 < 50:
+                area_range = "Small (<50 cm²)"
+            elif area_cm2 < 200:
+                area_range = "Medium (50-200 cm²)"
             else:
-                area_range = "Large (>200)"
+                area_range = "Large (>200 cm²)"
 
             x1, y1, x2, y2 = map(int, det["box"][:4])
             color = det["type"]["color"]
@@ -1100,7 +1186,7 @@ def detect_cracks():
             crack_results.append({
                 "crack_id": crack_id,
                 "crack_type": det["type"]["name"],
-                "area_cm2": round(area, 2),
+                "area_cm2": round(area_cm2, 2),
                 "area_range": area_range,
                 "coordinates": coordinates,
                 "confidence": det["confidence"],

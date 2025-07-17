@@ -743,37 +743,126 @@ const VideoDefectDetection = () => {
                   </div>
                 </div>
 
-                {/* Detailed Table */}
-                <div className="detection-table-container">
-                  <Table striped bordered hover size="sm">
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Frame</th>
-                        <th>Timestamp</th>
-                        <th>Confidence</th>
-                        <th>Track ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {allDetections.slice(-50).map((detection, index) => (
-                        <tr key={index}>
-                          <td>{detection.type}</td>
-                          <td>{detection.frame || detection.first_detected_frame}</td>
-                          <td>{detection.timestamp?.toFixed(2)}s</td>
-                          <td>{(detection.confidence * 100).toFixed(1)}%</td>
-                          <td>
-                            {detection.track_id ? (
-                              <span className="badge bg-primary">#{detection.track_id}</span>
-                            ) : (
-                              <span className="text-muted">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                </div>
+                {/* Separate Tables for Each Defect Type */}
+                {(() => {
+                  const potholeDetections = allDetections.filter(d => d.type === 'Pothole');
+                  const crackDetections = allDetections.filter(d => d.type.includes('Crack'));
+                  const kerbDetections = allDetections.filter(d => d.type.includes('Kerb'));
+
+                  return (
+                    <div>
+                      {/* Pothole Table - Show only if "All" or "Potholes" is selected */}
+                      {(selectedModel === 'All' || selectedModel === 'Potholes') && (
+                        <div className="defect-section potholes mb-4">
+                          <h6 className="text-danger">
+                            <span className="emoji">🕳️</span>
+                            Potholes Detected: {potholeDetections.length}
+                          </h6>
+                          {potholeDetections.length > 0 ? (
+                            <div className="detection-table-container">
+                              <Table striped bordered hover size="sm">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>Area (cm²)</th>
+                                    <th>Depth (cm)</th>
+                                    <th>Volume (cm³)</th>
+                                    <th>Volume Range</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {potholeDetections.map((detection, index) => (
+                                    <tr key={index}>
+                                      <td>{detection.track_id || index + 1}</td>
+                                      <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                      <td>{detection.depth_cm ? detection.depth_cm.toFixed(2) : 'N/A'}</td>
+                                      <td>{detection.volume ? detection.volume.toFixed(2) : 'N/A'}</td>
+                                      <td>{detection.volume_range || 'N/A'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <div className="no-defects-message">No potholes detected</div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Cracks Table - Show only if "All" or "Alligator Cracks" is selected */}
+                      {(selectedModel === 'All' || selectedModel === 'Alligator Cracks') && (
+                        <div className="defect-section cracks mb-4">
+                          <h6 className="text-success">
+                            <span className="emoji">🪨</span>
+                            Cracks Detected: {crackDetections.length}
+                          </h6>
+                          {crackDetections.length > 0 ? (
+                            <div className="detection-table-container">
+                              <Table striped bordered hover size="sm">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>Type</th>
+                                    <th>Area (cm²)</th>
+                                    <th>Area Range</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {crackDetections.map((detection, index) => (
+                                    <tr key={index}>
+                                      <td>{detection.track_id || index + 1}</td>
+                                      <td>{detection.type}</td>
+                                      <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                      <td>{detection.area_range || 'N/A'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <div className="no-defects-message">No cracks detected</div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Kerbs Table - Show only if "All" or "Kerbs" is selected */}
+                      {(selectedModel === 'All' || selectedModel === 'Kerbs') && (
+                        <div className="defect-section kerbs mb-4">
+                          <h6 className="text-primary">
+                            <span className="emoji">🚧</span>
+                            Kerbs Detected: {kerbDetections.length}
+                          </h6>
+                          {kerbDetections.length > 0 ? (
+                            <div className="detection-table-container">
+                              <Table striped bordered hover size="sm">
+                                <thead>
+                                  <tr>
+                                    <th>ID</th>
+                                    <th>Type</th>
+                                    <th>Condition</th>
+                                    <th>Length</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {kerbDetections.map((detection, index) => (
+                                    <tr key={index}>
+                                      <td>{detection.track_id || index + 1}</td>
+                                      <td>{detection.kerb_type || 'Concrete Kerb'}</td>
+                                      <td>{detection.condition || detection.type}</td>
+                                      <td>{detection.length_m ? detection.length_m.toFixed(2) : 'N/A'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <div className="no-defects-message">No kerbs detected</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </Card.Body>
             </Card>
           )}
