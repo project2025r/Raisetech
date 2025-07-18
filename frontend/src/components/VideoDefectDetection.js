@@ -312,9 +312,31 @@ const VideoDefectDetection = () => {
                     console.log(`Processing progress: ${data.progress.toFixed(1)}%`);
                   }
 
-                  // Update detections
+                  // Update detections with upsert behavior
                   if (data.detections && data.detections.length > 0) {
-                    setAllDetections(prev => [...prev, ...data.detections]);
+                    setAllDetections(prev => {
+                      // Create a Map to store the latest detection for each ID
+                      const latestDetectionsMap = new Map();
+                      
+                      // First, add all existing detections to the map
+                      prev.forEach(detection => {
+                        const id = detection.track_id || detection.id;
+                        if (id) {
+                          latestDetectionsMap.set(id, detection);
+                        }
+                      });
+                      
+                      // Then update/add new detections to the map
+                      data.detections.forEach(newDetection => {
+                        const id = newDetection.track_id || newDetection.id;
+                        if (id) {
+                          latestDetectionsMap.set(id, newDetection);
+                        }
+                      });
+                      
+                      // Convert map values back to array
+                      return Array.from(latestDetectionsMap.values());
+                    });
                   }
 
                   // Handle final results
