@@ -130,22 +130,37 @@ def load_midas():
     Load the MiDaS depth estimation model with proper device and dtype handling
     """
     try:
-        print("Loading MiDaS model...")
+        print("🔄 Loading MiDaS model...")
         device = get_device()
         
-        midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
+        # First try loading the small model
+        try:
+            print("📥 Attempting to load MiDaS_small model...")
+            midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", pretrained=True, trust_repo=True)
+            print("✅ MiDaS_small model loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Failed to load MiDaS_small, error: {str(e)}")
+            print("🔄 Attempting to load DPT_Large model as fallback...")
+            try:
+                midas = torch.hub.load("intel-isl/MiDaS", "DPT_Large", pretrained=True, trust_repo=True)
+                print("✅ DPT_Large model loaded successfully")
+            except Exception as e2:
+                print(f"❌ Failed to load DPT_Large model: {str(e2)}")
+                return None, None
+        
+        print(f"🔄 Moving MiDaS model to device: {device}")
         midas.to(device)
         midas.eval()
         
         # Apply device-specific optimizations
         if device.type == 'cuda':
             try:
-                # Clear cache before optimization
+                print("🔄 Optimizing model for CUDA...")
                 torch.cuda.empty_cache()
                 midas.half()  # Convert to FP16 for faster inference
-                print("🚀 MiDaS model optimized for CUDA with FP16")
+                print("✅ MiDaS model optimized for CUDA with FP16")
             except Exception as e:
-                print(f"⚠️ MiDaS CUDA optimization failed: {e}")
+                print(f"⚠️ MiDaS CUDA optimization failed: {str(e)}")
                 print("🔄 Falling back to FP32 for MiDaS")
                 midas.float()
                 print("✅ MiDaS model loaded on CUDA with FP32")
@@ -153,26 +168,56 @@ def load_midas():
             midas.float()  # Ensure FP32 for CPU
             print("✅ MiDaS model loaded on CPU with FP32")
         
-        midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
-        print(f"✅ MiDaS model loaded successfully on {device}")
+        print("🔄 Loading MiDaS transforms...")
+        try:
+            midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
+            print("✅ MiDaS transforms loaded successfully")
+        except Exception as e:
+            print(f"❌ Failed to load MiDaS transforms: {str(e)}")
+            return None, None
+        
+        # Verify model is loaded correctly
+        print("🔄 Verifying MiDaS model...")
+        try:
+            # Create a dummy input
+            dummy_input = torch.randn(1, 3, 256, 256).to(device)
+            if device.type == 'cuda' and next(midas.parameters()).dtype == torch.float16:
+                dummy_input = dummy_input.half()
+            
+            # Test inference
+            with torch.no_grad():
+                _ = midas(dummy_input)
+            print("✅ MiDaS model verification successful")
+        except Exception as e:
+            print(f"❌ MiDaS model verification failed: {str(e)}")
+            return None, None
+        
+        print(f"✅ MiDaS setup completed successfully on {device}")
         return midas, midas_transform
         
     except Exception as e:
-        print(f"❌ Error loading MiDaS model: {e}")
+        print(f"❌ Critical error in MiDaS setup: {str(e)}")
         
         # Fallback to CPU if CUDA fails
         if get_device().type == 'cuda':
             try:
-                print("🔄 Retrying MiDaS on CPU...")
-                midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
+                print("🔄 Retrying MiDaS setup on CPU...")
+                midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", pretrained=True, trust_repo=True)
                 midas.to(torch.device("cpu"))
                 midas.eval()
                 midas.float()  # Ensure FP32 for CPU
                 midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
+                
+                # Verify CPU model
+                with torch.no_grad():
+                    dummy_input = torch.randn(1, 3, 256, 256)
+                    _ = midas(dummy_input)
+                
                 print("✅ MiDaS model loaded successfully on CPU (fallback)")
                 return midas, midas_transform
             except Exception as e2:
-                print(f"❌ Failed to load MiDaS on CPU: {e2}")
+                print(f"❌ Failed to load MiDaS on CPU: {str(e2)}")
+        
         return None, None
 
 def estimate_depth(frame, midas, midas_transform):
@@ -181,33 +226,67 @@ def estimate_depth(frame, midas, midas_transform):
     """
     device = get_device()
     
-    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img_tensor = midas_transform(img).to(device)
-    
-    # Use appropriate precision based on model dtype
-    if device.type == 'cuda':
-        try:
-            # Check if model is in half precision
-            model_dtype = next(midas.parameters()).dtype
-            if model_dtype == torch.float16:
-                img_tensor = img_tensor.half()
-            else:
+    try:
+        # Convert image to RGB for MiDaS
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Transform image for model input
+        img_tensor = midas_transform(img).to(device)
+        
+        # Use appropriate precision based on model dtype
+        if device.type == 'cuda':
+            try:
+                # Check if model is in half precision
+                model_dtype = next(midas.parameters()).dtype
+                if model_dtype == torch.float16:
+                    img_tensor = img_tensor.half()
+                else:
+                    img_tensor = img_tensor.float()
+            except Exception:
+                # Default to float32 if unsure
                 img_tensor = img_tensor.float()
-        except Exception:
-            # Default to float32 if unsure
+        else:
             img_tensor = img_tensor.float()
-    else:
-        img_tensor = img_tensor.float()
-    
-    with torch.no_grad():
-        prediction = midas(img_tensor)
-    
-    depth_map = prediction.squeeze().cpu().numpy()
-    depth_map = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map))
-    depth_map = (depth_map * 255).astype(np.uint8)
-    depth_map = cv2.resize(depth_map, (frame.shape[1], frame.shape[0]))
-    
-    return depth_map
+        
+        # Add batch dimension if needed
+        if len(img_tensor.shape) == 3:
+            img_tensor = img_tensor.unsqueeze(0)
+        
+        # Run inference
+        with torch.no_grad():
+            prediction = midas(img_tensor)
+        
+        # Convert prediction to numpy
+        depth_map = prediction.squeeze().cpu().numpy()
+        
+        # Robust normalization:
+        # 1. Remove outliers using percentile clipping
+        # 2. Apply non-linear scaling to enhance depth differences
+        # 3. Normalize to 0-255 range
+        
+        # Remove outliers
+        p1, p99 = np.percentile(depth_map, (1, 99))
+        depth_map = np.clip(depth_map, p1, p99)
+        
+        # Non-linear scaling (gamma correction)
+        depth_map = ((depth_map - p1) / (p99 - p1)) ** 0.5
+        
+        # Normalize to 0-255 range
+        depth_map = (depth_map * 255).astype(np.uint8)
+        
+        # Resize to match input frame size
+        if depth_map.shape != (frame.shape[0], frame.shape[1]):
+            depth_map = cv2.resize(depth_map, (frame.shape[1], frame.shape[0]))
+        
+        # Apply slight Gaussian blur to reduce noise
+        depth_map = cv2.GaussianBlur(depth_map, (3, 3), 0)
+        
+        print("✅ Depth map generated successfully")
+        return depth_map
+        
+    except Exception as e:
+        print(f"❌ Error in depth estimation: {str(e)}")
+        return None
 
 def calculate_real_depth(binary_mask, depth_map, pixel_to_cm=0.1, calibration_value=1.6):
     """
@@ -216,20 +295,47 @@ def calculate_real_depth(binary_mask, depth_map, pixel_to_cm=0.1, calibration_va
     if binary_mask.shape != depth_map.shape:
         binary_mask = cv2.resize(binary_mask, (depth_map.shape[1], depth_map.shape[0]))
     
+    # Apply Gaussian smoothing to reduce noise
     smoothed_depth = gaussian_filter(depth_map, sigma=2)
+    
+    # Get depth values within the pothole mask
     pothole_depths = smoothed_depth[binary_mask > 0]
     
-    if len(pothole_depths) == 0 or np.std(pothole_depths) < 5:
+    # Check if we have valid depth values
+    if len(pothole_depths) == 0:
         return None
     
+    # Calculate depth statistics
     max_depth = np.max(pothole_depths)
     min_depth = np.min(pothole_depths)
     avg_depth = np.mean(pothole_depths)
+    std_depth = np.std(pothole_depths)
     
-    depth_cm = (max_depth - min_depth) * pixel_to_cm * calibration_value
-    avg_depth_cm = avg_depth * pixel_to_cm * calibration_value
+    # More robust depth calculation:
+    # 1. Use percentiles instead of absolute min/max to avoid outliers
+    # 2. Lower the std threshold to catch shallower potholes
+    # 3. Add additional validation checks
     
-    return {'max_depth_cm': round(depth_cm, 2), 'avg_depth_cm': round(avg_depth_cm, 2)}
+    # Get depth values at 5th and 95th percentiles to avoid outliers
+    p05_depth = np.percentile(pothole_depths, 5)
+    p95_depth = np.percentile(pothole_depths, 95)
+    
+    # Calculate depth using percentile difference
+    depth_cm = (p95_depth - p05_depth) * pixel_to_cm * calibration_value
+    avg_depth_cm = (avg_depth - min_depth) * pixel_to_cm * calibration_value
+    
+    # Validation checks:
+    # 1. Ensure minimum depth variation (lowered threshold)
+    # 2. Ensure depth is positive
+    # 3. Ensure depth is within reasonable range
+    if std_depth < 0.5 or depth_cm <= 0 or depth_cm > 50:  # Lowered from 5 to 0.5, max depth 50cm
+        print(f"Debug - Depth calculation stats: std={std_depth}, depth={depth_cm}cm")
+        return None
+    
+    return {
+        'max_depth_cm': round(depth_cm, 2),
+        'avg_depth_cm': round(avg_depth_cm, 2)
+    }
 
 def calculate_pothole_dimensions(binary_mask, pixel_to_cm=0.1):
     """

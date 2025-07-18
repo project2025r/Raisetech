@@ -68,3 +68,5 @@ Thumbs.db
 
 # Large model files
 assets/*.pt 
+assets/torch_hub_cache/
+assets/torch_hub_cache/*

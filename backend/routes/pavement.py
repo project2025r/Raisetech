@@ -198,9 +198,10 @@ logger = logging.getLogger(__name__)
 
 def preload_models_on_startup():
     """Eagerly preload YOLO and MiDaS models when the Flask server starts"""
-    global models, midas, midast_transform
+    global models, midas, midas_transform
 
-    print("Preloading pavement models on server startup...")
+    print("\n=== Starting Model Preload ===")
+    print("🔄 Preloading pavement models on server startup...")
     
     # Load YOLO models
     models = load_yolo_models()
@@ -208,14 +209,42 @@ def preload_models_on_startup():
         try:
             model.eval()
         except Exception as e:
-            print(f"Warning: Could not set model to eval mode: {e}")
+            print(f"⚠️ Warning: Could not set model to eval mode: {e}")
     
-    # Load MiDaS model
-    midas, midas_transform = load_midas()
-    if hasattr(midas, 'eval'):
-        midas.eval()
+    # Load MiDaS model with proper error handling
+    print("\n=== Loading MiDaS Model ===")
+    try:
+        midas, midas_transform = load_midas()
+        if midas is None or midas_transform is None:
+            print("❌ Failed to load MiDaS model - depth estimation will be unavailable")
+        else:
+            print("✅ MiDaS model loaded successfully")
+            if hasattr(midas, 'eval'):
+                midas.eval()
+                print("✅ MiDaS model set to eval mode")
+            
+            # Verify MiDaS works with a test input
+            device = get_device()
+            try:
+                print("🔄 Testing MiDaS with dummy input...")
+                dummy_input = torch.randn(1, 3, 384, 384).to(device)
+                if device.type == 'cuda':
+                    dummy_input = dummy_input.half()
+                with torch.no_grad():
+                    _ = midas(dummy_input)
+                print("✅ MiDaS test inference successful")
+            except Exception as e:
+                print(f"❌ MiDaS test inference failed: {str(e)}")
+                midas, midas_transform = None, None
+    except Exception as e:
+        print(f"❌ Error during MiDaS initialization: {str(e)}")
+        midas, midas_transform = None, None
     
-    print("✅ Pavement models successfully preloaded on startup")
+    print("\n=== Model Preload Status ===")
+    print(f"✓ YOLO Models: {len(models)} loaded")
+    print(f"✓ MiDaS: {'Available' if midas else 'Unavailable'}")
+    print("=== Preload Complete ===\n")
+    
     return models, midas, midas_transform
 
 def preload_models():
@@ -224,17 +253,42 @@ def preload_models():
 
     # Only load if models haven't been loaded yet
     if models is None:
+        print("\n=== Loading YOLO Models ===")
         models = load_yolo_models()
         for model in models.values():
             try:
                 model.eval()
             except Exception as e:
-                print(f"Warning: Could not set model to eval mode: {e}")
+                print(f"⚠️ Warning: Could not set model to eval mode: {e}")
 
     if midas is None or midas_transform is None:
-        midas, midas_transform = load_midas()
-        if hasattr(midas, 'eval'):
-            midas.eval()
+        print("\n=== Loading MiDaS Model ===")
+        try:
+            midas, midas_transform = load_midas()
+            if midas is None or midas_transform is None:
+                print("❌ Failed to load MiDaS model - depth estimation will be unavailable")
+            else:
+                print("✅ MiDaS model loaded successfully")
+                if hasattr(midas, 'eval'):
+                    midas.eval()
+                    print("✅ MiDaS model set to eval mode")
+                
+                # Verify MiDaS works with a test input
+                device = get_device()
+                try:
+                    print("🔄 Testing MiDaS with dummy input...")
+                    dummy_input = torch.randn(1, 3, 384, 384).to(device)
+                    if device.type == 'cuda':
+                        dummy_input = dummy_input.half()
+                    with torch.no_grad():
+                        _ = midas(dummy_input)
+                    print("✅ MiDaS test inference successful")
+                except Exception as e:
+                    print(f"❌ MiDaS test inference failed: {str(e)}")
+                    midas, midas_transform = None, None
+        except Exception as e:
+            print(f"❌ Error during MiDaS initialization: {str(e)}")
+            midas, midas_transform = None, None
 
 
 def get_models():
@@ -274,10 +328,17 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
     depth_map = None
     if (selected_model == "All" or selected_model == "Potholes") and midas and midas_transform:
         try:
+            logger.debug("🔄 Running depth estimation with MiDaS...")
             depth_map = estimate_depth(original_frame, midas, midas_transform)
+            if depth_map is not None:
+                logger.debug("✅ Depth map generated successfully")
+            else:
+                logger.warning("⚠️ Depth map generation failed - got None result")
         except Exception as e:
-            logger.warning(f"Failed to estimate depth for frame {frame_count}: {e}")
+            logger.warning(f"⚠️ Error during depth estimation: {str(e)}")
             depth_map = None
+    else:
+        logger.warning("⚠️ MiDaS model not available or not needed for selected model")
     
     try:
         # Determine which models to use based on selection
@@ -355,9 +416,18 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 # Calculate depth metrics if depth map is available
                                 depth_metrics = None
                                 if depth_map is not None:
-                                    depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                                    try:
+                                        depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                                        if depth_metrics:
+                                            logger.debug(f"✅ Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
+                                        else:
+                                            logger.warning("⚠️ Depth calculation returned None - using default values")
+                                            depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Error calculating depth: {str(e)}")
+                                        depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                                 else:
-                                    # Provide default depth values when MiDaS is not available
+                                    logger.warning("⚠️ No depth map available - using default values")
                                     depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                                 
                                 # Get detection box coordinates
@@ -495,7 +565,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'timestamp': frame_count / 30.0,
                                 'has_mask': True,
                                 'area_cm2': float(area_cm2),
-                                'area_range': area_range
+                                'area_range': area_range,
+                                'coordinates': coordinates,
+                                'username': username,
+                                'role': role
                             })
             
             elif model_key == "kerbs":
@@ -540,7 +613,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'timestamp': frame_count / 30.0,
                                 'kerb_type': 'Concrete Kerb',  # Default kerb type
                                 'condition': kerb_type['name'],
-                                'length_m': float(length_m)
+                                'length_m': float(length_m),
+                                'coordinates': coordinates,
+                                'username': username,
+                                'role': role
                             })
         
         # Apply tracking if tracker is provided
@@ -780,31 +856,49 @@ def detect_potholes():
     """
     API endpoint to detect potholes in an uploaded image with CUDA optimization
     """
-    # Get models and device info
-    models, midas, midas_transform = get_models()
-    device = get_device()
-    
-    if not models or "potholes" not in models:
-        return jsonify({
-            "success": False,
-            "message": "Failed to load pothole detection model"
-        }), 500
-    
-    if 'image' not in request.json:
-        return jsonify({
-            "success": False,
-            "message": "No image data provided"
-        }), 400
-    
-    # Extract coordinates if provided
-    client_coordinates = request.json.get('coordinates', 'Not Available')
-    
-    # Get user information
-    username = request.json.get('username', 'Unknown')
-    role = request.json.get('role', 'Unknown')
-    
-    # Get image data
     try:
+        # Get models and device info
+        models, midas, midas_transform = get_models()
+        device = get_device()
+        
+        print("\n=== Starting Pothole Detection ===")
+        print(f"🔧 Using device: {device}")
+        
+        if not models or "potholes" not in models:
+            return jsonify({
+                "success": False,
+                "message": "Failed to load pothole detection model"
+            }), 500
+        
+        # Check MiDaS availability
+        if midas is None or midas_transform is None:
+            print("⚠️ MiDaS model not available - attempting to reload...")
+            try:
+                midas, midas_transform = load_midas()
+                if midas is None or midas_transform is None:
+                    print("❌ MiDaS reload failed - depth estimation will use default values")
+                else:
+                    print("✅ MiDaS reload successful")
+                    midas.eval()
+            except Exception as e:
+                print(f"❌ Error reloading MiDaS: {str(e)}")
+        else:
+            print("✅ MiDaS model is available")
+        
+        if 'image' not in request.json:
+            return jsonify({
+                "success": False,
+                "message": "No image data provided"
+            }), 400
+        
+        # Extract coordinates if provided
+        client_coordinates = request.json.get('coordinates', 'Not Available')
+        
+        # Get user information
+        username = request.json.get('username', 'Unknown')
+        role = request.json.get('role', 'Unknown')
+        
+        # Get image data
         image_data = request.json['image']
         image = decode_base64_image(image_data)
         
@@ -813,30 +907,43 @@ def detect_potholes():
                 "success": False,
                 "message": "Invalid image data"
             }), 400
-            
+        
+        print("✅ Image decoded successfully")
+        print(f"📊 Image shape: {image.shape}")
+        
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         
         # Process the image
         processed_image = image.copy()
-
+        
         # First, classify the image to check if it contains a road
         classification_result = classify_road_image(processed_image, models)
-
+        
         if not classification_result["is_road"]:
             return jsonify({
                 "success": False,
                 "message": "No road detected in the image. Unable to process further.",
                 "classification": classification_result
             }), 400
-
+        
         # Run depth estimation if MiDaS is available
         depth_map = None
         if midas and midas_transform:
-            depth_map = estimate_depth(processed_image, midas, midas_transform)
+            try:
+                print("🔄 Running depth estimation...")
+                depth_map = estimate_depth(processed_image, midas, midas_transform)
+                if depth_map is not None:
+                    print(f"✅ Depth map generated successfully - shape: {depth_map.shape}")
+                    print(f"📊 Depth range: {depth_map.min():.2f} to {depth_map.max():.2f}")
+                else:
+                    print("❌ Depth map generation failed - got None result")
+            except Exception as e:
+                print(f"❌ Error during depth estimation: {str(e)}")
+                depth_map = None
         else:
-            print("MiDaS model not available, skipping depth estimation")
+            print("⚠️ MiDaS not available - skipping depth estimation")
         
         # Detect potholes with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -844,9 +951,7 @@ def detect_potholes():
                 torch.cuda.empty_cache()
             
             # Ensure image is in the correct format for the model
-            # Convert to RGB if needed (OpenCV uses BGR by default)
             if processed_image.shape[2] == 3:
-                # Check if image needs RGB conversion
                 inference_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
             else:
                 inference_image = processed_image
@@ -858,7 +963,6 @@ def detect_potholes():
                 if "dtype" in str(e):
                     print(f"⚠️ Dtype error detected: {e}")
                     print("🔄 Attempting inference with CPU fallback...")
-                    # Force CPU inference as fallback
                     results = models["potholes"](inference_image, conf=0.2, device='cpu')
                 else:
                     raise e
@@ -867,14 +971,13 @@ def detect_potholes():
         pothole_results = []
         pothole_id = 1
         timestamp = pd.Timestamp.now().isoformat()
-        image_upload_id = str(uuid.uuid4())  # Create a unique ID for this image upload
+        image_upload_id = str(uuid.uuid4())
         
-        # Store the original image once for all potholes
+        # Store the original image
         fs = get_gridfs()
         _, original_buffer = cv2.imencode('.jpg', image)
-        original_image_bytes = original_buffer.tobytes()
         original_image_id = fs.put(
-            original_image_bytes, 
+            original_buffer.tobytes(),
             filename=f"image_{image_upload_id}_original.jpg",
             content_type="image/jpeg"
         )
@@ -884,20 +987,17 @@ def detect_potholes():
                 boxes = result.boxes.xyxy.cpu().numpy()
                 confidences = result.boxes.conf.cpu().numpy()
                 
-                # Check if segmentation masks are available
                 if result.masks is not None:
-                    # Process with segmentation masks
                     masks = result.masks.data.cpu().numpy()
                     
                     for mask, box, conf in zip(masks, boxes, confidences):
-                        # Process the segmentation mask
                         binary_mask = (mask > 0.5).astype(np.uint8) * 255
                         binary_mask = cv2.resize(binary_mask, (processed_image.shape[1], processed_image.shape[0]))
                         
-                        # Apply colored overlay only where mask exists (blue for potholes)
+                        # Apply colored overlay
                         mask_indices = binary_mask > 0
                         processed_image[mask_indices] = cv2.addWeighted(
-                            processed_image[mask_indices], 0.7, 
+                            processed_image[mask_indices], 0.7,
                             np.full_like(processed_image[mask_indices], (255, 0, 0)), 0.3, 0
                         )
                         
@@ -907,17 +1007,24 @@ def detect_potholes():
                         # Calculate depth metrics if depth map is available
                         depth_metrics = None
                         if depth_map is not None:
-                            depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                            try:
+                                depth_metrics = calculate_real_depth(binary_mask, depth_map)
+                                if depth_metrics:
+                                    print(f"✅ Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
+                                else:
+                                    print("⚠️ Depth calculation returned None - using default values")
+                                    depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
+                            except Exception as e:
+                                print(f"❌ Error calculating depth: {str(e)}")
+                                depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                         else:
-                            # Provide default depth values when MiDaS is not available
-                            depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
+                            print("⚠️ No depth map available - using default values")
+                            depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                         
                         if dimensions and depth_metrics:
-                            # Get detection box coordinates
                             x1, y1, x2, y2 = map(int, box[:4])
                             volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
                             
-                            # Determine volume range
                             if volume < 1000:
                                 volume_range = "Small (<1k)"
                             elif volume < 10000:
@@ -925,12 +1032,10 @@ def detect_potholes():
                             else:
                                 volume_range = "Big (>10k)"
                             
-                            # Draw bounding box and label
                             cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            text = f"ID {pothole_id}, A:{dimensions['area_cm2']}cm², D:{depth_metrics['max_depth_cm']}cm, V:{volume}, C:{conf:.2f}"
+                            text = f"ID {pothole_id}, A:{dimensions['area_cm2']:.1f}cm², D:{depth_metrics['max_depth_cm']:.1f}cm"
                             cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                             
-                            # Collect pothole data for later batch insertion
                             pothole_info = {
                                 "pothole_id": pothole_id,
                                 "area_cm2": float(dimensions["area_cm2"]),
@@ -946,21 +1051,18 @@ def detect_potholes():
                             pothole_results.append(pothole_info)
                             pothole_id += 1
                 else:
-                    # Process only bounding boxes (fallback)
+                    # Process bounding boxes only
                     for box, conf in zip(boxes, confidences):
                         x1, y1, x2, y2 = map(int, box[:4])
-                        
-                        # Draw bounding box only
                         cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         text = f"ID {pothole_id}, Pothole, C:{conf:.2f}"
                         cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                         
-                        # Collect pothole data (without detailed measurements)
                         pothole_info = {
                             "pothole_id": pothole_id,
-                            "area_cm2": 0.0,  # Not available without mask
-                            "depth_cm": 0.0,  # Not available without mask
-                            "volume": 0.0,    # Not available without mask
+                            "area_cm2": 0.0,
+                            "depth_cm": 0.0,
+                            "volume": 0.0,
                             "volume_range": "Unknown",
                             "confidence": float(conf),
                             "coordinates": coordinates,
@@ -971,16 +1073,15 @@ def detect_potholes():
                         pothole_results.append(pothole_info)
                         pothole_id += 1
         
-        # Store processed image with all potholes marked
+        # Store processed image
         _, processed_buffer = cv2.imencode('.jpg', processed_image)
-        processed_image_bytes = processed_buffer.tobytes()
         processed_image_id = fs.put(
-            processed_image_bytes, 
+            processed_buffer.tobytes(),
             filename=f"image_{image_upload_id}_processed.jpg",
             content_type="image/jpeg"
         )
         
-        # Store consolidated entry in the database
+        # Store in database
         db = connect_to_db()
         if db is not None and pothole_results:
             try:
@@ -996,19 +1097,18 @@ def detect_potholes():
                     "potholes": pothole_results
                 })
             except Exception as e:
-                print(f"Error saving image data: {e}")
+                print(f"❌ Error saving to database: {str(e)}")
         
-        # Encode the processed image
-        encoded_image = encode_processed_image(processed_image)
-        
+        # Return results
         return jsonify({
             "success": True,
             "message": f"Detected {len(pothole_results)} potholes",
-            "processed_image": encoded_image,
+            "processed_image": encode_processed_image(processed_image),
             "potholes": pothole_results
         })
-    
+        
     except Exception as e:
+        print(f"❌ Critical error in pothole detection: {str(e)}")
         traceback.print_exc()
         return jsonify({
             "success": False,
@@ -1186,7 +1286,7 @@ def detect_cracks():
             crack_results.append({
                 "crack_id": crack_id,
                 "crack_type": det["type"]["name"],
-                "area_cm2": round(area_cm2, 2),
+                "area_cm2": area_cm2,
                 "area_range": area_range,
                 "coordinates": coordinates,
                 "confidence": det["confidence"],
