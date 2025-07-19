@@ -566,9 +566,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'has_mask': True,
                                 'area_cm2': float(area_cm2),
                                 'area_range': area_range,
-                                'coordinates': coordinates,
-                                'username': username,
-                                'role': role
+                                # 'coordinates': coordinates,
+                                # 'username': username,
+                                # 'role': role
                             })
             
             elif model_key == "kerbs":
@@ -614,9 +614,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'kerb_type': 'Concrete Kerb',  # Default kerb type
                                 'condition': kerb_type['name'],
                                 'length_m': float(length_m),
-                                'coordinates': coordinates,
-                                'username': username,
-                                'role': role
+                                # 'coordinates': coordinates,
+                                # 'username': username,
+                                # 'role': role
                             })
         
         # Apply tracking if tracker is provided
