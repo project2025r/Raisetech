@@ -229,6 +229,11 @@ const VideoDefectDetection = () => {
       formData.append('video', videoFile);
       formData.append('selectedModel', selectedModel);
       formData.append('coordinates', coordinates);
+      // Add username and role from sessionStorage (like image endpoints)
+      const userString = sessionStorage.getItem('user');
+      const user = userString ? JSON.parse(userString) : null;
+      formData.append('username', user?.username || 'Unknown');
+      formData.append('role', user?.role || 'Unknown');
 
       console.log('Starting video processing with model:', selectedModel);
 

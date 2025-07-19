@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from flask import Blueprint, request, jsonify, Response, stream_with_context, session
 import cv2
 import numpy as np
 import base64
@@ -17,6 +17,8 @@ import time
 import torch
 from datetime import datetime
 from collections import defaultdict
+import boto3
+from botocore.exceptions import ClientError
 
 pavement_bp = Blueprint('pavement', __name__)
 
@@ -646,7 +648,7 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
         return frame, []
 
 
-def process_pavement_video(video_path, selected_model, coordinates):
+def process_pavement_video(video_path, selected_model, coordinates, video_timestamp=None, aws_folder=None, s3_folder=None, username=None, role=None, video_id=None):
     """Process pavement video and yield frames with detection results using CUDA optimization"""
     global video_processing_stop_flag
     
@@ -662,6 +664,42 @@ def process_pavement_video(video_path, selected_model, coordinates):
             yield "data: " + json.dumps({"success": False, "message": "Failed to load models"}) + "\n\n"
             return
         
+        timestamp = datetime.now().isoformat()
+        db = connect_to_db()
+        
+        # Determine which models will be run
+        models_to_run = []
+        if selected_model == "All":
+            models_to_run = ["potholes", "cracks", "kerbs"]
+        elif selected_model == "Potholes":
+            models_to_run = ["potholes"]
+        elif selected_model == "Alligator Cracks":
+            models_to_run = ["cracks"]
+        elif selected_model == "Kerbs":
+            models_to_run = ["kerbs"]
+        
+        # Create initial video processing document if not already present
+        if db is not None and video_id and not db.video_processing.find_one({"video_id": video_id}):
+            video_doc = {
+                "video_id": video_id,
+                "original_video_url": None,  # Will be updated after S3 upload
+                "processed_video_url": None,  # Will be updated after processing
+                # s3_path removed; use only relative paths for video URLs
+                "role": role,
+                "username": username,
+                "timestamp": timestamp,
+                "models_run": models_to_run,
+                "status": "processing",
+                "model_outputs": {
+                    "potholes": [],
+                    "cracks": [],
+                    "kerbs": []
+                },
+                "created_at": timestamp,
+                "updated_at": timestamp
+            }
+            db.video_processing.insert_one(video_doc)
+        
         # Log device and model information
         logger.info(f"Starting video processing on device: {device}")
         if device.type == 'cuda':
@@ -673,6 +711,11 @@ def process_pavement_video(video_path, selected_model, coordinates):
         # Open video
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
+            if db is not None:
+                db.video_processing.update_one(
+                    {"video_id": video_id},
+                    {"$set": {"status": "failed", "error": "Could not open video file"}}
+                )
             yield "data: " + json.dumps({"success": False, "message": "Could not open video file"}) + "\n\n"
             return
         
@@ -684,8 +727,11 @@ def process_pavement_video(video_path, selected_model, coordinates):
         
         logger.info(f"Video properties: {frame_width}x{frame_height}, {frame_rate} FPS, {total_frames} frames")
         
-        # Set up output video writer
-        output_filename = f"processed_video_{uuid.uuid4().hex}.mp4"
+        # Set up output video writer with timestamp-based naming
+        if video_timestamp:
+            output_filename = f"video_{video_timestamp}_processed.mp4"
+        else:
+            output_filename = f"processed_video_{uuid.uuid4().hex}.mp4"
         output_path = os.path.join("processed_videos", output_filename)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
@@ -747,6 +793,7 @@ def process_pavement_video(video_path, selected_model, coordinates):
                     "detections": detections,
                     "progress": (frame_count / total_frames) * 100,
                     "output_path": output_path,
+                    "video_id": video_id,
                     "performance": {
                         "avg_frame_time": avg_processing_time,
                         "estimated_remaining": estimated_remaining,
@@ -780,8 +827,21 @@ def process_pavement_video(video_path, selected_model, coordinates):
                 "frame_detections": all_detections,
                 "total_unique_detections": len(unique_detections),
                 "total_frame_detections": len(all_detections),
-                "stopped_early": True
+                "stopped_early": True,
+                "output_path": output_path,
+                "video_id": video_id
             }
+            
+            # Update MongoDB document with stopped status
+            if db is not None:
+                db.video_processing.update_one(
+                    {"video_id": video_id},
+                    {"$set": {
+                        "status": "stopped",
+                        "updated_at": datetime.now().isoformat()
+                    }}
+                )
+            
             yield f"data: {json.dumps(stop_data)}\n\n"
         
         # Release resources
@@ -795,6 +855,83 @@ def process_pavement_video(video_path, selected_model, coordinates):
         total_processing_time = time.time() - start_time
         avg_fps = frame_count / total_processing_time if total_processing_time > 0 else 0
         
+        # Upload processed video to S3 if parameters provided
+        processed_video_s3_url = None
+        if aws_folder and s3_folder and video_timestamp:
+            try:
+                processed_video_name = f"video_{video_timestamp}_processed.mp4"
+                s3_key_processed = f"{s3_folder}/{processed_video_name}"
+                upload_success, s3_url_or_error = upload_video_to_s3(output_path, aws_folder, s3_key_processed)
+                if upload_success:
+                    logger.info(f"Uploaded processed video to S3: {s3_url_or_error}")
+                    # Store only the relative S3 path (role/username/video_xxx_processed.mp4)
+                    processed_video_s3_url = s3_key_processed
+                    # Update MongoDB document with processed video RELATIVE URL
+                    # The full S3 URL should be constructed in the frontend/API consumer using a common base URL
+                    if db is not None:
+                        db.video_processing.update_one(
+                            {"video_id": video_id},
+                            {"$set": {
+                                "processed_video_url": processed_video_s3_url,
+                                "status": "completed",
+                                "updated_at": datetime.now().isoformat()
+                            }}
+                        )
+                    # Clean up local processed video after successful upload
+                    try:
+                        os.remove(output_path)
+                        logger.info(f"Cleaned up local processed video: {output_path}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Could not remove local processed video {output_path}: {cleanup_error}")
+                else:
+                    logger.error(f"Failed to upload processed video to S3: {s3_url_or_error}")
+                    if db is not None:
+                        db.video_processing.update_one(
+                            {"video_id": video_id},
+                            {"$set": {
+                                "status": "failed",
+                                "error": f"Failed to upload processed video: {s3_url_or_error}",
+                                "updated_at": datetime.now().isoformat()
+                            }}
+                        )
+            except Exception as upload_error:
+                logger.error(f"Error uploading processed video: {upload_error}")
+                if db is not None:
+                    db.video_processing.update_one(
+                        {"video_id": video_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error": f"Error uploading processed video: {str(upload_error)}",
+                            "updated_at": datetime.now().isoformat()
+                        }}
+                    )
+        
+        # Organize detections by model type
+        model_outputs = {
+            "potholes": [],
+            "cracks": [],
+            "kerbs": []
+        }
+        
+        for detection in unique_detections:
+            if "type" in detection:
+                if detection["type"] == "Pothole":
+                    model_outputs["potholes"].append(detection)
+                elif "Crack" in detection["type"]:
+                    model_outputs["cracks"].append(detection)
+                elif "Kerb" in detection["type"]:
+                    model_outputs["kerbs"].append(detection)
+        
+        # Update MongoDB document with model outputs
+        if db is not None:
+            db.video_processing.update_one(
+                {"video_id": video_id},
+                {"$set": {
+                    "model_outputs": model_outputs,
+                    "updated_at": datetime.now().isoformat()
+                }}
+            )
+        
         # Send final results with performance summary
         final_data = {
             "success": True,
@@ -804,10 +941,12 @@ def process_pavement_video(video_path, selected_model, coordinates):
             "total_unique_detections": len(unique_detections),
             "total_frame_detections": len(all_detections),
             "output_path": output_path,
+            "processed_video_s3_url": processed_video_s3_url,
             "stopped_early": video_processing_stop_flag,
             "selected_model": selected_model,
             "coordinates": coordinates,
             "completed": True,
+            "video_id": video_id,
             "performance_summary": {
                 "total_time": total_processing_time,
                 "avg_fps": avg_fps,
@@ -829,6 +968,16 @@ def process_pavement_video(video_path, selected_model, coordinates):
         
     except Exception as e:
         logger.error(f"Error during video processing: {str(e)}", exc_info=True)
+        # Update MongoDB document with error status
+        if 'db' in locals() and 'video_id' in locals():
+            db.video_processing.update_one(
+                {"video_id": video_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": str(e),
+                    "updated_at": datetime.now().isoformat()
+                }}
+            )
         yield f"data: {json.dumps({'success': False, 'message': str(e)})}\n\n"
         # Send end signal even on error
         yield f"data: {json.dumps({'end': True})}\n\n"
@@ -843,13 +992,71 @@ def process_pavement_video(video_path, selected_model, coordinates):
         if device.type == 'cuda':
             torch.cuda.empty_cache()
         
-        # Clean up temporary file
+        # Clean up temporary input video file
         try:
             if os.path.exists(video_path):
                 os.remove(video_path)
                 logger.info(f"Cleaned up temporary video file: {video_path}")
         except Exception as e:
             logger.warning(f"Could not remove temporary file {video_path}: {e}")
+
+
+def generate_timestamp_filename():
+    """Generate a timestamp-based filename with conflict resolution"""
+    base_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Check if file already exists and add suffix if needed
+    counter = 0
+    timestamp = base_timestamp
+    temp_dir = os.path.dirname(__file__)
+    
+    while True:
+        temp_path = os.path.join(temp_dir, f"video_{timestamp}.mp4")
+        if not os.path.exists(temp_path):
+            break
+        counter += 1
+        timestamp = f"{base_timestamp}_{counter:02d}"
+        
+        # Safety check to prevent infinite loop
+        if counter > 99:
+            timestamp = f"{base_timestamp}_{uuid.uuid4().hex[:8]}"
+            break
+    
+    return timestamp
+
+
+def cleanup_old_processed_videos(max_age_hours=24):
+    """Clean up old processed video files that are older than max_age_hours"""
+    try:
+        processed_videos_dir = os.path.join(os.path.dirname(__file__), '..', 'processed_videos')
+        if not os.path.exists(processed_videos_dir):
+            return
+        
+        current_time = time.time()
+        max_age_seconds = max_age_hours * 3600
+        cleaned_count = 0
+        
+        for filename in os.listdir(processed_videos_dir):
+            if filename.endswith('.mp4'):
+                file_path = os.path.join(processed_videos_dir, filename)
+                try:
+                    file_age = current_time - os.path.getctime(file_path)
+                    if file_age > max_age_seconds:
+                        os.remove(file_path)
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up old processed video: {filename}")
+                except Exception as e:
+                    logger.warning(f"Could not clean up file {filename}: {e}")
+        
+        if cleaned_count > 0:
+            logger.info(f"Cleaned up {cleaned_count} old processed video files")
+            
+    except Exception as e:
+        logger.warning(f"Error during processed videos cleanup: {e}")
+
+
+# Call cleanup on module load to clean any leftover files
+cleanup_old_processed_videos()
 
 @pavement_bp.route('/detect-potholes', methods=['POST'])
 def detect_potholes():
@@ -2630,7 +2837,7 @@ def detect_all():
                     crack_data = {
                         "crack_id": crack_id,
                         "crack_type": crack_type,
-                        "area_cm2": area_cm2,
+                        "area_cm2": round(area_cm2, 2),
                         "area_range": area_range,
                         "confidence": float(conf),
                         "coordinates": coordinates,
@@ -2646,7 +2853,7 @@ def detect_all():
                     crack_data_for_response = {
                         "crack_id": crack_id,
                         "crack_type": crack_type,
-                        "area_cm2": area_cm2,
+                        "area_cm2": round(area_cm2, 2),
                         "area_range": area_range,
                         "confidence": float(conf),
                         "coordinates": coordinates,
@@ -2964,20 +3171,56 @@ def detect_all():
         }), 500 
 
 
+def upload_video_to_s3(local_path, aws_folder, s3_key):
+    """Upload a file to S3 at the specified bucket/key using put_object. aws_folder is used to extract bucket and prefix."""
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.environ.get('AWS_REGION')
+    )
+    # Extract bucket and prefix from aws_folder
+    aws_folder = aws_folder.strip('/')
+    parts = aws_folder.split('/', 1)
+    bucket = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ''
+    # Compose full S3 key
+    full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+    try:
+        with open(local_path, 'rb') as f:
+            s3_client.put_object(Bucket=bucket, Key=full_s3_key, Body=f)
+        return True, f's3://{bucket}/{full_s3_key}'
+    except ClientError as e:
+        print(f"S3 upload error: {e}")
+        return False, str(e)
+
 @pavement_bp.route('/detect-video', methods=['POST'])
 def detect_video():
     """
     API endpoint to detect pavement defects in uploaded video and return SSE stream
     """
     logger.info("Received video detection request")
-    
     # Get parameters from request
     coordinates = request.form.get('coordinates', 'Not Available')
     selected_model = request.form.get('selectedModel', 'All')
-    
+    # Extract user/role/id from session or request (like image endpoints)
+    username = (
+        session.get('username')
+        or request.form.get('username')
+        or (request.json.get('username') if request.is_json else None)
+        or 'Unknown'
+    )
+    role = (
+        session.get('role')
+        or request.form.get('role')
+        or (request.json.get('role') if request.is_json else None)
+        or 'Unknown'
+    )
+    # Use username as id for S3 folder structure
+    s3_role = role.capitalize() if role else 'UnknownRole'
+    s3_id = username
     logger.info(f"Processing video with model: {selected_model}")
     logger.info(f"Coordinates: {coordinates}")
-    
     try:
         # Check if we have video data
         if 'video' not in request.files or not request.files['video']:
@@ -2985,18 +3228,90 @@ def detect_video():
                 "success": False,
                 "message": "No video file provided"
             }), 400
-        
         video_file = request.files['video']
         logger.info(f"Processing video file: {video_file.filename}")
         
-        # Save video temporarily
-        temp_video_path = os.path.join(os.path.dirname(__file__), f"temp_pavement_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+        # Generate timestamp-based filename with conflict resolution
+        video_timestamp = generate_timestamp_filename()
+        original_video_name = f"video_{video_timestamp}.mp4"
+        temp_video_path = os.path.join(os.path.dirname(__file__), original_video_name)
         logger.info(f"Saving video to temporary path: {temp_video_path}")
         video_file.save(temp_video_path)
         
-        # Return SSE stream directly
-        return Response(
-            stream_with_context(process_pavement_video(temp_video_path, selected_model, coordinates)),
+        # Get AWS configuration
+        aws_folder = os.environ.get('AWS_FOLDER', 'LTA')
+        s3_folder = f"{s3_role}/{s3_id}"
+        
+        # Generate a unique video_id here and pass it to process_pavement_video
+        video_id = str(ObjectId())
+        
+        # Upload original video to S3 immediately
+        original_video_s3_url = None
+        try:
+            s3_key_original = f"{s3_folder}/{original_video_name}"
+            upload_success, s3_url_or_error = upload_video_to_s3(temp_video_path, aws_folder, s3_key_original)
+            if upload_success:
+                logger.info(f"Uploaded original video to S3: {s3_url_or_error}")
+                # Store only the relative S3 path (role/username/video_xxx.mp4)
+                original_video_s3_url = s3_key_original
+                # Update MongoDB document with original video RELATIVE URL using video_id
+                db = connect_to_db()
+                if db is not None:
+                    db.video_processing.update_one(
+                        {"video_id": video_id},
+                        {"$set": {"original_video_url": original_video_s3_url}}
+                    )
+            else:
+                logger.error(f"Failed to upload original video to S3: {s3_url_or_error}")
+        except Exception as e:
+            logger.error(f"Error uploading original video: {e}")
+        
+        # Create initial video_processing document here
+        timestamp = datetime.now().isoformat()
+        models_to_run = []
+        if selected_model == "All":
+            models_to_run = ["potholes", "cracks", "kerbs"]
+        elif selected_model == "Potholes":
+            models_to_run = ["potholes"]
+        elif selected_model == "Alligator Cracks":
+            models_to_run = ["cracks"]
+        elif selected_model == "Kerbs":
+            models_to_run = ["kerbs"]
+        db = connect_to_db()
+        if db is not None:
+            video_doc = {
+                "video_id": video_id,
+                "original_video_url": original_video_s3_url,
+                "processed_video_url": None,
+                "role": role,
+                "username": username,
+                "timestamp": timestamp,
+                "models_run": models_to_run,
+                "status": "processing",
+                "model_outputs": {
+                    "potholes": [],
+                    "cracks": [],
+                    "kerbs": []
+                },
+                "created_at": timestamp,
+                "updated_at": timestamp
+            }
+            db.video_processing.insert_one(video_doc)
+        
+        # Process video and return SSE stream
+        # The processed video will be uploaded to S3 automatically when processing completes
+        sse_response = Response(
+            stream_with_context(process_pavement_video(
+                temp_video_path, 
+                selected_model, 
+                coordinates, 
+                video_timestamp, 
+                aws_folder, 
+                s3_folder,
+                username,
+                role,
+                video_id  # Pass video_id to processing function
+            )),
             mimetype='text/event-stream',
             headers={
                 'Cache-Control': 'no-cache',
@@ -3006,10 +3321,11 @@ def detect_video():
             }
         )
         
+        return sse_response
+        
     except Exception as e:
         logger.error(f"Error during video processing setup: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
-
 
 @pavement_bp.route('/stop-video-processing', methods=['POST'])
 def stop_video_processing():
@@ -3032,3 +3348,89 @@ def stop_video_processing():
     except Exception as e:
         logger.error(f"Error stopping video processing: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
+
+@pavement_bp.route('/video-processing/<video_id>', methods=['GET'])
+def get_video_processing_status(video_id):
+    """
+    API endpoint to get video processing status and results
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect to database"
+            }), 500
+        
+        # Find video processing document
+        video_doc = db.video_processing.find_one({"video_id": video_id})
+        if not video_doc:
+            return jsonify({
+                "success": False,
+                "message": f"Video processing record not found for ID: {video_id}"
+            }), 404
+        
+        # Convert ObjectId to string for JSON serialization
+        video_doc["_id"] = str(video_doc["_id"])
+        
+        return jsonify({
+            "success": True,
+            "video_processing": video_doc
+        })
+        
+    except Exception as e:
+        logger.error(f"Error retrieving video processing status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error retrieving video processing status: {str(e)}"
+        }), 500
+
+
+@pavement_bp.route('/video-processing/list', methods=['GET'])
+def list_video_processing():
+    """
+    API endpoint to list all video processing records
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect to database"
+            }), 500
+        
+        # Get optional query parameters
+        username = request.args.get('username')
+        role = request.args.get('role')
+        status = request.args.get('status')
+        
+        # Build query filter
+        query = {}
+        if username:
+            query["username"] = username
+        if role:
+            query["role"] = role
+        if status:
+            query["status"] = status
+        
+        # Get all video processing records, sorted by timestamp descending
+        video_docs = list(db.video_processing.find(
+            query,
+            sort=[("timestamp", -1)]
+        ))
+        
+        # Convert ObjectId to string for JSON serialization
+        for doc in video_docs:
+            doc["_id"] = str(doc["_id"])
+        
+        return jsonify({
+            "success": True,
+            "video_processing_records": video_docs
+        })
+        
+    except Exception as e:
+        logger.error(f"Error listing video processing records: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error listing video processing records: {str(e)}"
+        }), 500
