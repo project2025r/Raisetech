@@ -31,6 +31,11 @@ const VideoDefectDetection = () => {
   const [allDetections, setAllDetections] = useState([]);
   const [videoResults, setVideoResults] = useState(null);
   
+  // Add new state for frame-by-frame updates
+  const [currentDetections, setCurrentDetections] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const streamRef = useRef(null);
+
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   const recordingTimerRef = useRef(null);
@@ -116,6 +121,15 @@ const VideoDefectDetection = () => {
       setProcessedVideo(frameBuffer[currentFrameIndex]);
     }
   }, [currentFrameIndex, frameBuffer]);
+
+  // Add cleanup effect for SSE stream
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.abort();
+      }
+    };
+  }, []);
 
   // Handle video file selection
   const handleVideoChange = (e) => {
@@ -211,6 +225,7 @@ const VideoDefectDetection = () => {
       return;
     }
 
+    // Reset states
     setLoading(true);
     setError('');
     setIsProcessing(true);
@@ -221,15 +236,19 @@ const VideoDefectDetection = () => {
     setCurrentFrameIndex(0);
     setProcessingProgress(0);
     setAllDetections([]);
-    setProcessedVideo(null); // Reset processed video
-    setVideoResults(null);   // Reset video results
+    setCurrentDetections([]);
+    setProcessedVideo(null);
+    setVideoResults(null);
+    setShowResults(false);
+
+    // Create abort controller for cleanup
+    streamRef.current = new AbortController();
 
     try {
       const formData = new FormData();
       formData.append('video', videoFile);
       formData.append('selectedModel', selectedModel);
       formData.append('coordinates', coordinates);
-      // Add username and role from sessionStorage (like image endpoints)
       const userString = sessionStorage.getItem('user');
       const user = userString ? JSON.parse(userString) : null;
       formData.append('username', user?.username || 'Unknown');
@@ -237,20 +256,18 @@ const VideoDefectDetection = () => {
 
       console.log('Starting video processing with model:', selectedModel);
 
-      // Create FormData for SSE request
       const sseUrl = '/api/pavement/detect-video';
       
-      // Use fetch for SSE with FormData
       const response = await fetch(sseUrl, {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: streamRef.current.signal
       });
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Handle SSE stream
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
@@ -273,14 +290,8 @@ const VideoDefectDetection = () => {
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.substring(6));
-                  console.log('Received SSE data:', {
-                    hasFrame: !!data.frame,
-                    frameLength: data.frame ? data.frame.length : 0,
-                    progress: data.progress,
-                    frameCount: data.frame_count,
-                    detections: data.detections ? data.detections.length : 0
-                  });
-
+                  
+                  // Handle error case
                   if (data.success === false) {
                     setError(data.message || 'Video processing failed');
                     setIsProcessing(false);
@@ -289,41 +300,39 @@ const VideoDefectDetection = () => {
                     return;
                   }
 
+                  // Update progress immediately
+                  if (data.progress !== undefined) {
+                    setProcessingProgress(data.progress);
+                    // Show results section as soon as processing starts
+                    if (!showResults && data.progress > 0) {
+                      setShowResults(true);
+                    }
+                  }
+
+                  // Update frame display immediately
                   if (data.frame && typeof data.frame === 'string' && data.frame.length > 1000) {
-                    // Update frame buffer and current index for real-time display
                     setFrameBuffer(prev => {
                       const newBuffer = [...prev, data.frame];
-                      
-                      // Update current frame index to the latest frame for live preview
-                      setCurrentFrameIndex(newBuffer.length - 1);
-                      
-                      // Start showing frames immediately
-                      if (newBuffer.length === 1) {
-                        setIsBuffering(false);
-                        setIsPlaying(false); // Don't auto-play during live processing
-                        setProcessedVideo(data.frame); // Show the first frame immediately
-                      }
-                      
                       return newBuffer;
                     });
                     
-                    // Update the displayed frame for real-time preview
+                    // Always show the latest frame during processing
                     setProcessedVideo(data.frame);
+                    setCurrentFrameIndex(prev => prev + 1);
+                    
+                    // Remove buffering overlay after first frame
+                    if (isBuffering) {
+                      setIsBuffering(false);
+                    }
                   }
 
-                  // Update progress
-                  if (data.progress !== undefined) {
-                    setProcessingProgress(data.progress);
-                    console.log(`Processing progress: ${data.progress.toFixed(1)}%`);
-                  }
-
-                  // Update detections with upsert behavior
+                  // Update detections immediately
                   if (data.detections && data.detections.length > 0) {
+                    setCurrentDetections(data.detections);
                     setAllDetections(prev => {
-                      // Create a Map to store the latest detection for each ID
                       const latestDetectionsMap = new Map();
                       
-                      // First, add all existing detections to the map
+                      // Add existing detections
                       prev.forEach(detection => {
                         const id = detection.track_id || detection.id;
                         if (id) {
@@ -331,7 +340,7 @@ const VideoDefectDetection = () => {
                         }
                       });
                       
-                      // Then update/add new detections to the map
+                      // Add/update new detections
                       data.detections.forEach(newDetection => {
                         const id = newDetection.track_id || newDetection.id;
                         if (id) {
@@ -339,7 +348,6 @@ const VideoDefectDetection = () => {
                         }
                       });
                       
-                      // Convert map values back to array
                       return Array.from(latestDetectionsMap.values());
                     });
                   }
@@ -351,22 +359,16 @@ const VideoDefectDetection = () => {
                     setIsProcessing(false);
                     setLoading(false);
                     setIsBuffering(false);
-                    setProcessingProgress(100); // Ensure progress shows 100%
-                    
-                    // Reset to first frame for playback after processing
+                    setProcessingProgress(100);
                     setCurrentFrameIndex(0);
                     setIsPlaying(false);
-                    
                     console.log('Video processing completed');
-                    console.log(`Total unique detections: ${data.total_unique_detections || data.all_detections.length}`);
-                    console.log(`Total frame detections: ${data.total_frame_detections || data.all_detections.length}`);
-                    console.log(`Total frames processed: ${frameBuffer.length}`);
                     return;
                   }
 
-                  // Handle explicit end signal
+                  // Handle end signal
                   if (data.end) {
-                    console.log('Received end signal, closing stream');
+                    console.log('Received end signal');
                     setIsProcessing(false);
                     setLoading(false);
                     setIsBuffering(false);
@@ -379,13 +381,16 @@ const VideoDefectDetection = () => {
             }
           }
         } catch (streamError) {
-          console.error('Stream processing error:', streamError);
-          setError('Error processing video stream');
+          if (streamError.name === 'AbortError') {
+            console.log('Stream aborted by user');
+          } else {
+            console.error('Stream processing error:', streamError);
+            setError('Error processing video stream');
+          }
           setIsProcessing(false);
           setLoading(false);
           setIsBuffering(false);
         } finally {
-          // Clean up reader
           if (reader) {
             try {
               reader.releaseLock();
@@ -396,8 +401,7 @@ const VideoDefectDetection = () => {
         }
       };
 
-      processStream();
-
+      await processStream();
     } catch (error) {
       console.error('Video processing error:', error);
       setError(error.message || 'Video processing failed');
@@ -430,6 +434,7 @@ const VideoDefectDetection = () => {
     setProcessedVideo(null);
     setVideoResults(null);
     setAllDetections([]);
+    setCurrentDetections([]);
     setFrameBuffer([]);
     setCurrentFrameIndex(0);
     setIsProcessing(false);
@@ -439,7 +444,7 @@ const VideoDefectDetection = () => {
     setProcessingProgress(0);
     setError('');
     setSelectedModel('All');
-    
+    setShowResults(false); // <-- Ensure table is hidden after reset
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -661,7 +666,7 @@ const VideoDefectDetection = () => {
                 </Button>
               </div>
 
-              {/* Processing Progress */}
+              {/* Always show progress during processing */}
               {isProcessing && (
                 <div className="mt-3">
                   <div className="d-flex justify-content-between">
@@ -670,9 +675,12 @@ const VideoDefectDetection = () => {
                   </div>
                   <div className="progress mt-1">
                     <div
-                      className="progress-bar"
+                      className="progress-bar progress-bar-striped progress-bar-animated"
                       role="progressbar"
                       style={{ width: `${processingProgress}%` }}
+                      aria-valuenow={processingProgress}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
                     ></div>
                   </div>
                 </div>
@@ -682,64 +690,21 @@ const VideoDefectDetection = () => {
         </Col>
 
         <Col md={6}>
-          {/* Processed Video Display */}
-          {processedVideo && (
-            <Card className="mb-4">
-              <Card.Header className="bg-success text-white">
-                <h5 className="mb-0">Processed Video</h5>
-              </Card.Header>
-              <Card.Body>
-                <div className="processed-video-container">
-                  {isBuffering && (
-                    <div className="processing-overlay">
-                      <Spinner animation="border" />
-                      <span className="ms-2">Buffering video...</span>
-                    </div>
-                  )}
-                  
-                  <img
-                    src={processedVideo.startsWith('data:') ? processedVideo : `data:image/jpeg;base64,${processedVideo}`}
-                    alt="Processed frame"
-                    style={{ maxWidth: '100%' }}
-                  />
-                  
-                  {/* Video Controls */}
-                  {frameBuffer.length > 0 && (
-                    <div className="video-controls mt-3">
-                      <div className="d-flex gap-2 mb-2">
-                        <Button size="sm" variant="outline-primary" onClick={handleRewind}>
-                          ⏪
-                        </Button>
-                        <Button size="sm" variant="outline-primary" onClick={handlePlayPause}>
-                          {isPlaying ? '⏸️' : '▶️'}
-                        </Button>
-                        <Button size="sm" variant="outline-primary" onClick={handleForward}>
-                          ⏩
-                        </Button>
-                      </div>
-                      
-                      <Form.Range
-                        min={0}
-                        max={frameBuffer.length - 1}
-                        value={currentFrameIndex}
-                        onChange={(e) => setCurrentFrameIndex(Number(e.target.value))}
-                      />
-                      
-                      <div className="text-center small text-muted">
-                        Frame {currentFrameIndex + 1} of {frameBuffer.length}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </Card.Body>
-            </Card>
-          )}
-
-          {/* Detection Results Table */}
-          {allDetections.length > 0 && (
+          {/* Show detection results as soon as we have any, and always after processing is complete if results exist */}
+          {((showResults || allDetections.length > 0 || (!isProcessing && videoResults && allDetections.length > 0))) && (
             <Card>
               <Card.Header className="bg-info text-white">
                 <h5 className="mb-0">Detection Results</h5>
+                {isProcessing && (
+                  <small className="text-white-50">
+                    Results update in real-time as processing continues...
+                  </small>
+                )}
+                {!isProcessing && videoResults && (
+                  <small className="text-success">
+                    <b>Processing Complete.</b> Final results are shown below.
+                  </small>
+                )}
               </Card.Header>
               <Card.Body>
                 {/* Summary */}

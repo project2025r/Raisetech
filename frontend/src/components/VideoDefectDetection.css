@@ -1,5 +1,5 @@
 .video-defect-detection {
-  max-width: 100%;
+  padding: 1rem;
 }
 
 .webcam-container {
@@ -18,10 +18,10 @@
 
 .processed-video-container {
   position: relative;
-  border: 2px solid #28a745;
-  border-radius: 8px;
-  overflow: hidden;
-  max-width: 100%;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .processed-video-container img {
@@ -36,20 +36,21 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-size: 18px;
-  z-index: 10;
+  background: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(2px);
+  border-radius: 4px;
+  z-index: 1;
 }
 
 .video-controls {
-  background: #f8f9fa;
-  padding: 10px;
-  border-radius: 5px;
-  border: 1px solid #dee2e6;
+  width: 100%;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
 }
 
 .video-controls .btn {
@@ -66,7 +67,7 @@
 .progress-bar {
   background-color: #007bff;
   height: 100%;
-  transition: width 0.3s ease;
+  transition: width 0.3s ease-in-out;
 }
 
 .detection-summary .badge {
@@ -119,10 +120,11 @@
 }
 
 .detection-table-container {
-  max-height: 400px;
+  max-height: 300px;
   overflow-y: auto;
-  border-radius: 8px;
-  border: 1px solid #dee2e6;
+  margin-top: 1rem;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .detection-table-container table {
@@ -216,4 +218,100 @@
 
 .defect-section .emoji {
   margin-right: 8px;
+} 
+
+/* Smooth transitions for progress bar and results */
+.progress-bar {
+  transition: width 0.3s ease-in-out;
+}
+
+.detection-summary {
+  opacity: 1;
+  transition: opacity 0.3s ease-in-out;
+}
+
+/* Improve visibility of processing status */
+.batch-processing-status {
+  background: rgba(0, 123, 255, 0.1);
+  padding: 1rem;
+  border-radius: 4px;
+  margin: 1rem 0;
+}
+
+/* Animated spinner for processing state */
+.processing-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Smooth fade-in for new content */
+.fade-in {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Improve table readability */
+.table {
+  margin-bottom: 0;
+}
+
+.table th {
+  background: rgba(0, 0, 0, 0.05);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* Style improvements for real-time updates */
+.detection-results {
+  position: relative;
+}
+
+.update-indicator {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  font-size: 0.8rem;
+  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.update-indicator .dot {
+  width: 8px;
+  height: 8px;
+  background: #28a745;
+  border-radius: 50%;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+  .video-controls {
+    padding: 0.5rem;
+  }
+  
+  .detection-table-container {
+    max-height: 200px;
+  }
+  
+  .table th, .table td {
+    padding: 0.5rem;
+    font-size: 0.9rem;
+  }
 } 
