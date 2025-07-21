@@ -1126,14 +1126,14 @@ def detect_potholes():
         processed_image = image.copy()
         
         # First, classify the image to check if it contains a road
-        classification_result = classify_road_image(processed_image, models)
+        # classification_result = classify_road_image(processed_image, models)
         
-        if not classification_result["is_road"]:
-            return jsonify({
-                "success": False,
-                "message": "No road detected in the image. Unable to process further.",
-                "classification": classification_result
-            }), 400
+        # if not classification_result["is_road"]:
+        #     return jsonify({
+        #         "success": False,
+        #         "message": "No road detected in the image. Unable to process further.",
+        #         "classification": classification_result
+        #     }), 400
         
         # Run depth estimation if MiDaS is available
         depth_map = None
@@ -1360,15 +1360,15 @@ def detect_cracks():
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         processed_image = image.copy()
 
-        # First, classify the image to check if it contains a road
-        classification_result = classify_road_image(processed_image, models)
+        # # First, classify the image to check if it contains a road
+        # classification_result = classify_road_image(processed_image, models)
 
-        if not classification_result["is_road"]:
-            return jsonify({
-                "success": False,
-                "message": "No road detected in the image. Unable to process further.",
-                "classification": classification_result
-            }), 400
+        # if not classification_result["is_road"]:
+        #     return jsonify({
+        #         "success": False,
+        #         "message": "No road detected in the image. Unable to process further.",
+        #         "classification": classification_result
+        #     }), 400
 
         # Run crack detection with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1592,15 +1592,15 @@ def detect_kerbs():
         # Process the image
         processed_image = image.copy()
 
-        # First, classify the image to check if it contains a road
-        classification_result = classify_road_image(processed_image, models)
+        # # First, classify the image to check if it contains a road
+        # classification_result = classify_road_image(processed_image, models)
 
-        if not classification_result["is_road"]:
-            return jsonify({
-                "success": False,
-                "message": "No road detected in the image. Unable to process further.",
-                "classification": classification_result
-            }), 400
+        # if not classification_result["is_road"]:
+        #     return jsonify({
+        #         "success": False,
+        #         "message": "No road detected in the image. Unable to process further.",
+        #         "classification": classification_result
+        #     }), 400
 
         # Detect kerbs using YOLOv8 model with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -2525,15 +2525,15 @@ def detect_all():
         # Keep original image unchanged for model processing
         original_image = image.copy()
 
-        # First, classify the image to check if it contains a road
-        classification_result = classify_road_image(original_image, models)
+        # # First, classify the image to check if it contains a road
+        # classification_result = classify_road_image(original_image, models)
 
-        if not classification_result["is_road"]:
-            return jsonify({
-                "success": False,
-                "message": "No road detected in the image. Unable to process further.",
-                "classification": classification_result
-            }), 400
+        # if not classification_result["is_road"]:
+        #     return jsonify({
+        #         "success": False,
+        #         "message": "No road detected in the image. Unable to process further.",
+        #         "classification": classification_result
+        #     }), 400
 
         # Debug: Log image shape and hash for verification
         print(f"MODEL ISOLATION DEBUG: Original image shape: {original_image.shape}")

@@ -1405,7 +1405,7 @@ const Pavement = () => {
       </Tabs>
 
       {/* Classification Error Modal */}
-      <Modal
+      {/* / <Modal
         show={showClassificationModal}
         onHide={() => setShowClassificationModal(false)}
         centered
@@ -1444,7 +1444,7 @@ const Pavement = () => {
             Try Another Image
           </Button>
         </Modal.Footer>
-      </Modal>
+      </Modal> */}
     </Container>
   );
 };
