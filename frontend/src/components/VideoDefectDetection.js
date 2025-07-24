@@ -270,6 +270,14 @@ const VideoDefectDetection = () => {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
+
+      // Helper to accumulate detections
+      const appendDetections = (detections) => {
+        if (detections && Array.isArray(detections) && detections.length > 0) {
+          setAllDetections(prev => [...prev, ...detections]);
+        }
+      };
 
       const processStream = async () => {
         try {
@@ -283,14 +291,16 @@ const VideoDefectDetection = () => {
               break;
             }
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n');
+            buffer += decoder.decode(value, { stream: true });
+            let lines = buffer.split('\n');
+            // Keep the last line in buffer if it's incomplete
+            buffer = lines.pop();
 
             for (const line of lines) {
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.substring(6));
-                  
+
                   // Handle error case
                   if (data.success === false) {
                     setError(data.message || 'Video processing failed');
@@ -303,7 +313,6 @@ const VideoDefectDetection = () => {
                   // Update progress immediately
                   if (data.progress !== undefined) {
                     setProcessingProgress(data.progress);
-                    // Show results section as soon as processing starts
                     if (!showResults && data.progress > 0) {
                       setShowResults(true);
                     }
@@ -315,41 +324,17 @@ const VideoDefectDetection = () => {
                       const newBuffer = [...prev, data.frame];
                       return newBuffer;
                     });
-                    
-                    // Always show the latest frame during processing
                     setProcessedVideo(data.frame);
                     setCurrentFrameIndex(prev => prev + 1);
-                    
-                    // Remove buffering overlay after first frame
                     if (isBuffering) {
                       setIsBuffering(false);
                     }
                   }
 
-                  // Update detections immediately
+                  // Accumulate detections per frame
                   if (data.detections && data.detections.length > 0) {
                     setCurrentDetections(data.detections);
-                    setAllDetections(prev => {
-                      const latestDetectionsMap = new Map();
-                      
-                      // Add existing detections
-                      prev.forEach(detection => {
-                        const id = detection.track_id || detection.id;
-                        if (id) {
-                          latestDetectionsMap.set(id, detection);
-                        }
-                      });
-                      
-                      // Add/update new detections
-                      data.detections.forEach(newDetection => {
-                        const id = newDetection.track_id || newDetection.id;
-                        if (id) {
-                          latestDetectionsMap.set(id, newDetection);
-                        }
-                      });
-                      
-                      return Array.from(latestDetectionsMap.values());
-                    });
+                    appendDetections(data.detections);
                   }
 
                   // Handle final results
