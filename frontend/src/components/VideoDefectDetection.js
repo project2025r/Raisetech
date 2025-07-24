@@ -21,6 +21,7 @@ const VideoDefectDetection = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordedChunks, setRecordedChunks] = useState([]);
+  const recordedChunksRef = useRef([]); // <-- Add this line
   
   // Video processing states
   const [frameBuffer, setFrameBuffer] = useState([]);
@@ -45,6 +46,12 @@ const VideoDefectDetection = () => {
   const BUFFER_SIZE = 10;
   const PLAYBACK_FPS = 15;
   const MAX_RECORDING_TIME = 60; // 1 minute limit
+
+  const [totalFrames, setTotalFrames] = useState(null);
+  const totalFramesValid = Number.isFinite(totalFrames) && totalFrames > 0;
+
+  const [videoDuration, setVideoDuration] = useState(null);
+  const [videoFPS, setVideoFPS] = useState(30); // Default FPS
 
   // Available models
   const modelOptions = [
@@ -122,6 +129,34 @@ const VideoDefectDetection = () => {
     }
   }, [currentFrameIndex, frameBuffer]);
 
+  // When videoPreview is set, extract duration and FPS
+  useEffect(() => {
+    if (videoPreview) {
+      const video = document.createElement('video');
+      video.src = videoPreview;
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        setVideoDuration(video.duration);
+        // Try to get FPS from video tracks if available
+        if (video.webkitVideoDecodedByteCount !== undefined) {
+          // Not standard, but some browsers may expose frameRate
+          try {
+            const tracks = video.videoTracks || (video.captureStream && video.captureStream().getVideoTracks());
+            if (tracks && tracks.length > 0 && tracks[0].getSettings) {
+              const settings = tracks[0].getSettings();
+              if (settings.frameRate) {
+                setVideoFPS(settings.frameRate);
+              }
+            }
+          } catch (e) {}
+        }
+      };
+    }
+  }, [videoPreview]);
+
+  // Helper to estimate total frames if backend total_frames is invalid
+  const estimatedTotalFrames = videoDuration && videoFPS ? Math.round(videoDuration * videoFPS) : null;
+
   // Add cleanup effect for SSE stream
   useEffect(() => {
     return () => {
@@ -131,16 +166,35 @@ const VideoDefectDetection = () => {
     };
   }, []);
 
+  const [warning, setWarning] = useState('');
+
   // Handle video file selection
   const handleVideoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      setVideoFile(file);
-      setVideoPreview(URL.createObjectURL(file));
-      setProcessedVideo(null);
-      setVideoResults(null);
-      setAllDetections([]);
-      setError('');
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        if (video.duration > 60) {
+          setWarning('Video upload is restricted to 1 minute. Please select a shorter video.');
+          setVideoFile(null);
+          setVideoPreview(null);
+          setProcessedVideo(null);
+          setVideoResults(null);
+          setAllDetections([]);
+          setError('');
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        } else {
+          setWarning('');
+          setVideoFile(file);
+          setVideoPreview(URL.createObjectURL(file));
+          setProcessedVideo(null);
+          setVideoResults(null);
+          setAllDetections([]);
+          setError('');
+        }
+      };
+      video.src = URL.createObjectURL(file);
     }
   };
 
@@ -159,6 +213,7 @@ const VideoDefectDetection = () => {
 
   // Start recording
   const handleStartRecording = async () => {
+    console.log('handleStartRecording called');
     if (!webcamRef.current || !webcamRef.current.stream) {
       setError('Camera not available');
       return;
@@ -166,6 +221,7 @@ const VideoDefectDetection = () => {
 
     try {
       setRecordedChunks([]);
+      recordedChunksRef.current = [];
       setRecordingTime(0);
       setIsRecording(true);
       setError('');
@@ -177,21 +233,48 @@ const VideoDefectDetection = () => {
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
+        console.log('ondataavailable fired, size:', event.data.size);
         if (event.data.size > 0) {
-          setRecordedChunks(prev => [...prev, event.data]);
+          setRecordedChunks(prev => {
+            const updated = [...prev, event.data];
+            recordedChunksRef.current = updated; // <-- Keep ref in sync
+            return updated;
+          });
         }
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        console.log('mediaRecorder.onstop fired');
+        // Use the ref to get the latest chunks
+        const chunks = recordedChunksRef.current;
+        // Debug logs
+        console.log('onstop: recordedChunks length:', chunks.length);
+        let totalSize = 0;
+        chunks.forEach((c, i) => {
+          console.log(`Chunk ${i} size:`, c.size);
+          totalSize += c.size;
+        });
+        console.log('Total recorded size:', totalSize);
+        const blob = new Blob(chunks, { type: 'video/webm' });
         const file = new File([blob], `recorded_video_${Date.now()}.webm`, { type: 'video/webm' });
         setVideoFile(file);
         setVideoPreview(URL.createObjectURL(blob));
         setIsRecording(false);
         setRecordingTime(0);
+        // Reset the ref and state for next recording
+        recordedChunksRef.current = [];
+        setRecordedChunks([]);
       };
 
-      mediaRecorder.start();
+      mediaRecorder.onstart = () => {
+        console.log('mediaRecorder.onstart fired');
+      };
+      mediaRecorder.onerror = (e) => {
+        console.error('mediaRecorder.onerror', e);
+      };
+
+      console.log('Calling mediaRecorder.start(1000)');
+      mediaRecorder.start(1000); // timeslice: 1000ms
     } catch (error) {
       setError('Failed to start recording: ' + error.message);
       setIsRecording(false);
@@ -200,6 +283,7 @@ const VideoDefectDetection = () => {
 
   // Stop recording
   const handleStopRecording = () => {
+    console.log('handleStopRecording called');
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
@@ -300,6 +384,8 @@ const VideoDefectDetection = () => {
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.substring(6));
+                  // Debug log for every SSE message
+                  console.log('SSE data:', data);
 
                   // Handle error case
                   if (data.success === false) {
@@ -311,9 +397,23 @@ const VideoDefectDetection = () => {
                   }
 
                   // Update progress immediately
-                  if (data.progress !== undefined) {
+                  if (data.progress !== undefined && totalFramesValid) {
                     setProcessingProgress(data.progress);
                     if (!showResults && data.progress > 0) {
+                      setShowResults(true);
+                    }
+                  } else if (data.frame_count !== undefined && totalFramesValid) {
+                    // Calculate progress if not provided but backend totalFrames is valid
+                    const progress = (data.frame_count / totalFrames) * 100;
+                    setProcessingProgress(progress);
+                    if (!showResults && progress > 0) {
+                      setShowResults(true);
+                    }
+                  } else if (data.frame_count !== undefined && estimatedTotalFrames) {
+                    // Fallback: use estimated total frames from duration and FPS
+                    const progress = (data.frame_count / estimatedTotalFrames) * 100;
+                    setProcessingProgress(progress);
+                    if (!showResults && progress > 0) {
                       setShowResults(true);
                     }
                   }
@@ -358,6 +458,11 @@ const VideoDefectDetection = () => {
                     setLoading(false);
                     setIsBuffering(false);
                     return;
+                  }
+
+                  // Update totalFrames when receiving SSE data:
+                  if (data.total_frames !== undefined) {
+                    setTotalFrames(data.total_frames);
                   }
                 } catch (parseError) {
                   console.warn('Error parsing SSE data:', parseError);
@@ -484,6 +589,11 @@ const VideoDefectDetection = () => {
               {error && (
                 <Alert variant="danger" className="mb-3">
                   {error}
+                </Alert>
+              )}
+              {warning && (
+                <Alert variant="warning" className="mb-3">
+                  {warning}
                 </Alert>
               )}
 
@@ -654,20 +764,38 @@ const VideoDefectDetection = () => {
               {/* Always show progress during processing */}
               {isProcessing && (
                 <div className="mt-3">
-                  <div className="d-flex justify-content-between">
-                    <span>Processing Progress:</span>
-                    <span>{processingProgress.toFixed(1)}%</span>
-                  </div>
-                  <div className="progress mt-1">
-                    <div
-                      className="progress-bar progress-bar-striped progress-bar-animated"
-                      role="progressbar"
-                      style={{ width: `${processingProgress}%` }}
-                      aria-valuenow={processingProgress}
-                      aria-valuemin="0"
-                      aria-valuemax="100"
-                    ></div>
-                  </div>
+                  {(totalFramesValid || estimatedTotalFrames) && processingProgress > 0 && Number.isFinite(processingProgress) ? (
+                    <>
+                      <div className="d-flex justify-content-between">
+                        <span>Processing Progress:</span>
+                        <span>{Math.max(0, Math.min(100, processingProgress)).toFixed(1)}%</span>
+                      </div>
+                      <div className="progress mt-1">
+                        <div
+                          className="progress-bar progress-bar-striped progress-bar-animated"
+                          role="progressbar"
+                          style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
+                          aria-valuenow={Math.max(0, Math.min(100, processingProgress))}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                        ></div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="d-flex align-items-center mt-3">
+                      <span>Processing...</span>
+                      <div className="progress flex-grow-1 ms-2" style={{ height: '20px' }}>
+                        <div
+                          className="progress-bar progress-bar-striped progress-bar-animated"
+                          role="progressbar"
+                          style={{ width: `100%`, backgroundColor: '#e0e0e0' }}
+                          aria-valuenow={0}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                        ></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </Card.Body>

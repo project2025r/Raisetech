@@ -362,7 +362,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
             if model_key not in models:
                 logger.warning(f"Model {model_key} not available, skipping")
                 continue
-                
+            
+            # Initialize detection_id for each model
+            detection_id = 1
             # Use a fresh copy of the original frame for each model
             inference_frame = original_frame.copy()
             
@@ -386,6 +388,8 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                         results = models[model_key](inference_frame, conf=0.2, device='cpu')
                     else:
                         raise e
+            
+            # Remove per-frame detection_id logic; all_detections will be handled after tracking
             
             # Process results based on model type
             if model_key == "potholes":
@@ -449,8 +453,11 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                     
                                     # Draw bounding box
                                     cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                    cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    # --- Draw label with ID and metrics ---
+                                    label = f"ID {detection_id}, A:{dimensions['area_cm2']:.1f}cm^2, D:{depth_metrics['max_depth_cm']:.1f}cm, V:{volume:.1f}cm^3"
+                                    (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                    cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), (0, 255, 0), -1)
+                                    cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                                     
                                     # Add detection to results with complete measurements
                                     all_detections.append({
@@ -463,13 +470,17 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                         'area_cm2': float(dimensions["area_cm2"]),
                                         'depth_cm': float(depth_metrics["max_depth_cm"]),
                                         'volume': float(volume),
-                                        'volume_range': volume_range
+                                        'volume_range': volume_range,
+                                        'detection_id': detection_id
                                     })
+                                    detection_id += 1
                                 else:
                                     # Draw bounding box
                                     cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                    cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    label = f"ID {detection_id}, Pothole {conf:.2f}"
+                                    (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                    cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), (0, 255, 0), -1)
+                                    cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                                     
                                     # Add detection to results with default values
                                     all_detections.append({
@@ -482,8 +493,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                         'area_cm2': 0.0,
                                         'depth_cm': 0.0,
                                         'volume': 0.0,
-                                        'volume_range': 'Unknown'
+                                        'volume_range': 'Unknown',
+                                        'detection_id': detection_id
                                     })
+                                    detection_id += 1
                         else:
                             # Process only bounding boxes (fallback)
                             for box, conf in zip(boxes, confidences):
@@ -491,8 +504,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 
                                 # Draw bounding box
                                 cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                cv2.putText(detection_frame, f"Pothole {conf:.2f}", (x1, y1 - 10),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                label = f"ID {detection_id}, Pothole {conf:.2f}"
+                                (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), (0, 255, 0), -1)
+                                cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                                 
                                 # Add detection to results without measurements
                                 all_detections.append({
@@ -505,8 +520,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                     'area_cm2': 0.0,
                                     'depth_cm': 0.0,
                                     'volume': 0.0,
-                                    'volume_range': 'Unknown'
+                                    'volume_range': 'Unknown',
+                                    'detection_id': detection_id
                                 })
+                                detection_id += 1
             
             elif model_key == "cracks":
                 # Handle crack detection (segmentation masks)
@@ -555,8 +572,11 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                             # Draw bounding box
                             x1, y1, x2, y2 = map(int, box)
                             cv2.rectangle(detection_frame, (x1, y1), (x2, y2), crack_type["color"], 2)
-                            cv2.putText(detection_frame, f"{crack_type['name']} {conf:.2f}", (x1, y1 - 10),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, crack_type["color"], 2)
+                            # --- Draw label with ID and metrics ---
+                            label = f"ID {detection_id}, {crack_type['name']}, A:{area_cm2:.1f}cm^2"
+                            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                            cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), crack_type["color"], -1)
+                            cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                             
                             # Add detection to results
                             all_detections.append({
@@ -568,10 +588,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'has_mask': True,
                                 'area_cm2': float(area_cm2),
                                 'area_range': area_range,
-                                # 'coordinates': coordinates,
-                                # 'username': username,
-                                # 'role': role
+                                'detection_id': detection_id
                             })
+                            detection_id += 1
             
             elif model_key == "kerbs":
                 # Handle kerb detection (bounding boxes)
@@ -603,8 +622,11 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                             
                             # Draw bounding box
                             cv2.rectangle(detection_frame, (x1, y1), (x2, y2), kerb_type["color"], 2)
-                            cv2.putText(detection_frame, f"{kerb_type['name']} {conf:.2f}", (x1, y1 - 10),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, kerb_type["color"], 2)
+                            # --- Draw label with ID and metrics ---
+                            label = f"ID {detection_id}, {kerb_type['name']}, L:{length_m:.2f}m"
+                            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                            cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), kerb_type["color"], -1)
+                            cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                             
                             # Add detection to results
                             all_detections.append({
@@ -616,10 +638,9 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'kerb_type': 'Concrete Kerb',  # Default kerb type
                                 'condition': kerb_type['name'],
                                 'length_m': float(length_m),
-                                # 'coordinates': coordinates,
-                                # 'username': username,
-                                # 'role': role
+                                'detection_id': detection_id
                             })
+                            detection_id += 1
         
         # Apply tracking if tracker is provided
         if tracker:
@@ -631,6 +652,39 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
         else:
             # No tracking - use raw detections
             display_detections = all_detections
+        
+        # --- Draw bounding boxes and labels using stable track_id ---
+        for detection in display_detections:
+            x1, y1, x2, y2 = detection['bbox']
+            track_id = detection.get('track_id', None)
+            defect_type = detection.get('type', '')
+            color = (0, 255, 0)  # Default green
+            label = f"ID {track_id if track_id is not None else ''}"
+            # Compose label and color based on defect type
+            if defect_type == 'Pothole':
+                area = detection.get('area_cm2', 0)
+                depth = detection.get('depth_cm', 0)
+                volume = detection.get('volume', 0)
+                label += f", A:{area:.1f}cm^2, D:{depth:.1f}cm, V:{volume:.1f}cm^3"
+                color = (0, 255, 0)
+            elif 'Crack' in defect_type:
+                area = detection.get('area_cm2', 0)
+                label += f", {defect_type}, A:{area:.1f}cm^2"
+                color = (0, 0, 255) if 'Alligator' in defect_type else (0, 255, 255)
+            elif 'Kerb' in defect_type:
+                length = detection.get('length_m', 0)
+                condition = detection.get('condition', '')
+                label += f", {condition}, L:{length:.2f}m"
+                color = (0, 0, 255) if 'Damaged' in condition else (0, 255, 0)
+            else:
+                conf = detection.get('confidence', 0)
+                label += f", {defect_type} {conf:.2f}"
+            # Draw bounding box
+            cv2.rectangle(detection_frame, (x1, y1), (x2, y2), color, 2)
+            # Draw label background and text
+            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+            cv2.rectangle(detection_frame, (x1, y1 - label_h - 6), (x1 + label_w, y1), color, -1)
+            cv2.putText(detection_frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
         # Log processing time and performance metrics
         processing_time = time.time() - start_time
@@ -1240,7 +1294,7 @@ def detect_potholes():
                                 volume_range = "Big (>10k)"
                             
                             cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            text = f"ID {pothole_id}, A:{dimensions['area_cm2']:.1f}cm², D:{depth_metrics['max_depth_cm']:.1f}cm"
+                            text = f"ID {pothole_id}, A:{dimensions['area_cm2']:.1f}cm^2, D:{depth_metrics['max_depth_cm']:.1f}cm, V:{volume:.1f}cm^3"
                             cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                             
                             pothole_info = {
@@ -2989,7 +3043,6 @@ def detect_all():
                         
                         all_results["kerbs"].append(kerb_data_for_response)
                         kerb_id += 1
-                        
                 else:
                     # Box-based processing (fallback)
                     if hasattr(result, 'boxes') and result.boxes is not None:
