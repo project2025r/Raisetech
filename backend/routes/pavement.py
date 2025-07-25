@@ -588,7 +588,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'has_mask': True,
                                 'area_cm2': float(area_cm2),
                                 'area_range': area_range,
-                                'detection_id': detection_id
+                                'detection_id': detection_id,
+                                # 'coordinates': coordinates,
+                                # 'username': username,
+                                # 'role': role
                             })
                             detection_id += 1
             
@@ -638,7 +641,10 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                 'kerb_type': 'Concrete Kerb',  # Default kerb type
                                 'condition': kerb_type['name'],
                                 'length_m': float(length_m),
-                                'detection_id': detection_id
+                                'detection_id': detection_id,
+                                # 'coordinates': coordinates,
+                                # 'username': username,
+                                # 'role': role
                             })
                             detection_id += 1
         
@@ -1158,7 +1164,9 @@ def detect_potholes():
         # Get user information
         username = request.json.get('username', 'Unknown')
         role = request.json.get('role', 'Unknown')
-        
+
+        # Check if road classification should be skipped
+        skip_road_classification = request.json.get('skip_road_classification', False)
         # Get image data
         image_data = request.json['image']
         image = decode_base64_image(image_data)
@@ -1178,16 +1186,28 @@ def detect_potholes():
         
         # Process the image
         processed_image = image.copy()
-        
-        # First, classify the image to check if it contains a road
-        # classification_result = classify_road_image(processed_image, models)
-        
-        # if not classification_result["is_road"]:
-        #     return jsonify({
-        #         "success": False,
-        #         "message": "No road detected in the image. Unable to process further.",
-        #         "classification": classification_result
-        #     }), 400
+
+        # Classify the image to check if it contains a road (unless skipped)
+        if skip_road_classification:
+            # Skip classification and assume it's a road
+            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
+        else:
+            # Perform road classification
+            classification_result = classify_road_image(processed_image, models)
+
+            # If no road detected, return classification info without processing
+            if not classification_result["is_road"]:
+                return jsonify({
+                    "success": True,
+                    "processed": False,
+                    "message": "No road detected in the image. Image not processed.",
+                    "classification": classification_result,
+                    "coordinates": coordinates,
+                    "username": username,
+                    "role": role,
+                    "potholes": [],
+                    "processed_image": None
+                }), 200
         
         # Run depth estimation if MiDaS is available
         depth_map = None
@@ -1363,9 +1383,14 @@ def detect_potholes():
         # Return results
         return jsonify({
             "success": True,
+            "processed": True,
+            "classification": classification_result,
             "message": f"Detected {len(pothole_results)} potholes",
             "processed_image": encode_processed_image(processed_image),
-            "potholes": pothole_results
+            "potholes": pothole_results,
+            "coordinates": coordinates,
+            "username": username,
+            "role": role
         })
         
     except Exception as e:
@@ -1399,6 +1424,7 @@ def detect_cracks():
     client_coordinates = request.json.get('coordinates', 'Not Available')
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
+    skip_road_classification = request.json.get('skip_road_classification', False)
 
     try:
         image_data = request.json['image']
@@ -1414,15 +1440,27 @@ def detect_cracks():
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
         processed_image = image.copy()
 
-        # # First, classify the image to check if it contains a road
-        # classification_result = classify_road_image(processed_image, models)
+        # Classify the image to check if it contains a road (unless skipped)
+        if skip_road_classification:
+            # Skip classification and assume it's a road
+            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
+        else:
+            # Perform road classification
+            classification_result = classify_road_image(processed_image, models)
 
-        # if not classification_result["is_road"]:
-        #     return jsonify({
-        #         "success": False,
-        #         "message": "No road detected in the image. Unable to process further.",
-        #         "classification": classification_result
-        #     }), 400
+            # If no road detected, return classification info without processing
+            if not classification_result["is_road"]:
+                return jsonify({
+                    "success": True,
+                    "processed": False,
+                    "message": "No road detected in the image. Image not processed.",
+                    "classification": classification_result,
+                    "coordinates": coordinates,
+                    "username": username,
+                    "role": role,
+                    "cracks": [],
+                    "processed_image": None
+                }), 200
 
         # Run crack detection with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1586,10 +1624,15 @@ def detect_cracks():
 
         return jsonify({
             "success": True,
+            "processed": True,
+            "classification": classification_result,
             "message": f"Detected {len(crack_results)} cracks",
             "processed_image": encoded_image,
             "cracks": crack_results,
-            "type_counts": condition_counts
+            "type_counts": condition_counts,
+            "coordinates": coordinates,
+            "username": username,
+            "role": role
         })
 
     except Exception as e:
@@ -1627,7 +1670,8 @@ def detect_kerbs():
     # Get user information
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
-    
+    skip_road_classification = request.json.get('skip_road_classification', False)
+
     # Get image data
     try:
         image_data = request.json['image']
@@ -1646,15 +1690,27 @@ def detect_kerbs():
         # Process the image
         processed_image = image.copy()
 
-        # # First, classify the image to check if it contains a road
-        # classification_result = classify_road_image(processed_image, models)
+        # Classify the image to check if it contains a road (unless skipped)
+        if skip_road_classification:
+            # Skip classification and assume it's a road
+            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
+        else:
+            # Perform road classification
+            classification_result = classify_road_image(processed_image, models)
 
-        # if not classification_result["is_road"]:
-        #     return jsonify({
-        #         "success": False,
-        #         "message": "No road detected in the image. Unable to process further.",
-        #         "classification": classification_result
-        #     }), 400
+            # If no road detected, return classification info without processing
+            if not classification_result["is_road"]:
+                return jsonify({
+                    "success": True,
+                    "processed": False,
+                    "message": "No road detected in the image. Image not processed.",
+                    "classification": classification_result,
+                    "coordinates": coordinates,
+                    "username": username,
+                    "role": role,
+                    "kerbs": [],
+                    "processed_image": None
+                }), 200
 
         # Detect kerbs using YOLOv8 model with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1820,10 +1876,15 @@ def detect_kerbs():
         
         return jsonify({
             "success": True,
+            "processed": True,
+            "classification": classification_result,
             "message": f"Detected {len(kerb_results)} kerbs",
             "processed_image": encoded_image,
             "kerbs": kerb_results,
-            "condition_counts": condition_counts
+            "condition_counts": condition_counts,
+            "coordinates": coordinates,
+            "username": username,
+            "role": role
         })
     
     except Exception as e:
@@ -2559,7 +2620,8 @@ def detect_all():
     # Get user information
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
-    
+    skip_road_classification = request.json.get('skip_road_classification', False)
+
     # Get image data
     try:
         image_data = request.json['image']
@@ -2579,15 +2641,29 @@ def detect_all():
         # Keep original image unchanged for model processing
         original_image = image.copy()
 
-        # # First, classify the image to check if it contains a road
-        # classification_result = classify_road_image(original_image, models)
+        # Classify the image to check if it contains a road (unless skipped)
+        if skip_road_classification:
+            # Skip classification and assume it's a road
+            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
+        else:
+            # Perform road classification
+            classification_result = classify_road_image(original_image, models)
 
-        # if not classification_result["is_road"]:
-        #     return jsonify({
-        #         "success": False,
-        #         "message": "No road detected in the image. Unable to process further.",
-        #         "classification": classification_result
-        #     }), 400
+            # If no road detected, return classification info without processing
+            if not classification_result["is_road"]:
+                return jsonify({
+                    "success": True,
+                    "processed": False,
+                    "message": "No road detected in the image. Image not processed.",
+                    "classification": classification_result,
+                    "coordinates": coordinates,
+                    "username": username,
+                    "role": role,
+                    "potholes": [],
+                    "cracks": [],
+                    "kerbs": [],
+                    "processed_image": None
+                }), 200
 
         # Debug: Log image shape and hash for verification
         print(f"MODEL ISOLATION DEBUG: Original image shape: {original_image.shape}")
@@ -2609,6 +2685,8 @@ def detect_all():
             "model_errors": {},
             "processed_image": None,
             "success": True,
+            "processed": True,
+            "classification": classification_result,
             "coordinates": coordinates,
             "username": username,
             "role": role

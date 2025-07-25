@@ -516,3 +516,255 @@
 .defect-section .emoji {
   margin-right: 8px;
 }
+
+/* Dynamic Color-Coded Summary Statistics Styles */
+.summary-light-orange {
+  background-color: rgba(255, 193, 7, 0.3) !important;
+  border: 1px solid rgba(255, 193, 7, 0.5);
+}
+
+.summary-medium-orange {
+  background-color: rgba(255, 193, 7, 0.6) !important;
+  border: 1px solid rgba(255, 193, 7, 0.8);
+}
+
+.summary-dark-orange {
+  background-color: rgba(255, 193, 7, 0.9) !important;
+  border: 1px solid #ffc107;
+}
+
+/* Ensure proper contrast for text in all variations */
+.summary-light-orange,
+.summary-medium-orange,
+.summary-dark-orange,
+.bg-success,
+.bg-danger {
+  transition: all 0.3s ease-in-out;
+}
+
+/* Text color adjustments for better readability */
+.summary-light-orange .text-success,
+.summary-medium-orange .text-success {
+  color: #155724 !important;
+}
+
+.summary-light-orange .text-danger,
+.summary-medium-orange .text-danger {
+  color: #721c24 !important;
+}
+
+.summary-light-orange .text-primary,
+.summary-medium-orange .text-primary {
+  color: #004085 !important;
+}
+
+.summary-dark-orange .text-success,
+.bg-success .text-success,
+.bg-danger .text-success {
+  color: #d4edda !important;
+}
+
+.summary-dark-orange .text-danger,
+.bg-success .text-danger,
+.bg-danger .text-danger {
+  color: #f8d7da !important;
+}
+
+.summary-dark-orange .text-primary,
+.bg-success .text-primary,
+.bg-danger .text-primary {
+  color: #cce7ff !important;
+}
+
+/* Responsive adjustments for summary statistics */
+@media (max-width: 768px) {
+  .summary-light-orange,
+  .summary-medium-orange,
+  .summary-dark-orange,
+  .bg-success,
+  .bg-danger {
+    font-size: 0.9rem;
+    padding: 0.75rem;
+  }
+}
+
+/* Road Classification Toggle Styles */
+.road-classification-control {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.road-classification-control::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #28a745, #20c997, #17a2b8);
+  opacity: 0.8;
+}
+
+.road-classification-control:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  border-color: #adb5bd;
+  cursor: pointer;
+}
+
+.road-classification-control:hover::before {
+  opacity: 1;
+}
+
+/* Toggle Button Styles */
+.road-classification-control .btn {
+  border: 2px solid;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.road-classification-control .btn-success {
+  background: linear-gradient(135deg, #28a745, #20c997);
+  border-color: #28a745;
+  color: white;
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.road-classification-control .btn-success:hover {
+  background: linear-gradient(135deg, #218838, #1e7e34);
+  border-color: #1e7e34;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+}
+
+.road-classification-control .btn-outline-secondary {
+  background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+  border-color: #6c757d;
+  color: #6c757d;
+  box-shadow: 0 2px 8px rgba(108, 117, 125, 0.2);
+}
+
+.road-classification-control .btn-outline-secondary:hover {
+  background: linear-gradient(135deg, #6c757d, #5a6268);
+  border-color: #5a6268;
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(108, 117, 125, 0.3);
+}
+
+/* Status Text Styles */
+.road-classification-control .text-muted {
+  font-weight: 500;
+  transition: color 0.3s ease;
+}
+
+.road-classification-control:hover .text-muted {
+  color: #495057 !important;
+}
+
+/* Icon Styles */
+.road-classification-control .info-icon {
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(108, 117, 125, 0.1);
+}
+
+.road-classification-control .info-icon:hover {
+  background: rgba(108, 117, 125, 0.2);
+  transform: scale(1.1);
+}
+
+/* Info Icon Wrapper */
+.info-icon-wrapper {
+  display: inline-block;
+  margin-left: 8px;
+  position: relative;
+}
+
+/* Road Classification Info Icon - Maximum Visibility */
+.road-classification-info-icon {
+  color: #007bff !important;
+  font-size: 14px !important;
+  cursor: help !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  opacity: 1 !important;
+  transition: all 0.2s ease !important;
+  background: rgba(0, 123, 255, 0.1) !important;
+  border-radius: 50% !important;
+  padding: 0 !important;
+  width: 22px !important;
+  height: 22px !important;
+  text-align: center !important;
+  line-height: 1 !important;
+  border: 1px solid rgba(0, 123, 255, 0.3) !important;
+  box-sizing: border-box !important;
+  font-weight: bold !important;
+  font-family: Arial, sans-serif !important;
+}
+
+.road-classification-info-icon:hover {
+  color: #0056b3 !important;
+  background: rgba(0, 123, 255, 0.2) !important;
+  border-color: rgba(0, 123, 255, 0.5) !important;
+  transform: scale(1.1) !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 123, 255, 0.3)) !important;
+  font-weight: bold !important;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .road-classification-control {
+    padding: 10px 12px;
+    margin-top: 8px;
+  }
+
+  .road-classification-control .btn {
+    min-width: 50px;
+    font-size: 11px;
+    padding: 4px 12px;
+  }
+
+  .road-classification-control small {
+    font-size: 10px !important;
+  }
+}
+
+/* Animation for toggle state change */
+.road-classification-control .btn {
+  position: relative;
+}
+
+.road-classification-control .btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width 0.3s ease, height 0.3s ease;
+}
+
+.road-classification-control .btn:active::after {
+  width: 100px;
+  height: 100px;
+}

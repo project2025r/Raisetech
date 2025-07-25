@@ -33,11 +33,17 @@ const Pavement = () => {
   const [showClassificationModal, setShowClassificationModal] = useState(false);
   const [classificationError, setClassificationError] = useState('');
   const [totalToProcess, setTotalToProcess] = useState(0);
-  
+
+  // Add state for image status table filtering
+  const [imageFilter, setImageFilter] = useState('all'); // 'all', 'road', 'non-road'
+
   // Add state for auto-navigation through results
   const [autoNavigationActive, setAutoNavigationActive] = useState(false);
   const [autoNavigationIndex, setAutoNavigationIndex] = useState(0);
   const autoNavigationRef = useRef(null);
+
+  // Add state for road classification toggle
+  const [roadClassificationEnabled, setRoadClassificationEnabled] = useState(true);
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -289,25 +295,30 @@ const Pavement = () => {
       // Get user info from session storage
       const userString = sessionStorage.getItem('user');
       const user = userString ? JSON.parse(userString) : null;
-      
+
       // Get the currently selected image
       const currentImagePreview = Object.values(imagePreviewsMap)[currentImageIndex];
-      
+
       if (!currentImagePreview) {
         setError('No image selected for processing');
         setLoading(false);
         return;
       }
-      
+
       // Get coordinates for the current image
       const imageCoordinates = getCurrentImageLocation();
-      
+
+      // Get the current image filename
+      const filenames = Object.keys(imagePreviewsMap);
+      const currentFilename = filenames[currentImageIndex];
+
       // Prepare request data
       const requestData = {
         image: currentImagePreview,
         coordinates: imageCoordinates,
         username: user?.username || 'Unknown',
-        role: user?.role || 'Unknown'
+        role: user?.role || 'Unknown',
+        skip_road_classification: !roadClassificationEnabled
       };
 
       // Determine endpoint based on detection type
@@ -334,13 +345,64 @@ const Pavement = () => {
 
       // Handle response
       if (response.data.success) {
+        // Check if the image was actually processed (contains road) or just classified
+        const isProcessed = response.data.processed !== false;
+        const isRoad = response.data.classification?.is_road || false;
+
+        // Set the processed image and results for display
         setProcessedImage(response.data.processed_image);
         setResults(response.data);
+
+        // Create batch result entry for the status table
+        const batchResult = {
+          filename: currentFilename,
+          success: true,
+          processed: isProcessed,
+          isRoad: isRoad,
+          classification: response.data.classification,
+          processedImage: response.data.processed_image,
+          data: response.data
+        };
+
+        // Update batch results to show the status table
+        setBatchResults([batchResult]);
       } else {
-        setError(response.data.message || 'Detection failed');
+        const errorMessage = response.data.message || 'Detection failed';
+
+        // Create batch result entry for failed processing
+        const batchResult = {
+          filename: currentFilename,
+          success: false,
+          processed: false,
+          isRoad: false,
+          error: errorMessage,
+          isClassificationError: errorMessage.includes('No road detected')
+        };
+
+        // Update batch results to show the status table
+        setBatchResults([batchResult]);
+
+        setError(errorMessage);
       }
     } catch (error) {
       const errorMessage = error.response?.data?.message || 'An error occurred during detection. Please try again.';
+
+      // Get the current image filename for batch results
+      const filenames = Object.keys(imagePreviewsMap);
+      const currentFilename = filenames[currentImageIndex];
+
+      // Create batch result entry for error case
+      const batchResult = {
+        filename: currentFilename,
+        success: false,
+        processed: false,
+        isRoad: false,
+        error: errorMessage,
+        isClassificationError: errorMessage.includes('No road detected')
+      };
+
+      // Update batch results to show the status table
+      setBatchResults([batchResult]);
 
       // Check if this is a classification error (no road detected)
       if (errorMessage.includes('No road detected')) {
@@ -410,20 +472,30 @@ const Pavement = () => {
             image: imageData,
             coordinates: imageCoordinates,
             username: user?.username || 'Unknown',
-            role: user?.role || 'Unknown'
+            role: user?.role || 'Unknown',
+            skip_road_classification: !roadClassificationEnabled
           };
           
           // Make API request
           const response = await axios.post(endpoint, requestData);
           
           if (response.data.success) {
-            // Immediately display the processed image
-            setProcessedImage(response.data.processed_image);
-            setResults(response.data);
-            
+            // Check if the image was actually processed (contains road) or just classified
+            const isProcessed = response.data.processed !== false;
+            const isRoad = response.data.classification?.is_road || false;
+
+            if (isProcessed && isRoad) {
+              // Road image that was processed - display the results
+              setProcessedImage(response.data.processed_image);
+              setResults(response.data);
+            }
+
             results.push({
               filename,
               success: true,
+              processed: isProcessed,
+              isRoad: isRoad,
+              classification: response.data.classification,
               processedImage: response.data.processed_image,
               data: response.data
             });
@@ -432,6 +504,8 @@ const Pavement = () => {
             results.push({
               filename,
               success: false,
+              processed: false,
+              isRoad: false,
               error: errorMessage,
               isClassificationError: errorMessage.includes('No road detected')
             });
@@ -441,6 +515,8 @@ const Pavement = () => {
           results.push({
             filename,
             success: false,
+            processed: false,
+            isRoad: false,
             error: errorMessage,
             isClassificationError: errorMessage.includes('No road detected')
           });
@@ -456,9 +532,27 @@ const Pavement = () => {
         }
       }
       
-      // Store final results but don't show the batch summary
+      // Store final results
       setBatchResults(results);
-      
+
+      // After batch processing is complete, display the first successfully processed road image
+      const firstProcessedRoadImage = results.find(r => r.success && r.processed && r.isRoad);
+      if (firstProcessedRoadImage) {
+        setProcessedImage(firstProcessedRoadImage.processedImage);
+        setResults(firstProcessedRoadImage.data);
+
+        // Set the current image index to the first processed road image
+        const filenames = Object.keys(imagePreviewsMap);
+        const firstProcessedIndex = filenames.findIndex(name => name === firstProcessedRoadImage.filename);
+        if (firstProcessedIndex !== -1) {
+          setCurrentImageIndex(firstProcessedIndex);
+        }
+      } else {
+        // No road images were processed, clear the display
+        setProcessedImage(null);
+        setResults(null);
+      }
+
     } catch (error) {
       setError('Failed to process batch: ' + (error.message || 'Unknown error'));
     } finally {
@@ -487,6 +581,18 @@ const Pavement = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  // Helper function to get processed road images
+  const getProcessedRoadImages = () => {
+    return batchResults.filter(r => r.success && r.processed && r.isRoad);
+  };
+
+  // Helper function to get current processed image index
+  const getCurrentProcessedImageIndex = () => {
+    const processedImages = getProcessedRoadImages();
+    const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+    return processedImages.findIndex(r => r.filename === currentFilename);
   };
 
   // Add a function to handle auto-navigation through results
@@ -634,24 +740,114 @@ const Pavement = () => {
                 </Form.Select>
               </Form.Group>
 
-                              {/* Sticky note reminder */}
-                <OverlayTrigger 
-                  trigger="click" 
-                  placement="right" 
-                  overlay={reminderPopover}
-                  rootClose
-                >
-                  <div 
-                    className="sticky-note-icon mb-3"
-                    style={{ cursor: 'pointer', display: 'inline-block' }}
+                              {/* Sticky note reminder and road classification toggle */}
+                <div className="d-flex align-items-start gap-3 mb-3">
+                  <OverlayTrigger
+                    trigger="click"
+                    placement="right"
+                    overlay={reminderPopover}
+                    rootClose
                   >
-                    <img 
-                      src="/remindericon.svg" 
-                      alt="Image Upload Guidelines" 
-                      style={{ width: '32px', height: '32px' }}
-                    />
+                    <div
+                      className="sticky-note-icon"
+                      style={{ cursor: 'pointer', display: 'inline-block' }}
+                    >
+                      <img
+                        src="/remindericon.svg"
+                        alt="Image Upload Guidelines"
+                        style={{ width: '32px', height: '32px' }}
+                      />
+                    </div>
+                  </OverlayTrigger>
+
+                  {/* Road Classification Toggle - Improved Design */}
+                  <div className="road-classification-control">
+                    <div className="d-flex align-items-center justify-content-between mb-1">
+                      <span className="me-2" style={{ fontSize: '14px', fontWeight: '500', color: '#495057' }}>
+                        Road Classification
+                      </span>
+                      <OverlayTrigger
+                        placement="right"
+                        delay={{ show: 200, hide: 100 }}
+                        overlay={
+                          <Popover id="road-classification-detailed-info" style={{ maxWidth: '350px' }}>
+                            <Popover.Header as="h3">
+                              <i className="fas fa-brain me-2 text-primary"></i>
+                              Road Classification Feature
+                            </Popover.Header>
+                            <Popover.Body>
+                              <div className="mb-2">
+                                <div className="mb-1">
+                                  <i className="fas fa-toggle-on text-success me-2"></i>
+                                  <strong>ENABLED (ON):</strong>
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#6c757d', marginLeft: '20px' }}>
+                                  • AI analyzes images for road content first<br/>
+                                  • Only road images get defect detection<br/>
+                                  • More accurate results, slightly slower
+                                </div>
+                              </div>
+
+                              <div className="mb-2">
+                                <div className="mb-1">
+                                  <i className="fas fa-toggle-off text-secondary me-2"></i>
+                                  <strong>DISABLED (OFF):</strong>
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#6c757d', marginLeft: '20px' }}>
+                                  • All images processed directly<br/>
+                                  • No road verification step<br/>
+                                  • Faster processing, may have false positives
+                                </div>
+                              </div>
+
+                              <div className="alert alert-info py-2 px-2 mb-0" style={{ fontSize: '11px' }}>
+                                <i className="fas fa-lightbulb me-1"></i>
+                                <strong>Recommendation:</strong> Keep enabled for mixed image types.
+                                Disable only when all images contain roads and speed is priority.
+                              </div>
+                            </Popover.Body>
+                          </Popover>
+                        }
+                      >
+                        <span className="info-icon-wrapper">
+                          <span className="road-classification-info-icon"
+                             style={{
+                               fontSize: '14px',
+                               cursor: 'help',
+                               color: '#007bff',
+                               display: 'inline-flex',
+                               alignItems: 'center',
+                               justifyContent: 'center',
+                               position: 'relative',
+                               zIndex: '1000',
+                               fontWeight: 'bold'
+                             }}
+                          >i</span>
+                        </span>
+                      </OverlayTrigger>
+                    </div>
+                    <div className="d-flex align-items-center">
+                      <Button
+                        variant={roadClassificationEnabled ? "success" : "outline-secondary"}
+                        size="sm"
+                        onClick={() => setRoadClassificationEnabled(!roadClassificationEnabled)}
+                        className="me-2"
+                        style={{
+                          minWidth: '60px',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          borderRadius: '20px',
+                          transition: 'all 0.2s ease'
+                        }}
+                      >
+                        {roadClassificationEnabled ? "ON" : "OFF"}
+                      </Button>
+                      <small className="text-muted" style={{ fontSize: '11px' }}>
+                        {roadClassificationEnabled ? "Only road images processed" : "All images processed"}
+                      </small>
+                    </div>
                   </div>
-                </OverlayTrigger>
+                </div>
 
               <div className="mb-3">
                 <Form.Label>Image Source</Form.Label>
@@ -1224,83 +1420,230 @@ const Pavement = () => {
             </div>
           )}
 
-          {!batchProcessing && batchResults.length > 0 && (
-            <div className="batch-complete-status mt-3">
-              <Alert variant="success">
-                <i className="fas fa-check-circle me-2"></i>
-                Processed {batchResults.length} images.
-                {batchResults.filter(r => r.success).length} successful,
-                {batchResults.filter(r => !r.success && !r.isClassificationError).length} failed.
-                {batchResults.filter(r => r.isClassificationError).length > 0 && (
-                  <div className="mt-2">
-                    <small className="text-warning">
-                      <i className="fas fa-exclamation-triangle me-1"></i>
-                      {batchResults.filter(r => r.isClassificationError).length} image(s) contained no road.
-                    </small>
-                  </div>
-                )}
-              </Alert>
+
+
+          {/* Navigation buttons for processed road images only */}
+          {getProcessedRoadImages().length > 1 && !batchProcessing && (
+            <div className="image-navigation mt-3 d-flex justify-content-between">
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                disabled={(() => {
+                  const processedImages = getProcessedRoadImages();
+                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
+                  return currentProcessedIndex <= 0;
+                })()}
+                onClick={() => {
+                  const processedImages = getProcessedRoadImages();
+                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
+
+                  if (currentProcessedIndex > 0) {
+                    const prevProcessedImage = processedImages[currentProcessedIndex - 1];
+                    const filenames = Object.keys(imagePreviewsMap);
+                    const newIndex = filenames.findIndex(name => name === prevProcessedImage.filename);
+
+                    if (newIndex !== -1) {
+                      setCurrentImageIndex(newIndex);
+                      setProcessedImage(prevProcessedImage.processedImage);
+                      setResults(prevProcessedImage.data);
+                    }
+                  }
+                }}
+              >
+                <i className="fas fa-arrow-left me-1"></i> Previous Processed Image
+              </Button>
+
+              <div className="image-counter">
+                {(() => {
+                  const processedImages = getProcessedRoadImages();
+                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
+                  return `Processed Image ${currentProcessedIndex + 1} of ${processedImages.length}`;
+                })()}
+              </div>
+              
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                disabled={(() => {
+                  const processedImages = getProcessedRoadImages();
+                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
+                  return currentProcessedIndex >= processedImages.length - 1;
+                })()}
+                onClick={() => {
+                  const processedImages = getProcessedRoadImages();
+                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
+                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
+
+                  if (currentProcessedIndex < processedImages.length - 1) {
+                    const nextProcessedImage = processedImages[currentProcessedIndex + 1];
+                    const filenames = Object.keys(imagePreviewsMap);
+                    const newIndex = filenames.findIndex(name => name === nextProcessedImage.filename);
+
+                    if (newIndex !== -1) {
+                      setCurrentImageIndex(newIndex);
+                      setProcessedImage(nextProcessedImage.processedImage);
+                      setResults(nextProcessedImage.data);
+                    }
+                  }
+                }}
+              >
+                Next Processed Image <i className="fas fa-arrow-right ms-1"></i>
+              </Button>
             </div>
           )}
 
-          {/* Navigation buttons for processed images */}
-          {batchResults.length > 1 && !batchProcessing && (
-            <div className="image-navigation mt-3 d-flex justify-content-between">
-              <Button 
-                variant="outline-secondary" 
-                size="sm"
-                disabled={currentImageIndex === 0}
-                onClick={() => {
-                  if (currentImageIndex > 0) {
-                    const newIndex = currentImageIndex - 1;
-                    setCurrentImageIndex(newIndex);
-                    
-                    // Find the result for this image
-                    const filename = Object.keys(imagePreviewsMap)[newIndex];
-                    const result = batchResults.find(r => r.filename === filename);
-                    
-                    if (result && result.success) {
-                      setProcessedImage(result.processedImage);
-                      setResults(result.data);
-                    } else {
-                      setProcessedImage(null);
-                      setResults(null);
-                    }
-                  }
-                }}
-              >
-                <i className="fas fa-arrow-left me-1"></i> Previous Image
-              </Button>
-              
-              <div className="image-counter">
-                Image {currentImageIndex + 1} of {Object.keys(imagePreviewsMap).length}
+          {/* Batch Processing Summary */}
+          {!batchProcessing && batchResults.length > 0 && (() => {
+            const totalImages = batchResults.length;
+            const successfulImages = batchResults.filter(r => r.success).length;
+            const failedImages = batchResults.filter(r => !r.success).length;
+
+            let alertVariant = 'light';
+            let alertClass = '';
+
+            if (roadClassificationEnabled) {
+              // When classification is enabled, use road/non-road logic
+              const nonRoadImages = batchResults.filter(r => !r.isRoad).length;
+              const nonRoadPercentage = totalImages > 0 ? (nonRoadImages / totalImages) * 100 : 0;
+
+              if (totalImages > 0) {
+                if (nonRoadPercentage === 0) {
+                  // 100% road detection - Green
+                  alertVariant = 'success';
+                } else if (nonRoadPercentage === 100) {
+                  // 100% non-road detection - Red
+                  alertVariant = 'danger';
+                } else {
+                  // Combined detection (mixed results) - Light Orange
+                  alertVariant = 'warning';
+                  alertClass = 'summary-light-orange';
+                }
+              }
+            } else {
+              // When classification is disabled, use success/failure logic
+              if (failedImages === 0) {
+                // All successful - Green
+                alertVariant = 'success';
+              } else if (successfulImages === 0) {
+                // All failed - Red
+                alertVariant = 'danger';
+              } else {
+                // Mixed results - Warning
+                alertVariant = 'warning';
+              }
+            }
+
+            return (
+              <div className="batch-complete-status mt-4">
+                <Alert variant={alertVariant} className={alertClass}>
+                  <i className="fas fa-check-circle me-2"></i>
+                  Processed {batchResults.length} images.
+                  {roadClassificationEnabled ? (
+                    <>
+                      {batchResults.filter(r => r.success && r.processed).length} road images processed,
+                      {batchResults.filter(r => r.success && !r.processed).length} non-road images detected,
+                      {batchResults.filter(r => !r.success).length} failed.
+                    </>
+                  ) : (
+                    <>
+                      {batchResults.filter(r => r.success).length} images processed successfully,
+                      {batchResults.filter(r => !r.success).length} failed.
+                    </>
+                  )}
+                </Alert>
               </div>
-              
-              <Button 
-                variant="outline-secondary" 
-                size="sm"
-                disabled={currentImageIndex >= Object.keys(imagePreviewsMap).length - 1}
-                onClick={() => {
-                  if (currentImageIndex < Object.keys(imagePreviewsMap).length - 1) {
-                    const newIndex = currentImageIndex + 1;
-                    setCurrentImageIndex(newIndex);
-                    
-                    // Find the result for this image
-                    const filename = Object.keys(imagePreviewsMap)[newIndex];
-                    const result = batchResults.find(r => r.filename === filename);
-                    
-                    if (result && result.success) {
-                      setProcessedImage(result.processedImage);
-                      setResults(result.data);
-                    } else {
-                      setProcessedImage(null);
-                      setResults(null);
-                    }
-                  }
-                }}
-              >
-                Next Image <i className="fas fa-arrow-right ms-1"></i>
-              </Button>
+            );
+          })()}
+
+          {/* Image Status Table - Only show when road classification is enabled */}
+          {!batchProcessing && batchResults.length > 0 && roadClassificationEnabled && (
+            <div className="image-status-table mt-4">
+              <Card>
+                <Card.Header>
+                  <div className="d-flex justify-content-between align-items-center">
+                    <h5 className="mb-0">Image Processing Status</h5>
+                    <div className="filter-buttons">
+                      <Button
+                        variant={imageFilter === 'all' ? 'primary' : 'outline-primary'}
+                        size="sm"
+                        className="me-2"
+                        onClick={() => setImageFilter('all')}
+                      >
+                        Show All Images
+                      </Button>
+                      <Button
+                        variant={imageFilter === 'road' ? 'success' : 'outline-success'}
+                        size="sm"
+                        className="me-2"
+                        onClick={() => setImageFilter('road')}
+                      >
+                        Show Only Road Images
+                      </Button>
+                      <Button
+                        variant={imageFilter === 'non-road' ? 'danger' : 'outline-danger'}
+                        size="sm"
+                        onClick={() => setImageFilter('non-road')}
+                      >
+                        Show Only Non-Road Images
+                      </Button>
+                    </div>
+                  </div>
+                </Card.Header>
+                <Card.Body>
+                  <div className="table-responsive">
+                    <table className="table table-striped">
+                      <thead>
+                        <tr>
+                          <th>Image</th>
+                          <th>Detection Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {batchResults
+                          .filter(result => {
+                            if (imageFilter === 'road') return result.isRoad;
+                            if (imageFilter === 'non-road') return !result.isRoad;
+                            return true; // 'all'
+                          })
+                          .map((result, index) => {
+                            const filename = result.filename;
+                            const imagePreview = imagePreviewsMap[filename];
+                            const isRoad = result.isRoad;
+
+                            return (
+                              <tr key={filename}>
+                                <td>
+                                  <div className="d-flex align-items-center">
+                                    <img
+                                      src={imagePreview}
+                                      alt={`Thumbnail ${index + 1}`}
+                                      className="img-thumbnail me-2"
+                                      style={{ width: '60px', height: '60px', objectFit: 'cover' }}
+                                    />
+                                    <small className="text-muted">{filename}</small>
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`badge ${isRoad ? 'bg-success' : 'bg-danger'}`}>
+                                    {isRoad ? 'Road' : 'Non-Road'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+
+
+
+
+                </Card.Body>
+              </Card>
             </div>
           )}
         </Tab>

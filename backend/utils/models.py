@@ -31,7 +31,7 @@ MODEL_PATHS = {
     "potholes": os.path.join(BASE_DIR, "assets", "best_ph2.pt"),
     "cracks": os.path.join(BASE_DIR, "assets", "best_ac8_types.pt"),
     "road_infra": os.path.join(BASE_DIR, "assets", "road_infra.pt"),
-    "classification": os.path.join(BASE_DIR, "assets", "classfication.pt")  # Note: keeping original filename with typo
+    "classification": os.path.join(BASE_DIR, "assets", "best_classification.pt")
 }
 
 def load_yolo_models():
@@ -374,14 +374,14 @@ def calculate_area(mask):
     area_cm2 = pixel_count * pixel_to_cm2
     return {"area_cm2": area_cm2}
 
-def classify_road_image(image, models, confidence_threshold=0.3):
+def classify_road_image(image, models, confidence_threshold=0.5):
     """
-    Classify whether an image contains a road using the classification model.
+    Classify whether an image contains a road using the YOLOv11n classification model.
 
     Args:
         image: Input image (numpy array)
         models: Dictionary containing loaded models
-        confidence_threshold: Minimum confidence for road classification (default: 0.3)
+        confidence_threshold: Minimum confidence for road classification (default: 0.5)
 
     Returns:
         dict: {
@@ -394,7 +394,7 @@ def classify_road_image(image, models, confidence_threshold=0.3):
         print("⚠️ Classification model not available")
         return {"is_road": True, "confidence": 1.0, "class_name": "unknown"}  # Default to allow processing
 
-    print(f"🔍 DEBUG: Starting classification with threshold {confidence_threshold}")
+    print(f"🔍 DEBUG: Starting YOLOv11n classification with threshold {confidence_threshold}")
     print(f"🔍 DEBUG: Available models: {list(models.keys())}")
     print(f"🔍 DEBUG: Classification model type: {type(models['classification'])}")
 
@@ -438,7 +438,7 @@ def classify_road_image(image, models, confidence_threshold=0.3):
 
             # Get the highest confidence prediction
             if result.probs is not None:
-                # Classification model with probabilities
+                # YOLOv11n Classification model with probabilities
                 confidences = result.probs.data.cpu().numpy()
                 class_idx = np.argmax(confidences)
                 confidence = float(confidences[class_idx])
@@ -450,77 +450,36 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                 if hasattr(models["classification"], 'names'):
                     class_names = list(models["classification"].names.values())
                 else:
-                    class_names = models.get("classification_classes", ["no_road", "road"])
+                    class_names = models.get("classification_classes", ["non_road", "road"])
 
                 print(f"🔍 DEBUG: Using class names: {class_names}")
                 class_name = class_names[class_idx] if class_idx < len(class_names) else f"class_{class_idx}"
                 print(f"🔍 DEBUG: Predicted class: {class_name}")
 
-                # Since this is an ImageNet model (not a road classifier), we need to:
-                # 1. Detect clearly NON-road images
-                # 2. Detect non-paved surfaces that shouldn't be analyzed for pavement defects
+                # YOLOv11n road classification logic
+                # The model should output classes like "road" and "non_road" or similar
 
-                # Classes that are clearly not roads at all
-                non_road_classes = [
-                    # Animals
-                    "dog", "cat", "bird", "fish", "horse", "cow", "sheep", "elephant", "bear", "lion", "tiger",
-                    "monkey", "rabbit", "mouse", "snake", "spider", "butterfly", "bee", "ant",
-                    # Indoor objects/scenes
-                    "television", "computer", "laptop", "keyboard", "mouse", "monitor", "printer",
-                    "refrigerator", "microwave", "oven", "toaster", "dishwasher", "washing_machine",
-                    "bed", "chair", "table", "desk", "sofa", "couch", "lamp", "clock",
-                    "book", "bottle", "cup", "plate", "bowl", "spoon", "fork", "knife",
-                    # Food items
-                    "pizza", "burger", "sandwich", "cake", "bread", "fruit", "apple", "banana",
-                    "orange", "strawberry", "broccoli", "carrot", "potato",
-                    # Clothing
-                    "shirt", "pants", "dress", "shoe", "hat", "jacket", "tie", "sock",
-                    # Tools/instruments that are clearly not road-related
-                    "guitar", "piano", "violin", "drum", "flute", "trumpet",
-                    "hammer", "screwdriver", "wrench", "drill", "saw"
-                ]
+                # YOLOv11n road classification logic based on actual class names
+                # Class 0: '.ipynb_checkpoints' (training artifact)
+                # Class 1: 'No Road'
+                # Class 2: 'Road'
 
-                # Classes that indicate unpaved/natural surfaces (not suitable for pavement analysis)
-                unpaved_surface_classes = [
-                    # Natural terrain and unpaved surfaces
-                    "sandbar", "beach", "lakeside", "seashore", "cliff", "valley", "mountain", "hill",
-                    "desert", "dune", "field", "meadow", "pasture", "grassland", "prairie", "plain",
-                    "forest", "woodland", "jungle", "swamp", "marsh", "bog", "wetland",
-                    "dirt", "soil", "sand", "gravel", "stone", "rock", "boulder", "pebble",
-                    "trail", "path", "track", "unpaved", "dirt_road", "gravel_road",
-                    # Agricultural and rural scenes
-                    "farm", "farmland", "agricultural", "rural", "countryside", "barn", "silo",
-                    "tractor", "plow", "harvester", "crop", "wheat", "corn", "rice",
-                    # Natural water features
-                    "river", "stream", "creek", "pond", "lake", "ocean", "sea", "water",
-                    # Additional classes that might indicate non-paved areas
-                    "envelope", "cardboard", "carton", "package", "box", "container",
-                    "landscape", "scenery", "outdoor", "nature", "terrain", "ground",
-                    "earth", "mud", "clay", "dust", "powder", "granule"
-                ]
+                print(f"🔍 DEBUG: class_idx: {class_idx}, class_name: '{class_name}'")
 
-                is_clearly_not_road = any(keyword in class_name.lower() for keyword in non_road_classes)
-                is_unpaved_surface = any(keyword in class_name.lower() for keyword in unpaved_surface_classes)
-
-                # More restrictive logic for road detection:
-                # 1. Reject if clearly not a road scene with reasonable confidence
-                # 2. Reject if unpaved/natural surface with low confidence threshold
-                # 3. For very low confidence predictions, be more restrictive
-
-                if is_clearly_not_road and confidence >= 0.3:
+                # Determine if image contains road based on class index and confidence
+                if class_idx == 2 and confidence >= confidence_threshold:  # Class 2 is "Road"
+                    is_road = True
+                elif class_idx == 1 and confidence >= confidence_threshold:  # Class 1 is "No Road"
                     is_road = False
-                elif is_unpaved_surface and confidence >= 0.15:  # Lower threshold for unpaved surfaces
-                    is_road = False
-                elif confidence < 0.05:  # Very low confidence - likely not a clear road
+                elif class_idx == 0:  # Class 0 is training artifact - treat as non-road
                     is_road = False
                 else:
-                    # Only accept if it has reasonable confidence and doesn't match rejection criteria
-                    # Additional check: require minimum confidence for acceptance
-                    is_road = confidence >= 0.1
+                    # Low confidence - be conservative and reject
+                    is_road = False
+                    print(f"🔍 DEBUG: Low confidence ({confidence:.3f}) or unknown class - rejecting as non-road")
 
-                print(f"🔍 DEBUG: is_clearly_not_road: {is_clearly_not_road}")
-                print(f"🔍 DEBUG: is_unpaved_surface: {is_unpaved_surface}")
                 print(f"🔍 DEBUG: confidence: {confidence:.3f}")
+                print(f"🔍 DEBUG: confidence_threshold: {confidence_threshold}")
                 print(f"🔍 DEBUG: Final is_road: {is_road}")
 
                 return {
@@ -546,33 +505,28 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                     if hasattr(models["classification"], 'names'):
                         class_names = list(models["classification"].names.values())
                     else:
-                        class_names = models.get("classification_classes", ["no_road", "road"])
+                        class_names = models.get("classification_classes", ["non_road", "road"])
 
                     class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
 
                     print(f"🔍 DEBUG: Detection - class_name: {class_name}, confidence: {confidence}")
 
-                    # Use same logic as classification model - detect clearly non-road images
-                    non_road_classes = [
-                        "dog", "cat", "bird", "fish", "horse", "cow", "sheep", "elephant", "bear", "lion", "tiger",
-                        "monkey", "rabbit", "mouse", "snake", "spider", "butterfly", "bee", "ant",
-                        "television", "computer", "laptop", "keyboard", "mouse", "monitor", "printer",
-                        "refrigerator", "microwave", "oven", "toaster", "dishwasher", "washing_machine",
-                        "bed", "chair", "table", "desk", "sofa", "couch", "lamp", "clock",
-                        "book", "bottle", "cup", "plate", "bowl", "spoon", "fork", "knife",
-                        "pizza", "burger", "sandwich", "cake", "bread", "fruit", "apple", "banana",
-                        "orange", "strawberry", "broccoli", "carrot", "potato",
-                        "shirt", "pants", "dress", "shoe", "hat", "jacket", "tie", "sock",
-                        "guitar", "piano", "violin", "drum", "flute", "trumpet",
-                        "hammer", "screwdriver", "wrench", "drill", "saw"
-                    ]
+                    # YOLOv11n road classification logic for detection format
+                    # Class 0: '.ipynb_checkpoints' (training artifact)
+                    # Class 1: 'No Road'
+                    # Class 2: 'Road'
 
-                    is_clearly_not_road = any(keyword in class_name.lower() for keyword in non_road_classes)
+                    print(f"🔍 DEBUG: Detection - class_id: {class_id}, class_name: '{class_name}'")
 
-                    if is_clearly_not_road and confidence >= 0.3:
+                    if class_id == 2 and confidence >= confidence_threshold:  # Class 2 is "Road"
+                        is_road = True
+                    elif class_id == 1 and confidence >= confidence_threshold:  # Class 1 is "No Road"
+                        is_road = False
+                    elif class_id == 0:  # Class 0 is training artifact - treat as non-road
                         is_road = False
                     else:
-                        is_road = True  # Be permissive
+                        # Low confidence - be conservative and reject
+                        is_road = False
 
                     return {
                         "is_road": is_road,
@@ -580,12 +534,12 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                         "class_name": class_name
                     }
 
-        # If no valid results, default to allowing processing (temporary for debugging)
-        print("⚠️ No valid classification results found - defaulting to allow processing")
-        return {"is_road": True, "confidence": 0.0, "class_name": "no_detection"}
+        # If no valid results, default to rejecting (be conservative)
+        print("⚠️ No valid classification results found - defaulting to reject as non-road")
+        return {"is_road": False, "confidence": 0.0, "class_name": "no_detection"}
 
     except Exception as e:
         print(f"❌ Error during road classification: {e}")
         traceback.print_exc()
-        # In case of error, default to allowing processing to avoid blocking the workflow
-        return {"is_road": True, "confidence": 0.0, "class_name": "error"}
+        # In case of error, default to rejecting to avoid processing non-road images
+        return {"is_road": False, "confidence": 0.0, "class_name": "error"}
