@@ -42,8 +42,8 @@ const Pavement = () => {
   const [autoNavigationIndex, setAutoNavigationIndex] = useState(0);
   const autoNavigationRef = useRef(null);
 
-  // Add state for road classification toggle
-  const [roadClassificationEnabled, setRoadClassificationEnabled] = useState(true);
+  // Add state for road classification toggle (default to false for better user experience)
+  const [roadClassificationEnabled, setRoadClassificationEnabled] = useState(false);
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -827,21 +827,50 @@ const Pavement = () => {
                       </OverlayTrigger>
                     </div>
                     <div className="d-flex align-items-center">
-                      <Button
-                        variant={roadClassificationEnabled ? "success" : "outline-secondary"}
-                        size="sm"
+                      <div
+                        className="toggle-switch me-2"
                         onClick={() => setRoadClassificationEnabled(!roadClassificationEnabled)}
-                        className="me-2"
                         style={{
-                          minWidth: '60px',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          borderRadius: '20px',
-                          transition: 'all 0.2s ease'
+                          width: '60px',
+                          height: '30px',
+                          backgroundColor: roadClassificationEnabled ? '#28a745' : '#6c757d',
+                          borderRadius: '15px',
+                          position: 'relative',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.3s ease',
+                          border: '2px solid transparent'
                         }}
                       >
-                        {roadClassificationEnabled ? "ON" : "OFF"}
-                      </Button>
+                        <div
+                          className="toggle-slider"
+                          style={{
+                            width: '22px',
+                            height: '22px',
+                            backgroundColor: 'white',
+                            borderRadius: '50%',
+                            position: 'absolute',
+                            top: '2px',
+                            left: roadClassificationEnabled ? '34px' : '2px',
+                            transition: 'left 0.3s ease',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                          }}
+                        />
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: roadClassificationEnabled ? '8px' : '32px',
+                            transform: 'translateY(-50%)',
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            color: 'white',
+                            transition: 'all 0.3s ease',
+                            userSelect: 'none'
+                          }}
+                        >
+                          {roadClassificationEnabled ? 'ON' : 'OFF'}
+                        </span>
+                      </div>
                       <small className="text-muted" style={{ fontSize: '11px' }}>
                         {roadClassificationEnabled ? "Only road images processed" : "All images processed"}
                       </small>

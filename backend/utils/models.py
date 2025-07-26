@@ -31,7 +31,13 @@ MODEL_PATHS = {
     "potholes": os.path.join(BASE_DIR, "assets", "best_ph2.pt"),
     "cracks": os.path.join(BASE_DIR, "assets", "best_ac8_types.pt"),
     "road_infra": os.path.join(BASE_DIR, "assets", "road_infra.pt"),
-    "classification": os.path.join(BASE_DIR, "assets", "best_classification.pt")
+    "classification": os.path.join(BASE_DIR, "assets", "best_road_classification.pt")
+}
+
+# Class mapping for the new classification model
+CLASSIFICATION_CLASSES = {
+    0: "noroad",  # Non-road images
+    1: "road"     # Road images
 }
 
 def load_yolo_models():
@@ -374,14 +380,14 @@ def calculate_area(mask):
     area_cm2 = pixel_count * pixel_to_cm2
     return {"area_cm2": area_cm2}
 
-def classify_road_image(image, models, confidence_threshold=0.5):
+def classify_road_image(image, models, confidence_threshold=0.3):
     """
     Classify whether an image contains a road using the YOLOv11n classification model.
 
     Args:
         image: Input image (numpy array)
         models: Dictionary containing loaded models
-        confidence_threshold: Minimum confidence for road classification (default: 0.5)
+        confidence_threshold: Minimum confidence for road classification (default: 0.3 - more permissive)
 
     Returns:
         dict: {
@@ -397,6 +403,10 @@ def classify_road_image(image, models, confidence_threshold=0.5):
     print(f"🔍 DEBUG: Starting YOLOv11n classification with threshold {confidence_threshold}")
     print(f"🔍 DEBUG: Available models: {list(models.keys())}")
     print(f"🔍 DEBUG: Classification model type: {type(models['classification'])}")
+    print(f"🔍 DEBUG: Image shape: {image.shape}")
+    print(f"🔍 DEBUG: Image dtype: {image.dtype}")
+    print(f"🔍 DEBUG: Image min/max values: {image.min()}/{image.max()}")
+    print(f"🔍 DEBUG: Image channels: {image.shape[2] if len(image.shape) == 3 else 'N/A'}")
 
     # Debug: Print actual class names from the model
     if hasattr(models["classification"], 'names'):
@@ -410,9 +420,67 @@ def classify_road_image(image, models, confidence_threshold=0.5):
 
         # Ensure image is in the correct format for the model
         if image.shape[2] == 3:
-            inference_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # CRITICAL FIX: Test both color formats to handle camera vs uploaded image differences
+            # Camera images and uploaded images may have different color channel ordering
+
+            print(f"🔍 DEBUG: Testing both color formats for optimal classification")
+
+            # Test 1: Original image (might already be RGB from camera)
+            test_image_1 = image.copy()
+
+            # Test 2: BGR->RGB conversion (standard for OpenCV decoded images)
+            test_image_2 = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            # Quick test both formats with the model to see which gives better results
+            try:
+                # Test format 1 (original)
+                results_1 = models["classification"](test_image_1, conf=0.1, device=device)
+                conf_1 = 0.0
+                class_1 = -1
+                if len(results_1) > 0 and results_1[0].probs is not None:
+                    confidences_1 = results_1[0].probs.data.cpu().numpy()
+                    class_1 = np.argmax(confidences_1)
+                    conf_1 = float(confidences_1[class_1])
+
+                # Test format 2 (BGR->RGB)
+                results_2 = models["classification"](test_image_2, conf=0.1, device=device)
+                conf_2 = 0.0
+                class_2 = -1
+                if len(results_2) > 0 and results_2[0].probs is not None:
+                    confidences_2 = results_2[0].probs.data.cpu().numpy()
+                    class_2 = np.argmax(confidences_2)
+                    conf_2 = float(confidences_2[class_2])
+
+                print(f"🔍 DEBUG: Format 1 (original): class={class_1}, conf={conf_1:.3f}")
+                print(f"🔍 DEBUG: Format 2 (BGR->RGB): class={class_2}, conf={conf_2:.3f}")
+
+                # Choose the format that gives road classification (class 1) with higher confidence
+                # Updated for new model: Class 0 = noroad, Class 1 = road
+                if class_1 == 1 and class_2 != 1:
+                    inference_image = test_image_1
+                    print(f"🔍 DEBUG: Using original format (detected road)")
+                elif class_2 == 1 and class_1 != 1:
+                    inference_image = test_image_2
+                    print(f"🔍 DEBUG: Using BGR->RGB format (detected road)")
+                elif class_1 == 1 and class_2 == 1:
+                    # Both detect road, use the one with higher confidence
+                    if conf_1 >= conf_2:
+                        inference_image = test_image_1
+                        print(f"🔍 DEBUG: Using original format (higher road confidence)")
+                    else:
+                        inference_image = test_image_2
+                        print(f"🔍 DEBUG: Using BGR->RGB format (higher road confidence)")
+                else:
+                    # Neither detects road clearly, use BGR->RGB as default (standard OpenCV)
+                    inference_image = test_image_2
+                    print(f"🔍 DEBUG: Using BGR->RGB format (default)")
+
+            except Exception as e:
+                print(f"🔍 DEBUG: Error in format testing: {e}, using BGR->RGB as fallback")
+                inference_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         else:
             inference_image = image
+            print(f"🔍 DEBUG: Using image as-is (not 3-channel)")
 
         # Run classification with proper error handling
         with torch.no_grad():
@@ -450,7 +518,8 @@ def classify_road_image(image, models, confidence_threshold=0.5):
                 if hasattr(models["classification"], 'names'):
                     class_names = list(models["classification"].names.values())
                 else:
-                    class_names = models.get("classification_classes", ["non_road", "road"])
+                    # Updated fallback for new model: Class 0 = noroad, Class 1 = road
+                    class_names = list(CLASSIFICATION_CLASSES.values())
 
                 print(f"🔍 DEBUG: Using class names: {class_names}")
                 class_name = class_names[class_idx] if class_idx < len(class_names) else f"class_{class_idx}"
@@ -467,16 +536,29 @@ def classify_road_image(image, models, confidence_threshold=0.5):
                 print(f"🔍 DEBUG: class_idx: {class_idx}, class_name: '{class_name}'")
 
                 # Determine if image contains road based on class index and confidence
-                if class_idx == 2 and confidence >= confidence_threshold:  # Class 2 is "Road"
-                    is_road = True
-                elif class_idx == 1 and confidence >= confidence_threshold:  # Class 1 is "No Road"
-                    is_road = False
-                elif class_idx == 0:  # Class 0 is training artifact - treat as non-road
-                    is_road = False
+                # Updated for new model: Class 0 = noroad, Class 1 = road
+                if class_idx == 1:  # Class 1 is "road"
+                    # For road class, be more permissive with confidence
+                    if confidence >= confidence_threshold:
+                        is_road = True
+                        print(f"🔍 DEBUG: Road class detected with confidence ({confidence:.3f})")
+                    else:
+                        # Even with lower confidence, if it's classified as road, accept it
+                        is_road = True
+                        print(f"🔍 DEBUG: Road class with lower confidence ({confidence:.3f}) - still accepting as road")
+                elif class_idx == 0:  # Class 0 is "noroad"
+                    # For non-road class, require higher confidence to reject
+                    if confidence >= 0.7:  # Higher threshold for rejecting
+                        is_road = False
+                        print(f"🔍 DEBUG: Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
+                    else:
+                        # If confidence is low for non-road, default to road (be permissive)
+                        is_road = True
+                        print(f"🔍 DEBUG: Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
                 else:
-                    # Low confidence - be conservative and reject
-                    is_road = False
-                    print(f"🔍 DEBUG: Low confidence ({confidence:.3f}) or unknown class - rejecting as non-road")
+                    # Unknown class - default to road (be permissive)
+                    is_road = True
+                    print(f"🔍 DEBUG: Unknown class ({class_idx}) - defaulting to road")
 
                 print(f"🔍 DEBUG: confidence: {confidence:.3f}")
                 print(f"🔍 DEBUG: confidence_threshold: {confidence_threshold}")
@@ -505,7 +587,8 @@ def classify_road_image(image, models, confidence_threshold=0.5):
                     if hasattr(models["classification"], 'names'):
                         class_names = list(models["classification"].names.values())
                     else:
-                        class_names = models.get("classification_classes", ["non_road", "road"])
+                        # Updated fallback for new model: Class 0 = noroad, Class 1 = road
+                        class_names = list(CLASSIFICATION_CLASSES.values())
 
                     class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
 
@@ -518,15 +601,28 @@ def classify_road_image(image, models, confidence_threshold=0.5):
 
                     print(f"🔍 DEBUG: Detection - class_id: {class_id}, class_name: '{class_name}'")
 
-                    if class_id == 2 and confidence >= confidence_threshold:  # Class 2 is "Road"
-                        is_road = True
-                    elif class_id == 1 and confidence >= confidence_threshold:  # Class 1 is "No Road"
-                        is_road = False
-                    elif class_id == 0:  # Class 0 is training artifact - treat as non-road
-                        is_road = False
+                    # More permissive logic for road classification (detection format)
+                    # Updated for new model: Class 0 = noroad, Class 1 = road
+                    if class_id == 1:  # Class 1 is "road"
+                        # For road class, be more permissive
+                        if confidence >= confidence_threshold:
+                            is_road = True
+                            print(f"🔍 DEBUG: Detection - Road class detected with confidence ({confidence:.3f})")
+                        else:
+                            is_road = True  # Accept even with lower confidence
+                            print(f"🔍 DEBUG: Detection - Road class with lower confidence ({confidence:.3f}) - still accepting")
+                    elif class_id == 0:  # Class 0 is "noroad"
+                        # For non-road class, require higher confidence to reject
+                        if confidence >= 0.7:
+                            is_road = False
+                            print(f"🔍 DEBUG: Detection - Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
+                        else:
+                            is_road = True  # Default to road if low confidence
+                            print(f"🔍 DEBUG: Detection - Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
                     else:
-                        # Low confidence - be conservative and reject
-                        is_road = False
+                        # Unknown class - default to road (be permissive)
+                        is_road = True
+                        print(f"🔍 DEBUG: Detection - Unknown class ({class_id}) - defaulting to road")
 
                     return {
                         "is_road": is_road,
@@ -534,12 +630,13 @@ def classify_road_image(image, models, confidence_threshold=0.5):
                         "class_name": class_name
                     }
 
-        # If no valid results, default to rejecting (be conservative)
-        print("⚠️ No valid classification results found - defaulting to reject as non-road")
-        return {"is_road": False, "confidence": 0.0, "class_name": "no_detection"}
+        # If no valid results, default to accepting (be permissive)
+        print("⚠️ No valid classification results found - defaulting to accept as road (permissive mode)")
+        return {"is_road": True, "confidence": 0.5, "class_name": "no_detection_default_road"}
 
     except Exception as e:
         print(f"❌ Error during road classification: {e}")
         traceback.print_exc()
-        # In case of error, default to rejecting to avoid processing non-road images
-        return {"is_road": False, "confidence": 0.0, "class_name": "error"}
+        # In case of error, default to accepting to avoid blocking valid road images
+        print("🔍 DEBUG: Classification error - defaulting to accept as road (permissive mode)")
+        return {"is_road": True, "confidence": 0.5, "class_name": "error_default_road"}

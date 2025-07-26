@@ -301,12 +301,26 @@ def get_models():
 
 def decode_base64_image(base64_string):
     """Decode a base64 image to cv2 format"""
+    print(f"🔍 DEBUG: Base64 string prefix: {base64_string[:50]}...")
+
     if 'base64,' in base64_string:
+        header = base64_string.split('base64,')[0]
+        print(f"🔍 DEBUG: Image header: {header}")
         base64_string = base64_string.split('base64,')[1]
-    
+
     img_data = base64.b64decode(base64_string)
+    print(f"🔍 DEBUG: Decoded image data size: {len(img_data)} bytes")
+
     np_arr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if img is not None:
+        print(f"🔍 DEBUG: Decoded image shape: {img.shape}")
+        print(f"🔍 DEBUG: Decoded image dtype: {img.dtype}")
+        print(f"🔍 DEBUG: Decoded image min/max: {img.min()}/{img.max()}")
+    else:
+        print("🔍 DEBUG: Failed to decode image!")
+
     return img
 
 def encode_processed_image(image):
@@ -1192,8 +1206,8 @@ def detect_potholes():
             # Skip classification and assume it's a road
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
-            # Perform road classification
-            classification_result = classify_road_image(processed_image, models)
+            # Perform road classification with lower confidence threshold
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -1445,8 +1459,8 @@ def detect_cracks():
             # Skip classification and assume it's a road
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
-            # Perform road classification
-            classification_result = classify_road_image(processed_image, models)
+            # Perform road classification with lower confidence threshold
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -1695,8 +1709,8 @@ def detect_kerbs():
             # Skip classification and assume it's a road
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
-            # Perform road classification
-            classification_result = classify_road_image(processed_image, models)
+            # Perform road classification with lower confidence threshold
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -2646,8 +2660,8 @@ def detect_all():
             # Skip classification and assume it's a road
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
-            # Perform road classification
-            classification_result = classify_road_image(original_image, models)
+            # Perform road classification with lower confidence threshold
+            classification_result = classify_road_image(original_image, models, confidence_threshold=0.2)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -3564,4 +3578,38 @@ def list_video_processing():
         return jsonify({
             "success": False,
             "message": f"Error listing video processing records: {str(e)}"
+        }), 500
+
+@pavement_bp.route('/test-classification', methods=['POST'])
+def test_classification():
+    """Test route to check road classification only"""
+    try:
+        # Get image data
+        image_data = request.json['image']
+        image = decode_base64_image(image_data)
+
+        if image is None:
+            return jsonify({
+                "success": False,
+                "message": "Invalid image data"
+            }), 400
+
+        # Test classification with different thresholds
+        results = {}
+        for threshold in [0.1, 0.2, 0.3, 0.4, 0.5]:
+            classification_result = classify_road_image(image, models, confidence_threshold=threshold)
+            results[f"threshold_{threshold}"] = classification_result
+
+        return jsonify({
+            "success": True,
+            "image_shape": image.shape,
+            "classification_results": results
+        })
+
+    except Exception as e:
+        print(f"❌ Error in test classification: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
         }), 500
