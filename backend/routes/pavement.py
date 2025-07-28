@@ -2803,6 +2803,10 @@ def detect_all():
                                 
                                 # Draw bounding box on display image
                                 cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                                # Add text with ID and measurements
+                                text = f"ID {pothole_id}, A:{dimensions['area_cm2']:.1f}cm^2, D:{depth_metrics['max_depth_cm']:.1f}cm, V:{volume:.1f}cm^3"
+                                cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                                 
                                 # Store pothole data in database
                                 pothole_data = {
@@ -2849,8 +2853,8 @@ def detect_all():
                             
                             # Draw bounding box on display image
                             cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            cv2.putText(display_image, f"Pothole {conf:.2f}", (x1, y1 - 10),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            text = f"ID {pothole_id}, Pothole, C:{conf:.2f}"
+                            cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                             
                             # Store pothole data in database (without detailed measurements)
                             pothole_data = {
@@ -2978,7 +2982,13 @@ def detect_all():
                     
                     # Get detection box coordinates
                     x1, y1, x2, y2 = map(int, box[:4])
-                    
+
+                    # Draw bounding box and text on display image
+                    color = crack_type_info["color"]
+                    cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
+                    text = f"ID {crack_id}, {crack_type}, A:{area_cm2:.1f}cm^2"
+                    cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
                     # Store crack data
                     crack_data = {
                         "crack_id": crack_id,
@@ -3100,7 +3110,13 @@ def detect_all():
                         
                         # Get detection box coordinates
                         x1, y1, x2, y2 = map(int, box[:4])
-                        
+
+                        # Draw bounding box and text on display image
+                        color = kerb_type_info["color"]
+                        cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
+                        text = f"ID {kerb_id}, {kerb_condition}, L:{estimated_length_m:.1f}m"
+                        cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
                         # Store kerb data
                         kerb_data = {
                             "kerb_id": kerb_id,
@@ -3152,7 +3168,13 @@ def detect_all():
                             kerb_type_info = kerb_types.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
                             kerb_condition = kerb_type_info["name"]
                             condition_counts[kerb_condition] += 1
-                            
+
+                            # Draw bounding box and text on display image
+                            color = kerb_type_info["color"]
+                            cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
+                            text = f"ID {kerb_id}, {kerb_condition}, L:{estimated_length_m:.1f}m"
+                            cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
                             # Store kerb data
                             kerb_data = {
                                 "kerb_id": kerb_id,
