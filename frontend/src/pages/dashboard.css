@@ -23,6 +23,79 @@
   padding: 15px;
 }
 
+/* Dashboard tabs styling */
+.dashboard-tabs {
+  border: none;
+}
+
+.dashboard-tabs .nav-tabs {
+  border-bottom: 2px solid #e9ecef;
+  background-color: #f8f9fa;
+  border-radius: 8px 8px 0 0;
+}
+
+.dashboard-tabs .nav-link {
+  border: none;
+  border-radius: 0;
+  padding: 10px 20px;
+  font-weight: 500;
+  color: #6c757d;
+  background-color: transparent;
+  transition: all 0.3s ease;
+  font-size: 0.9rem;
+}
+
+.dashboard-tabs .nav-link:hover {
+  border: none;
+  background-color: #e9ecef;
+  color: #495057;
+}
+
+.dashboard-tabs .nav-link.active {
+  border: none;
+  background-color: #007bff;
+  color: white;
+  font-weight: 600;
+}
+
+.dashboard-tabs .nav-link.active:hover {
+  background-color: #0056b3;
+  color: white;
+}
+
+.dashboard-tabs .tab-content {
+  border: none;
+  background-color: white;
+  border-radius: 0 0 8px 8px;
+}
+
+.dashboard-tabs .tab-pane {
+  padding: 0;
+}
+
+/* Stats cards styling */
+.stats-card {
+  transition: transform 0.2s ease;
+}
+
+.stats-card:hover {
+  transform: translateY(-2px);
+}
+
+.stats-card .card-body {
+  padding: 1rem;
+}
+
+.stats-card .card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #6c757d;
+}
+
+.stats-card h3 {
+  font-weight: 700;
+}
+
 /* Dashboard card with consistent styling */
 .dashboard-card {
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
@@ -33,34 +106,35 @@
 
 /* Filters card specific styling */
 .filters-card {
-  margin-bottom: 20px;
+  margin-bottom: 15px;
 }
 
 .filters-card .card-header {
-  padding: 12px 20px;
+  padding: 8px 16px;
   font-weight: 600;
 }
 
 .filters-card .card-body {
-  padding: 20px;
+  padding: 16px;
 }
 
 /* Filter section styles */
 .filter-section {
-  margin-bottom: 15px;
+  margin-bottom: 0;
 }
 
 .filter-section h6 {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   font-weight: 600;
   color: #495057;
+  font-size: 0.9rem;
 }
 
 .filter-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .filter-field {
@@ -70,17 +144,21 @@
 
 .filter-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .filter-status {
-  margin-top: 8px;
-  font-size: 0.85rem;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background-color: #d4edda;
+  border: 1px solid #c3e6cb;
 }
 
 /* Special styles for pie charts */
 .pie-chart-container {
-  padding: 15px;
+  padding: 10px;
   margin: 0 auto;
 }
 
@@ -89,7 +167,7 @@
   display: flex;
   flex-wrap: nowrap;
   justify-content: center;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   padding: 0 5px;
   width: 100%;
   max-width: 100%;
@@ -99,29 +177,29 @@
 .legend-item {
   display: flex;
   align-items: center;
-  margin: 0 5px;
+  margin: 0 3px;
   white-space: nowrap;
   padding: 2px 4px;
 }
 
 .legend-checkbox {
   margin-right: 4px !important;
-  min-width: 16px !important;
-  min-height: 16px !important;
-  width: 16px !important;
-  height: 16px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
+  width: 14px !important;
+  height: 14px !important;
 }
 
 .legend-label {
   display: flex;
   align-items: center;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 
 .legend-color {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   margin-right: 4px;
   border-radius: 2px;
 }
@@ -207,7 +285,7 @@
 @media (max-width: 992px) {
   /* Filter section adjusts for medium screens */
   .filter-section {
-    margin-bottom: 25px;
+    margin-bottom: 15px;
   }
   
   .filter-controls {
@@ -216,7 +294,7 @@
   }
   
   .filter-field {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
   
   .filter-actions {
@@ -228,7 +306,7 @@
   /* Chart adjustments */
   .chart-container {
     min-height: 250px;
-    margin-bottom: 20px;
+    margin-bottom: 15px;
   }
 
   .pie-chart-container {
@@ -251,9 +329,28 @@
   }
   
   .legend-color {
-    width: 10px;
-    height: 10px;
-    margin-right: 2px;
+    width: 8px;
+    height: 8px;
+    margin-right: 3px;
+  }
+  
+  /* Dashboard tabs mobile adjustments */
+  .dashboard-tabs .nav-link {
+    padding: 8px 12px;
+    font-size: 0.8rem;
+  }
+  
+  /* Stats cards mobile adjustments */
+  .stats-card .card-body {
+    padding: 0.75rem;
+  }
+  
+  .stats-card .card-title {
+    font-size: 0.8rem;
+  }
+  
+  .stats-card h3 {
+    font-size: 1.5rem;
   }
   
   /* Improve checkboxes display on mobile */

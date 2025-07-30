@@ -69,18 +69,12 @@ const Login = ({ onLogin }) => {
         <Row className="justify-content-center">
           <Col xs={12} sm={10} md={8} lg={5} xl={4}>
             <div className="login-box">
-              <div className="login-logo text-center mb-4">
-                <h2 className="text-primary">Road AI Safety Enhancement</h2>
-              </div>
-
               <div className="login-card">
-                <h4 className="text-center mb-4">Sign In</h4>
-
-                {error && <Alert variant="danger">{error}</Alert>}
+                {error && <Alert variant="danger" className="p-3 mb-3">{error}</Alert>}
 
                 <Form onSubmit={handleSubmit} noValidate autoComplete="off">
                   <Form.Group className="mb-3">
-                    <Form.Label>Role</Form.Label>
+                    <Form.Label className="mb-1">Role</Form.Label>
                     <Form.Select 
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
@@ -93,7 +87,7 @@ const Login = ({ onLogin }) => {
                   </Form.Group>
 
                   <Form.Group className="mb-3">
-                    <Form.Label>Username</Form.Label>
+                    <Form.Label className="mb-1">Username</Form.Label>
                     <Form.Control 
                       type="text" 
                       placeholder="Enter your username"
@@ -104,8 +98,8 @@ const Login = ({ onLogin }) => {
                     />
                   </Form.Group>
 
-                  <Form.Group className="mb-4">
-                    <Form.Label>Password</Form.Label>
+                  <Form.Group className="mb-3">
+                    <Form.Label className="mb-1">Password</Form.Label>
                     <Form.Control 
                       type="password" 
                       placeholder="Enter your password"
@@ -127,8 +121,8 @@ const Login = ({ onLogin }) => {
                 </Form>
               </div>
 
-              <div className="text-center mt-4 text-muted login-footer">
-                © 2025 Road AI Safety Enhancement. All rights reserved.
+              <div className="text-center mt-3 text-muted login-footer">
+                <small>© 2025 Road AI Safety Enhancement. All rights reserved.</small>
               </div>
             </div>
           </Col>

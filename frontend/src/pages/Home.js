@@ -38,26 +38,19 @@ const Home = ({ user }) => {
 
   return (
     <Container fluid="md" className="home-page">
-      <Row className="mb-4">
-        <Col>
-          <h2 className="big-font text-center text-md-start">Welcome, {user?.username || 'User'}</h2>
-          <p className="welcome-message text-center text-md-start">
-            Select a module below to start using the Road AI Safety Enhancement system.
-          </p>
-        </Col>
-      </Row>
+      <div className="welcome-medium mb-3 text-center">Welcome, {user?.username || 'User'}</div>
 
-      <Row className="row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3 g-md-4">
+      <Row className="row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3">
         {modules.map((module, index) => (
           <Col key={index}>
             <Link to={module.path} className="text-decoration-none">
               <Card className="home-card h-100">
-                <Card.Body className="d-flex flex-column align-items-center">
-                  <div className="module-icon" style={{ color: module.color }}>
+                <Card.Body className="d-flex flex-column align-items-center py-3">
+                  <div className="module-icon mb-2" style={{ color: module.color }}>
                     {module.icon}
                   </div>
-                  <Card.Title className="module-title">{module.title}</Card.Title>
-                  <Card.Text className="module-description">
+                  <Card.Title className="module-title mb-2">{module.title}</Card.Title>
+                  <Card.Text className="module-description mb-0">
                     {module.description}
                   </Card.Text>
                 </Card.Body>
@@ -67,12 +60,11 @@ const Home = ({ user }) => {
         ))}
       </Row>
 
-      <Row className="mt-4">
+      <Row className="mt-3">
         <Col>
           <Card className="info-card">
-            <Card.Body>
-              <Card.Title className="text-center text-md-start">About Road AI Safety Enhancement</Card.Title>
-              <Card.Text>
+            <Card.Body className="py-3">
+              <Card.Text className="mb-0">
                 This system uses advanced computer vision and artificial intelligence 
                 to detect and analyze road conditions, helping maintain safer road
                 infrastructure. The technology can identify potholes, various types of

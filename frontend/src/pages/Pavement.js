@@ -5,6 +5,7 @@ import Webcam from 'react-webcam';
 import './Pavement.css';
 import useResponsive from '../hooks/useResponsive';
 import VideoDefectDetection from '../components/VideoDefectDetection';
+import { FaArrowLeft, FaArrowRight } from 'react-icons/fa';
 
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
@@ -28,11 +29,18 @@ const Pavement = () => {
   const [batchResults, setBatchResults] = useState([]);
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
+  
+  // Add state for storing processed images for results table
+  const [processedImagesData, setProcessedImagesData] = useState({});
 
   // Add state for classification error modal
   const [showClassificationModal, setShowClassificationModal] = useState(false);
   const [classificationError, setClassificationError] = useState('');
   const [totalToProcess, setTotalToProcess] = useState(0);
+  
+  // Add state for image modal
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [selectedImageData, setSelectedImageData] = useState(null);
 
   // Add state for image status table filtering
   const [imageFilter, setImageFilter] = useState('all'); // 'all', 'road', 'non-road'
@@ -44,6 +52,8 @@ const Pavement = () => {
 
   // Add state for road classification toggle (default to false for better user experience)
   const [roadClassificationEnabled, setRoadClassificationEnabled] = useState(false);
+  
+  // Auto-clear is always enabled - no toggle needed
   
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -366,6 +376,33 @@ const Pavement = () => {
 
         // Update batch results to show the status table
         setBatchResults([batchResult]);
+
+        // Auto-clear uploaded image icons after successful single image processing
+        // Store the processed image data before clearing (for both road and non-road)
+        setProcessedImagesData(prev => ({
+          ...prev,
+          [currentFilename]: {
+            originalImage: currentImagePreview,
+            processedImage: isRoad ? response.data.processed_image : null,
+            results: response.data,
+            isRoad: isRoad
+          }
+        }));
+          
+          // Clear image previews and files but keep results
+          setImageFiles([]);
+          setImagePreviewsMap({});
+          setImageLocationMap({});
+          setCurrentImageIndex(0);
+          
+          // Reset coordinates when clearing all images
+          setCoordinates('Not Available');
+          setLocationError('');
+          setLocationPermission('unknown');
+          
+          if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+          }
       } else {
         const errorMessage = response.data.message || 'Detection failed';
 
@@ -553,6 +590,38 @@ const Pavement = () => {
         setResults(null);
       }
 
+      // Auto-clear uploaded image icons after processing is complete
+      // Store processed images data before clearing (for both road and non-road)
+      const processedData = {};
+      results.forEach(result => {
+        if (result.success) {
+          const originalImage = imagePreviewsMap[result.filename];
+          processedData[result.filename] = {
+            originalImage: originalImage,
+            processedImage: result.isRoad ? result.processedImage : null,
+            results: result.data,
+            isRoad: result.isRoad
+          };
+          console.log('Storing image data for:', result.filename, 'isRoad:', result.isRoad, 'hasOriginalImage:', !!originalImage);
+        }
+      });
+      setProcessedImagesData(prev => ({ ...prev, ...processedData }));
+      
+      // Clear image previews and files but keep results
+      setImageFiles([]);
+      setImagePreviewsMap({});
+      setImageLocationMap({});
+      setCurrentImageIndex(0);
+      
+      // Reset coordinates when clearing all images
+      setCoordinates('Not Available');
+      setLocationError('');
+      setLocationPermission('unknown');
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
     } catch (error) {
       setError('Failed to process batch: ' + (error.message || 'Unknown error'));
     } finally {
@@ -572,6 +641,7 @@ const Pavement = () => {
     setBatchResults([]);
     setProcessedCount(0);
     setTotalToProcess(0);
+    setProcessedImagesData({});
     
     // Reset coordinates when clearing all images
     setCoordinates('Not Available');
@@ -593,6 +663,12 @@ const Pavement = () => {
     const processedImages = getProcessedRoadImages();
     const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
     return processedImages.findIndex(r => r.filename === currentFilename);
+  };
+
+  // Add function to handle thumbnail clicks
+  const handleThumbnailClick = (imageData) => {
+    setSelectedImageData(imageData);
+    setShowImageModal(true);
   };
 
   // Add a function to handle auto-navigation through results
@@ -717,18 +793,17 @@ const Pavement = () => {
 
   return (
     <Container className="pavement-page">
-      <h2 className="big-font mb-4">Pavement Analysis</h2>
       
       <Tabs
         activeKey={activeTab}
         onSelect={(k) => setActiveTab(k)}
-        className="mb-4"
+        className="mb-3"
       >
         <Tab eventKey="detection" title="Image Detection">
-          <Card className="mb-4">
-            <Card.Body>
+          <Card className="mb-3">
+            <Card.Body className="py-3">
               <Form.Group className="mb-3">
-                <Form.Label>Detection Type</Form.Label>
+                <Form.Label className="mb-1">Detection Type</Form.Label>
                 <Form.Select 
                   value={detectionType}
                   onChange={(e) => setDetectionType(e.target.value)}
@@ -740,32 +815,32 @@ const Pavement = () => {
                 </Form.Select>
               </Form.Group>
 
-                              {/* Sticky note reminder and road classification toggle */}
-                <div className="d-flex align-items-start gap-3 mb-3">
-                  <OverlayTrigger
-                    trigger="click"
-                    placement="right"
-                    overlay={reminderPopover}
-                    rootClose
+              {/* Sticky note reminder and road classification toggle */}
+              <div className="d-flex align-items-start gap-2 mb-3">
+                <OverlayTrigger
+                  trigger="click"
+                  placement="right"
+                  overlay={reminderPopover}
+                  rootClose
+                >
+                  <div
+                    className="sticky-note-icon"
+                    style={{ cursor: 'pointer', display: 'inline-block' }}
                   >
-                    <div
-                      className="sticky-note-icon"
-                      style={{ cursor: 'pointer', display: 'inline-block' }}
-                    >
-                      <img
-                        src="/remindericon.svg"
-                        alt="Image Upload Guidelines"
-                        style={{ width: '32px', height: '32px' }}
-                      />
-                    </div>
-                  </OverlayTrigger>
+                    <img
+                      src="/remindericon.svg"
+                      alt="Image Upload Guidelines"
+                      style={{ width: '28px', height: '28px' }}
+                    />
+                  </div>
+                </OverlayTrigger>
 
-                  {/* Road Classification Toggle - Improved Design */}
-                  <div className="road-classification-control">
-                    <div className="d-flex align-items-center justify-content-between mb-1">
-                      <span className="me-2" style={{ fontSize: '14px', fontWeight: '500', color: '#495057' }}>
-                        Road Classification
-                      </span>
+                {/* Road Classification Toggle - Improved Design */}
+                <div className="road-classification-control">
+                  <div className="d-flex align-items-center justify-content-between mb-1">
+                    <span className="me-2" style={{ fontSize: '0.9rem', fontWeight: '500', color: '#495057' }}>
+                      Road Classification
+                    </span>
                       <OverlayTrigger
                         placement="right"
                         delay={{ show: 200, hide: 100 }}
@@ -876,6 +951,8 @@ const Pavement = () => {
                       </small>
                     </div>
                   </div>
+                  
+
                 </div>
 
               <div className="mb-3">
@@ -1481,7 +1558,7 @@ const Pavement = () => {
                   }
                 }}
               >
-                <i className="fas fa-arrow-left me-1"></i> Previous Processed Image
+                <FaArrowLeft className="me-1" />
               </Button>
 
               <div className="image-counter">
@@ -1520,7 +1597,7 @@ const Pavement = () => {
                   }
                 }}
               >
-                Next Processed Image <i className="fas fa-arrow-right ms-1"></i>
+                <FaArrowRight className="ms-1" />
               </Button>
             </div>
           )}
@@ -1640,19 +1717,62 @@ const Pavement = () => {
                           })
                           .map((result, index) => {
                             const filename = result.filename;
-                            const imagePreview = imagePreviewsMap[filename];
                             const isRoad = result.isRoad;
+                            
+                            // Get image from stored processed data
+                            let imagePreview = null;
+                            let imageData = null;
+                            
+                            if (processedImagesData[filename]) {
+                              // Use stored processed image data
+                              imagePreview = processedImagesData[filename].originalImage;
+                              imageData = processedImagesData[filename];
+                              console.log('Found stored data for:', filename, 'hasImage:', !!imagePreview);
+                            } else if (imagePreviewsMap[filename]) {
+                              // Fallback to current preview (for any remaining unprocessed images)
+                              imagePreview = imagePreviewsMap[filename];
+                              imageData = {
+                                originalImage: imagePreview,
+                                processedImage: null,
+                                results: null,
+                                isRoad: isRoad
+                              };
+                              console.log('Using fallback data for:', filename, 'hasImage:', !!imagePreview);
+                            } else {
+                              console.log('No image data found for:', filename);
+                            }
 
                             return (
                               <tr key={filename}>
                                 <td>
                                   <div className="d-flex align-items-center">
-                                    <img
-                                      src={imagePreview}
-                                      alt={`Thumbnail ${index + 1}`}
-                                      className="img-thumbnail me-2"
-                                      style={{ width: '60px', height: '60px', objectFit: 'cover' }}
-                                    />
+                                    {imagePreview ? (
+                                      <img
+                                        src={imagePreview}
+                                        alt={`Thumbnail ${index + 1}`}
+                                        className="img-thumbnail me-2"
+                                        style={{ 
+                                          width: '60px', 
+                                          height: '60px', 
+                                          objectFit: 'cover',
+                                          cursor: 'pointer'
+                                        }}
+                                        onClick={() => handleThumbnailClick(imageData)}
+                                        title="Click to view full size"
+                                      />
+                                    ) : (
+                                      <div 
+                                        className="img-thumbnail me-2 d-flex align-items-center justify-content-center"
+                                        style={{ 
+                                          width: '60px', 
+                                          height: '60px', 
+                                          backgroundColor: '#f8f9fa',
+                                          border: '1px solid #dee2e6'
+                                        }}
+                                      >
+                                        <small className="text-muted">No Image</small>
+                                      </div>
+                                    )}
                                     <small className="text-muted">{filename}</small>
                                   </div>
                                 </td>
@@ -1817,6 +1937,63 @@ const Pavement = () => {
           </Button>
         </Modal.Footer>
       </Modal> */}
+
+      {/* Image Modal for Full-Size View */}
+      <Modal
+        show={showImageModal}
+        onHide={() => setShowImageModal(false)}
+        size="lg"
+        centered
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>
+            <i className="fas fa-image me-2"></i>
+            Image View
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {selectedImageData && (
+            <div className="text-center">
+              <div className="mb-3">
+                <h6>Original Image</h6>
+                <img
+                  src={selectedImageData.originalImage}
+                  alt="Original Image"
+                  className="img-fluid"
+                  style={{ maxHeight: '400px', borderRadius: '8px' }}
+                />
+              </div>
+              {selectedImageData.processedImage && selectedImageData.isRoad && (
+                <div className="mt-4">
+                  <h6>Processed Image (Road Detection Results)</h6>
+                  <img
+                    src={selectedImageData.processedImage}
+                    alt="Processed Image"
+                    className="img-fluid"
+                    style={{ maxHeight: '400px', borderRadius: '8px' }}
+                  />
+                </div>
+              )}
+              {!selectedImageData.isRoad && (
+                <div className="mt-3">
+                  <Alert variant="info">
+                    <i className="fas fa-info-circle me-2"></i>
+                    This image was classified as non-road and therefore no defect detection was performed.
+                  </Alert>
+                </div>
+              )}
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowImageModal(false)}
+          >
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 };

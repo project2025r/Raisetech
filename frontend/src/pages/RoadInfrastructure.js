@@ -470,390 +470,432 @@ function RoadInfrastructure() {
   };
 
   return (
-    <Container fluid className="mt-4">
-      <h1 className="text-center mb-4">Road Infrastructure Analysis</h1>
-      
-      <Tabs
-        activeKey={activeTab}
-        onSelect={(k) => setActiveTab(k)}
-        className="mb-4"
-      >
-        <Tab eventKey="detection" title="Detection">
-          <Row>
-            <Col md={6}>
-              <Card className="mb-4 shadow-sm">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">Detection Settings</h5>
-                </Card.Header>
-                <Card.Body>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Select Infrastructure Classes to Detect</Form.Label>
-                    <Form.Control
-                      as="select"
-                      multiple
-                      value={selectedClasses}
-                      onChange={(e) => setSelectedClasses([...e.target.selectedOptions].map(opt => opt.value))}
-                      style={{ height: '150px' }}
-                    >
-                      {(classNames.length > 0 ? classNames : [
-                        'Hot Thermoplastic Paint-edge_line-',
-                        'Water-Based Kerb Paint',
-                        'Single W Metal Beam Crash Barrier',
-                        'Hot Thermoplastic Paint-lane_line-',
-                        'Rubber Speed Breaker',
-                        'YNM Informatory Sign Boards',
-                        'Cold Plastic Rumble Marking Paint',
-                        'Raised Pavement Markers'
-                      ]).map((cls) => (
-                        <option key={cls} value={cls}>{cls}</option>
-                      ))}
-                    </Form.Control>
-                  </Form.Group>
+    <Container fluid className="mt-3">
+      <Row>
+        <Col md={6}>
+          <Card className="mb-3 shadow-sm">
+            <Card.Header className="bg-primary text-white py-2">
+              <h6 className="mb-0">Detection Settings</h6>
+            </Card.Header>
+            <Card.Body className="py-3">
+              <Form.Group className="mb-3">
+                <Form.Label className="mb-1">Select Infrastructure Classes to Detect</Form.Label>
+                <Form.Control
+                  as="select"
+                  multiple
+                  value={selectedClasses}
+                  onChange={(e) => setSelectedClasses([...e.target.selectedOptions].map(opt => opt.value))}
+                  style={{ height: '120px' }}
+                >
+                  {(classNames.length > 0 ? classNames : [
+                    'Hot Thermoplastic Paint-edge_line-',
+                    'Water-Based Kerb Paint',
+                    'Single W Metal Beam Crash Barrier',
+                    'Hot Thermoplastic Paint-lane_line-',
+                    'Rubber Speed Breaker',
+                    'YNM Informatory Sign Boards',
+                    'Cold Plastic Rumble Marking Paint',
+                    'Raised Pavement Markers'
+                  ]).map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </Form.Control>
+              </Form.Group>
 
-                  <Form.Group className="mb-3">
-                    <Form.Label>Input Source</Form.Label>
-                    <Form.Select
-                      value={inputSource}
-                      onChange={(e) => setInputSource(e.target.value)}
-                    >
-                      <option value="video">Video</option>
-                      <option value="image">Image</option>
-                      <option value="camera">Live Camera</option>
-                    </Form.Select>
-                  </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label className="mb-1">Input Source</Form.Label>
+                <Form.Select
+                  value={inputSource}
+                  onChange={(e) => setInputSource(e.target.value)}
+                >
+                  <option value="video">Video</option>
+                  <option value="image">Image</option>
+                  <option value="camera">Live Camera</option>
+                </Form.Select>
+              </Form.Group>
 
-                  {/* Sticky note reminder */}
-                  <OverlayTrigger 
-                    trigger="click" 
-                    placement="right" 
-                    overlay={reminderPopover}
-                    rootClose
-                  >
-                    <div 
-                      className="sticky-note-icon mb-3"
-                      style={{ cursor: 'pointer', display: 'inline-block' }}
-                    >
+              {/* Sticky note reminder */}
+              <OverlayTrigger 
+                trigger="click" 
+                placement="right" 
+                overlay={reminderPopover}
+                rootClose
+              >
+                <div 
+                  className="sticky-note-icon mb-2"
+                  style={{ cursor: 'pointer', display: 'inline-block' }}
+                >
+                  <img 
+                    src="/remindericon.svg" 
+                    alt="Image Upload Guidelines" 
+                    style={{ width: '28px', height: '28px' }}
+                  />
+                </div>
+              </OverlayTrigger>
+
+              {inputSource === 'video' && (
+                <Form.Group className="mb-3">
+                  <Form.Label>Upload Video</Form.Label>
+                  <Form.Control 
+                    type="file" 
+                    accept="video/*"
+                    onChange={handleVideoChange}
+                    ref={fileInputRef}
+                  />
+                  {videoPreview && (
+                    <div className="mt-3">
+                      <video 
+                        src={videoPreview} 
+                        controls 
+                        style={{ maxWidth: '100%', maxHeight: '300px' }} 
+                      />
+                    </div>
+                  )}
+                </Form.Group>
+              )}
+
+              {inputSource === 'image' && (
+                <Form.Group className="mb-3">
+                  <Form.Label>Upload Image</Form.Label>
+                  <Form.Control 
+                    type="file" 
+                    accept="image/*"
+                    onChange={handleImageChange}
+                    ref={fileInputRef}
+                  />
+                  {imagePreview && (
+                    <div className="mt-3">
                       <img 
-                        src="/remindericon.svg" 
-                        alt="Image Upload Guidelines" 
-                        style={{ width: '32px', height: '32px' }}
+                        src={imagePreview} 
+                        alt="Preview" 
+                        style={{ maxWidth: '100%', maxHeight: '300px' }} 
                       />
                     </div>
-                  </OverlayTrigger>
-
-                  {inputSource === 'video' && (
-                    <Form.Group className="mb-3">
-                      <Form.Label>Upload Video</Form.Label>
-                      <Form.Control 
-                        type="file" 
-                        accept="video/*"
-                        onChange={handleVideoChange}
-                        ref={fileInputRef}
-                      />
-                      {videoPreview && (
-                        <div className="mt-3">
-                          <video 
-                            src={videoPreview} 
-                            controls 
-                            style={{ maxWidth: '100%', maxHeight: '300px' }} 
-                          />
-                        </div>
-                      )}
-                    </Form.Group>
                   )}
+                </Form.Group>
+              )}
 
-                  {inputSource === 'image' && (
-                    <Form.Group className="mb-3">
-                      <Form.Label>Upload Image</Form.Label>
-                      <Form.Control 
-                        type="file" 
-                        accept="image/*"
-                        onChange={handleImageChange}
-                        ref={fileInputRef}
-                      />
-                      {imagePreview && (
-                        <div className="mt-3">
-                          <img 
-                            src={imagePreview} 
-                            alt="Preview" 
-                            style={{ maxWidth: '100%', maxHeight: '300px' }} 
-                          />
-                        </div>
-                      )}
-                    </Form.Group>
-                  )}
-
-                  {inputSource === 'camera' && (
-                    <div className="text-center mt-3">
-                      <Button 
-                        variant={cameraActive ? "danger" : "info"} 
-                        onClick={toggleCamera}
-                        className="mb-2"
-                      >
-                        {cameraActive ? 'Stop Camera' : 'Start Camera'}
-                      </Button>
-                      
-                      {cameraActive && (
-                        <>
-                          <div className="webcam-container mb-3">
-                            <Webcam
-                              audio={false}
-                              ref={webcamRef}
-                              screenshotFormat="image/jpeg"
-                              width="100%"
-                              height="auto"
-                              videoConstraints={{
-                                width: 640,
-                                height: 480,
-                                facingMode: cameraOrientation
-                              }}
-                            />
-                            {isMobile && (
-                              <Button 
-                                variant="outline-secondary" 
-                                onClick={toggleCameraOrientation}
-                                className="mt-2 mb-2"
-                                size="sm"
-                              >
-                                Rotate Camera
-                              </Button>
-                            )}
-                          </div>
+              {inputSource === 'camera' && (
+                <div className="text-center mt-3">
+                  <Button 
+                    variant={cameraActive ? "danger" : "info"} 
+                    onClick={toggleCamera}
+                    className="mb-2"
+                  >
+                    {cameraActive ? 'Stop Camera' : 'Start Camera'}
+                  </Button>
+                  
+                  {cameraActive && (
+                    <>
+                      <div className="webcam-container mb-3">
+                        <Webcam
+                          audio={false}
+                          ref={webcamRef}
+                          screenshotFormat="image/jpeg"
+                          width="100%"
+                          height="auto"
+                          videoConstraints={{
+                            width: 640,
+                            height: 480,
+                            facingMode: cameraOrientation
+                          }}
+                        />
+                        {isMobile && (
                           <Button 
-                            variant="success" 
-                            onClick={handleCapture}
+                            variant="outline-secondary" 
+                            onClick={toggleCameraOrientation}
+                            className="mt-2 mb-2"
+                            size="sm"
                           >
-                            Capture Photo
+                            Rotate Camera
                           </Button>
-                        </>
-                      )}
-                      
-                      {imagePreview && (
-                        <div className="mt-3">
-                          <img 
-                            src={imagePreview} 
-                            alt="Captured" 
-                            style={{ maxWidth: '100%', maxHeight: '300px' }} 
-                          />
-                        </div>
-                      )}
+                        )}
+                      </div>
+                      <Button 
+                        variant="success" 
+                        onClick={handleCapture}
+                      >
+                        Capture Photo
+                      </Button>
+                    </>
+                  )}
+                  
+                  {imagePreview && (
+                    <div className="mt-3">
+                      <img 
+                        src={imagePreview} 
+                        alt="Captured" 
+                        style={{ maxWidth: '100%', maxHeight: '300px' }} 
+                      />
                     </div>
                   )}
+                </div>
+              )}
 
-                  {error && <Alert variant="danger">{error}</Alert>}
-                  <div className="d-flex gap-2 mt-3">
-                    <Button 
-                      variant="primary" 
-                      onClick={handleDetect}
-                      disabled={loading || 
-                        !hasMediaForDetection() ||
-                        selectedClasses.length === 0 ||
-                        isProcessing}
-                    >
-                      {loading ? (
-                        <>
-                          <Spinner
-                            as="span"
-                            animation="border"
-                            size="sm"
-                            role="status"
-                            aria-hidden="true"
-                          />
-                          <span className="ms-2">Processing...</span>
-                        </>
-                      ) : (
-                        "Detect Infrastructure"
-                      )}
-                    </Button>
-              
-                    <Button 
-                      variant="secondary" 
-                      onClick={isProcessing ? handleStopProcessing : handleReset}
-                      disabled={loading && !isProcessing}
-                    >
-                      {isProcessing ? "Stop Processing" : "Reset"}
-                    </Button>
-                  </div>
-                </Card.Body>
-              </Card>
-            </Col>
-            
-            <Col md={6}>
-              {processedImage ? (
-                <Card className="mb-4 shadow-sm">
-                  <Card.Header className="bg-success text-white">
-                    <h5 className="mb-0">Detection Results</h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <div className="processed-image-container mb-3">
-                      {isBuffering && (
-                        <div className="processing-overlay">
-                          <Spinner animation="border" role="status">
-                            <span className="visually-hidden">Buffering video...</span>
-                          </Spinner>
-                          <span style={{ color: 'white', marginLeft: 10 }}>Buffering video...</span>
-                        </div>
-                      )}
-                      <img
-                        src={processedImage ? (processedImage.startsWith('data:') ? processedImage : `data:image/jpeg;base64,${processedImage}`) : ''}
-                        alt="Processed"
-                        style={{ maxWidth: '100%' }}
-                        onError={(e) => { e.target.onerror = null; e.target.src = ''; setError('Failed to display processed frame.'); }}
+              {error && <Alert variant="danger">{error}</Alert>}
+              <div className="d-flex gap-2 mt-3">
+                <Button 
+                  variant="primary" 
+                  onClick={handleDetect}
+                  disabled={loading || 
+                    !hasMediaForDetection() ||
+                    selectedClasses.length === 0 ||
+                    isProcessing}
+                >
+                  {loading ? (
+                    <>
+                      <Spinner
+                        as="span"
+                        animation="border"
+                        size="sm"
+                        role="status"
+                        aria-hidden="true"
                       />
-                      {isProcessing && !isBuffering && (
-                        <div className="processing-overlay">
-                          <Spinner animation="border" role="status">
-                            <span className="visually-hidden">Processing...</span>
-                          </Spinner>
-                        </div>
-                      )}
-                      {/* Playback controls */}
-                      {frameBuffer.length > 0 && !isBuffering && (
-                        <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 10 }}>
-                          <button onClick={handleRewind} disabled={currentFrameIndex === 0}>⏪</button>
-                          <button onClick={handlePlayPause}>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</button>
-                          <button onClick={handleForward} disabled={currentFrameIndex >= frameBuffer.length - 1}>⏩</button>
-                          <input
-                            type="range"
-                            min={0}
-                            max={frameBuffer.length - 1}
-                            value={currentFrameIndex}
-                            onChange={handleSliderChange}
-                            style={{ flex: 1 }}
-                          />
-                          <span style={{ minWidth: 60 }}>{currentFrameIndex + 1} / {frameBuffer.length}</span>
-                        </div>
-                      )}
+                      <span className="ms-2">Processing...</span>
+                    </>
+                  ) : (
+                    "Detect Infrastructure"
+                  )}
+                </Button>
+              
+                <Button 
+                  variant="secondary" 
+                  onClick={isProcessing ? handleStopProcessing : handleReset}
+                  disabled={loading && !isProcessing}
+                >
+                  {isProcessing ? "Stop Processing" : "Reset"}
+                </Button>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+        
+        <Col md={6}>
+          {processedImage ? (
+            <Card className="mb-4 shadow-sm">
+              <Card.Header className="bg-success text-white">
+                <h5 className="mb-0">Detection Results</h5>
+              </Card.Header>
+              <Card.Body>
+                <div className="processed-image-container mb-3">
+                  {isBuffering && (
+                    <div className="processing-overlay">
+                      <Spinner animation="border" role="status">
+                        <span className="visually-hidden">Buffering video...</span>
+                      </Spinner>
+                      <span style={{ color: 'white', marginLeft: 10 }}>Buffering video...</span>
+                    </div>
+                  )}
+                  <img
+                    src={processedImage ? (processedImage.startsWith('data:') ? processedImage : `data:image/jpeg;base64,${processedImage}`) : ''}
+                    alt="Processed"
+                    style={{ maxWidth: '100%' }}
+                    onError={(e) => { e.target.onerror = null; e.target.src = ''; setError('Failed to display processed frame.'); }}
+                  />
+                  {isProcessing && !isBuffering && (
+                    <div className="processing-overlay">
+                      <Spinner animation="border" role="status">
+                        <span className="visually-hidden">Processing...</span>
+                      </Spinner>
+                    </div>
+                  )}
+                  {/* Playback controls */}
+                  {frameBuffer.length > 0 && !isBuffering && (
+                    <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 10 }}>
+                      <button onClick={handleRewind} disabled={currentFrameIndex === 0}>⏪</button>
+                      <button onClick={handlePlayPause}>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</button>
+                      <button onClick={handleForward} disabled={currentFrameIndex >= frameBuffer.length - 1}>⏩</button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={frameBuffer.length - 1}
+                        value={currentFrameIndex}
+                        onChange={handleSliderChange}
+                        style={{ flex: 1 }}
+                      />
+                      <span style={{ minWidth: 60 }}>{currentFrameIndex + 1} / {frameBuffer.length}</span>
+                    </div>
+                  )}
+                </div>
+                
+                {detectionResults && detectionResults.detections && (
+                  <>
+                    <h5>Detection Summary</h5>
+                    <div className="table-responsive">
+                      <table className="table table-striped">
+                        <thead>
+                          <tr>
+                            <th>Infrastructure Type</th>
+                            <th>Count</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(getClassCounts()).map(([cls, count]) => (
+                            <tr key={cls}>
+                              <td>{cls}</td>
+                              <td>{count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                     
-                    {detectionResults && detectionResults.detections && (
+                    {detectionResults.continuous_lengths && Object.keys(detectionResults.continuous_lengths).length > 0 && (
                       <>
-                        <h5>Detection Summary</h5>
+                        <h5>Cumulative Lengths (Continuous Classes)</h5>
                         <div className="table-responsive">
                           <table className="table table-striped">
                             <thead>
                               <tr>
                                 <th>Infrastructure Type</th>
-                                <th>Count</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {Object.entries(getClassCounts()).map(([cls, count]) => (
-                                <tr key={cls}>
-                                  <td>{cls}</td>
-                                  <td>{count}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        
-                        {detectionResults.continuous_lengths && Object.keys(detectionResults.continuous_lengths).length > 0 && (
-                          <>
-                            <h5>Cumulative Lengths (Continuous Classes)</h5>
-                            <div className="table-responsive">
-                              <table className="table table-striped">
-                                <thead>
-                                  <tr>
-                                    <th>Infrastructure Type</th>
-                                    <th>Cumulative Length (km)</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {Object.entries(detectionResults.continuous_lengths).map(([cls, length]) => (
-                                    <tr key={cls}>
-                                      <td>{cls}</td>
-                                      <td>{length}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </>
-                        )}
-                      </>
-                    )}
-                    {/* Live Discrete Table */}
-                    {liveDistinctTable.length > 0 && (
-                      <div style={{ marginTop: 20 }}>
-                        <h5>Live Discrete Detections</h5>
-                        <div className="table-responsive" style={{ maxHeight: 200, overflowY: 'auto' }}>
-                          <table className="table table-striped table-sm">
-                            <thead>
-                              <tr>
-                                <th>ID</th>
-                                <th>Class</th>
-                                <th>GPS</th>
-                                <th>Frame</th>
-                                <th>Second</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {liveDistinctTable.map(row => (
-                                <tr key={row.ID}>
-                                  <td>{row.ID}</td>
-                                  <td>{row.Class}</td>
-                                  <td>{row.GPS ? `${row.GPS[0].toFixed(6)}, ${row.GPS[1].toFixed(6)}` : '-'}</td>
-                                  <td>{row.Frame}</td>
-                                  <td>{row.Second}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                    {/* Live Continuous Table */}
-                    {liveContinuousTable.length > 0 && (
-                      <div style={{ marginTop: 20 }}>
-                        <h5>Live Continuous (Cumulative) Data</h5>
-                        <div className="table-responsive" style={{ maxHeight: 150, overflowY: 'auto' }}>
-                          <table className="table table-striped table-sm">
-                            <thead>
-                              <tr>
-                                <th>Class</th>
                                 <th>Cumulative Length (km)</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {liveContinuousTable.map(row => (
-                                <tr key={row.Class}>
-                                  <td>{row.Class}</td>
-                                  <td>{row['Cumulative Length (km)']}</td>
+                              {Object.entries(detectionResults.continuous_lengths).map(([cls, length]) => (
+                                <tr key={cls}>
+                                  <td>{cls}</td>
+                                  <td>{length}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
-                      </div>
+                      </>
                     )}
-                  </Card.Body>
-                </Card>
-              ) : (
-                <Card className="mb-4 shadow-sm">
-                  <Card.Header className="bg-info text-white">
-                    <h5 className="mb-0">Instructions</h5>
-                  </Card.Header>
-                  <Card.Body>
-                    <ol>
-                      <li>Select one or more infrastructure types to detect</li>
-                      <li>Choose your input source (video, image, or camera)</li>
-                      <li>Upload media or capture a photo</li>
-                      <li>Click "Detect Infrastructure" to analyze</li>
-                    </ol>
-                    <p>Detection will identify and highlight road infrastructure features such as:</p>
-                    <ul>
-                      <li>Pavement markings</li>
-                      <li>Road signs</li>
-                      <li>Safety barriers</li>
-                      <li>Road edge lines</li>
-                      <li>Lane markings</li>
-                    </ul>
-                  </Card.Body>
-                </Card>
-              )}
-            </Col>
-          </Row>
+                  </>
+                )}
+                {/* Live Discrete Table */}
+                {liveDistinctTable.length > 0 && (
+                  <div style={{ marginTop: 20 }}>
+                    <h5>Live Discrete Detections</h5>
+                    <div className="table-responsive" style={{ maxHeight: 200, overflowY: 'auto' }}>
+                      <table className="table table-striped table-sm">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Class</th>
+                            <th>GPS</th>
+                            <th>Frame</th>
+                            <th>Second</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {liveDistinctTable.map(row => (
+                            <tr key={row.ID}>
+                              <td>{row.ID}</td>
+                              <td>{row.Class}</td>
+                              <td>{row.GPS ? `${row.GPS[0].toFixed(6)}, ${row.GPS[1].toFixed(6)}` : '-'}</td>
+                              <td>{row.Frame}</td>
+                              <td>{row.Second}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {/* Live Continuous Table */}
+                {liveContinuousTable.length > 0 && (
+                  <div style={{ marginTop: 20 }}>
+                    <h5>Live Continuous (Cumulative) Data</h5>
+                    <div className="table-responsive" style={{ maxHeight: 150, overflowY: 'auto' }}>
+                      <table className="table table-striped table-sm">
+                        <thead>
+                          <tr>
+                            <th>Class</th>
+                            <th>Cumulative Length (km)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {liveContinuousTable.map(row => (
+                            <tr key={row.Class}>
+                              <td>{row.Class}</td>
+                              <td>{row['Cumulative Length (km)']}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          ) : (
+            <Card className="mb-4 shadow-sm">
+              <Card.Header className="bg-info text-white">
+                <h5 className="mb-0">Instructions</h5>
+              </Card.Header>
+              <Card.Body>
+                <ol>
+                  <li>Select one or more infrastructure types to detect</li>
+                  <li>Choose your input source (video, image, or camera)</li>
+                  <li>Upload media or capture a photo</li>
+                  <li>Click "Detect Infrastructure" to analyze</li>
+                </ol>
+                <p>Detection will identify and highlight road infrastructure features such as:</p>
+                <ul>
+                  <li>Pavement markings</li>
+                  <li>Road signs</li>
+                  <li>Safety barriers</li>
+                  <li>Road edge lines</li>
+                  <li>Lane markings</li>
+                </ul>
+              </Card.Body>
+            </Card>
+          )}
+        </Col>
+      </Row>
+
+      <Tabs
+        activeKey={activeTab}
+        onSelect={(k) => setActiveTab(k)}
+        className="mt-4"
+      >
+        <Tab eventKey="detection" title="Detection">
+          <Card className="shadow-sm">
+            <Card.Body>
+              <h4>About Road Infrastructure Analysis</h4>
+              <p>
+                The Road Infrastructure Analysis module uses computer vision to detect, classify, and 
+                analyze various road infrastructure elements. This helps in infrastructure inventory 
+                management and maintenance planning.
+              </p>
+              
+              <h5>Detectable Infrastructure Types</h5>
+              <ul>
+                <li><strong>Cold Plastic Rumble Marking Paint</strong> - Textured road markings that provide tactile and auditory warnings</li>
+                <li><strong>Raised Pavement Markers</strong> - Reflective or non-reflective markers installed on roadways</li>
+                <li><strong>Rubber Speed Breaker</strong> - Traffic calming devices to reduce vehicle speeds</li>
+                <li><strong>SW_Beam_Crash_Barrier</strong> - Safety barriers to prevent vehicles from veering off the road</li>
+                <li><strong>Water-Based Kerb Paint</strong> - Paint used for road edge visibility and demarcation</li>
+                <li><strong>YNM Informatory Sign Boards</strong> - Road signs providing information to road users</li>
+                <li><strong>HTP-edge_line</strong> - High-performance thermoplastic road edge line markings</li>
+                <li><strong>HTP-lane_line</strong> - High-performance thermoplastic lane separators</li>
+              </ul>
+              
+              <h5>How The System Works</h5>
+              <p>
+                The system uses a trained YOLOv8 object detection model to identify infrastructure elements 
+                in images or video. For each detection, the system records:
+              </p>
+              <ul>
+                <li>The type of infrastructure element</li>
+                <li>Confidence score of the detection</li>
+                <li>Physical dimensions (where applicable)</li>
+                <li>Geolocation (when available from device GPS)</li>
+              </ul>
+              
+              <h5>Use Cases</h5>
+              <ul>
+                <li>Road infrastructure inventory management</li>
+                <li>Monitoring road marking conditions</li>
+                <li>Planning maintenance and replacement schedules</li>
+                <li>Assessing compliance with safety standards</li>
+                <li>Calculating infrastructure density and distribution</li>
+              </ul>
+            </Card.Body>
+          </Card>
         </Tab>
         
         <Tab eventKey="information" title="Information">

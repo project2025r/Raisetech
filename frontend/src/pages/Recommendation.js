@@ -330,294 +330,295 @@ function Recommendation() {
 
   return (
     <Container fluid className="mt-4">
-      <h1 className="text-center mb-4">Pothole Repair Recommendations</h1>
-      <p className="text-center text-muted mb-4">Analysis is based on all {potholeStats.potholeCount} potholes detected in the most recently processed image</p>
-      
-      {loading ? (
-        <div className="text-center">
-          <div className="spinner-border text-primary" role="status">
-            <span className="visually-hidden">Loading...</span>
-          </div>
-        </div>
-      ) : error ? (
-        <Alert variant="danger">{error}</Alert>
-      ) : potholeData.length === 0 ? (
-        <Alert variant="warning">
-          No pothole data available. Please process an image in the Pavement section first.
-        </Alert>
-      ) : (
-        <Row>
-          <Col md={12}>
-            <Card className="mb-4 shadow-sm recommendation-card">
-              <Card.Header className="recommendation-header">
-                <Row>
-                  <Col>
-                    <h5 className="mb-0">Pothole Repair Recommendations</h5>
-                  </Col>
-                  <Col xs="auto">
-                    <div className="recommendation-type-buttons">
-                      <Button
-                        className={`recommendation-btn ${activeTab === "manual" ? "active" : "inactive"}`}
-                        onClick={() => setActiveTab("manual")}
-                        variant=""
-                      >
-                        Manual Recommendations
-                      </Button>
-                      <Button
-                        className={`recommendation-btn ${activeTab === "auto" ? "active" : "inactive"}`}
-                        onClick={() => setActiveTab("auto")}
-                        variant=""
-                      >
-                        Automatic Recommendations
-                      </Button>
-                    </div>
-                  </Col>
-                </Row>
-              </Card.Header>
-              <Card.Body>
-                {/* Display pothole statistics at the top in a single row */}
-                <Row className="mb-4">
-                  <Col md={12} className="mb-2">
-                    <h5 className="text-center">Statistics from Most Recent Image Upload</h5>
-                  </Col>
-                </Row>
-                <Row className="stats-row mb-4">
-                  <Col md={3} sm={6} className="mb-3 mb-md-0">
-                    <Card className="recommendation-card h-100">
-                      <Card.Body>
-                        <h6>Detected Potholes</h6>
-                        <h3>{potholeStats.potholeCount}</h3>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                  <Col md={3} sm={6} className="mb-3 mb-md-0">
-                    <Card className="recommendation-card h-100">
-                      <Card.Body>
-                        <h6>Avg Pothole Volume</h6>
-                        <h3>{potholeStats.avgPotholeVolume.toFixed(2)} cm<sup>3</sup></h3>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                  <Col md={3} sm={6} className="mb-3 mb-md-0">
-                    <Card className="recommendation-card h-100">
-                      <Card.Body>
-                        <h6>Total Volume</h6>
-                        <h3>{potholeStats.totalPotholeVolume.toFixed(2)} cm<sup>3</sup></h3>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                  <Col md={3} sm={6} className="mb-3 mb-md-0">
-                    <Card className="recommendation-card h-100">
-                      <Card.Body>
-                        <h6>Road Length</h6>
-                        <h3>{potholeStats.roadLength} m</h3>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                </Row>
-
-                {activeTab === "manual" ? (
-                  /* Manual Recommendations */
-                  <div className="repair-parameters">
-                    <h5 className="mb-3">Select Repair Parameters</h5>
-                    <p className="text-muted mb-3">Based on all {potholeStats.potholeCount} potholes from the latest image</p>
-                    
-                    <Row className="lists-container">
-                      <Col md={6}>
-                        <h6 className="mt-4 mb-2">Materials</h6>
-                        <ResponsiveCheckboxList
-                          options={Object.keys(MATERIAL_EQUIPMENT_MAP)}
-                          selectedValues={selectedMaterials}
-                          onChange={(e) => handleMaterialChange(e)}
-                          idPrefix="material"
-                          className="repair-param-item"
-                          containerClassName="repair-param-container"
-                        />
-                      </Col>
-                      
-                      <Col md={6}>
-                        <h6 className="mt-4 mb-2">Equipment</h6>
-                        <ResponsiveCheckboxList
-                          options={EQUIPMENT_OPTIONS}
-                          selectedValues={selectedEquipment}
-                          onChange={(e) => handleEquipmentChange(e)}
-                          idPrefix="equipment"
-                          className="repair-param-item"
-                          containerClassName="repair-param-container"
-                        />
-                      </Col>
-                    </Row>
-                    
-                    <h6 className="mt-4 mb-2">Labor Requirements</h6>
-                    <Row className="mb-4">
-                      <Col xs={12} sm={4} className="mb-3">
-                        <Form.Group>
-                          <Form.Label>Unskilled Labor</Form.Label>
-                          <Form.Control
-                            type="number"
-                            min="0"
-                            value={laborCounts.Unskilled}
-                            onChange={(e) => handleLaborChange('Unskilled', e.target.value)}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col xs={12} sm={4} className="mb-3">
-                        <Form.Group>
-                          <Form.Label>Skilled Labor</Form.Label>
-                          <Form.Control
-                            type="number"
-                            min="0"
-                            value={laborCounts.Skilled}
-                            onChange={(e) => handleLaborChange('Skilled', e.target.value)}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col xs={12} sm={4} className="mb-3">
-                        <Form.Group>
-                          <Form.Label>Supervisors</Form.Label>
-                          <Form.Control
-                            type="number"
-                            min="0"
-                            value={laborCounts.Supervisors}
-                            onChange={(e) => handleLaborChange('Supervisors', e.target.value)}
-                          />
-                        </Form.Group>
-                      </Col>
-                    </Row>
-                    
-                    <div className="d-grid gap-2 col-md-6 mx-auto mb-4">
-                      <Button 
-                        variant="primary" 
-                        size="lg" 
-                        onClick={calculateRepairEstimates}
-                        disabled={selectedMaterials.length === 0}
-                      >
-                        Calculate Repair Estimates
-                      </Button>
-                    </div>
-
-                    {repairResults && (
-                      <div>
-                        <h5 className="mb-3">Repair Analysis Summary</h5>
-                        <Row>
-                          <Col md={4}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Body>
-                                <h6>Pothole Category</h6>
-                                <h4>{repairResults.category}</h4>
-                              </Card.Body>
-                            </Card>
-                          </Col>
-                          <Col md={4}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Body>
-                                <h6>Base Repair Cost</h6>
-                                <h4>₹{repairResults.base_cost_min.toFixed(2)} – ₹{repairResults.base_cost_max.toFixed(2)}</h4>
-                              </Card.Body>
-                            </Card>
-                            {repairResults.extra_equip_cost > 0 && (
-                              <Card className="mb-3 recommendation-card">
-                                <Card.Body>
-                                  <h6>Additional Equipment Cost</h6>
-                                  <h4>₹{repairResults.extra_equip_cost.toFixed(2)}</h4>
-                                </Card.Body>
-                              </Card>
-                            )}
-                          </Col>
-                          <Col md={4}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Body>
-                                <h6>Estimated Repair Time</h6>
-                                <h4>{repairResults.total_time_minutes} minutes (~{repairResults.repair_days} day(s))</h4>
-                              </Card.Body>
-                            </Card>
-                          </Col>
-                        </Row>
-                        <Row>
-                          <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Header>Total Repair Cost Estimate</Card.Header>
-                              <Card.Body>
-                                <h3>₹{repairResults.total_cost_min.toFixed(2)} – ₹{repairResults.total_cost_max.toFixed(2)}</h3>
-                              </Card.Body>
-                            </Card>
-                          </Col>
-                          <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Header>Additional Considerations</Card.Header>
-                              <Card.Body>
-                                <p>The estimates adjust based on your input selections and the cost rubric.</p>
-                              </Card.Body>
-                            </Card>
-                          </Col>
-                        </Row>
-                      </div>
-                    )}
+      <Row>
+        <Col md={12}>
+          <Card className="mb-4 shadow-sm recommendation-card">
+            <Card.Header className="recommendation-header">
+              <Row>
+                <Col>
+                  <h5 className="mb-0">Pothole Repair Recommendations</h5>
+                </Col>
+                <Col xs="auto">
+                  <div className="recommendation-type-buttons">
+                    <Button
+                      className={`recommendation-btn ${activeTab === "manual" ? "active" : "inactive"}`}
+                      onClick={() => setActiveTab("manual")}
+                      variant=""
+                    >
+                      Manual Recommendations
+                    </Button>
+                    <Button
+                      className={`recommendation-btn ${activeTab === "auto" ? "active" : "inactive"}`}
+                      onClick={() => setActiveTab("auto")}
+                      variant=""
+                    >
+                      Automatic Recommendations
+                    </Button>
                   </div>
-                ) : (
-                  /* Automatic Recommendations */
-                  <div>
-                    {autoRecommendations ? (
-                      <div>
-                        <h4 className="mb-3">Pothole Type: {autoRecommendations.potholeType}</h4>
-                        <p className="text-muted mb-3">Comprehensive analysis based on all {autoRecommendations.totalPotholes} potholes from the latest image upload</p>
-                        <Row>
+                </Col>
+              </Row>
+            </Card.Header>
+            <Card.Body>
+              {/* Display pothole statistics at the top in a single row */}
+              <Row className="mb-3">
+                <Col md={12} className="mb-2">
+                  <h6 className="text-center">Statistics from Most Recent Image Upload</h6>
+                </Col>
+              </Row>
+              <Row className="stats-row mb-3 g-3">
+                <Col md={3} sm={6}>
+                  <Card className="recommendation-card h-100">
+                    <Card.Body className="py-3">
+                      <h6 className="mb-2">Detected Potholes</h6>
+                      <h4 className="mb-0">{potholeStats.potholeCount}</h4>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3} sm={6}>
+                  <Card className="recommendation-card h-100">
+                    <Card.Body className="py-3">
+                      <h6 className="mb-2">Avg Pothole Volume</h6>
+                      <h4 className="mb-0">{potholeStats.avgPotholeVolume.toFixed(2)} cm<sup>3</sup></h4>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3} sm={6}>
+                  <Card className="recommendation-card h-100">
+                    <Card.Body className="py-3">
+                      <h6 className="mb-2">Total Volume</h6>
+                      <h4 className="mb-0">{potholeStats.totalPotholeVolume.toFixed(2)} cm<sup>3</sup></h4>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3} sm={6}>
+                  <Card className="recommendation-card h-100">
+                    <Card.Body className="py-3">
+                      <h6 className="mb-2">Road Length</h6>
+                      <h4 className="mb-0">{potholeStats.roadLength} m</h4>
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+
+              {loading ? (
+                <div className="text-center">
+                  <div className="spinner-border text-primary" role="status">
+                    <span className="visually-hidden">Loading...</span>
+                  </div>
+                </div>
+              ) : error ? (
+                <Alert variant="danger" className="p-3">{error}</Alert>
+              ) : potholeData.length === 0 ? (
+                <Alert variant="warning" className="p-3">
+                  No pothole data available. Please process an image in the Pavement section first.
+                </Alert>
+              ) : (
+                <Row>
+                  <Col md={12}>
+                    {activeTab === "manual" ? (
+                      /* Manual Recommendations */
+                      <div className="repair-parameters">
+                        <h5 className="mb-3">Select Repair Parameters</h5>
+                        <p className="text-muted mb-3">Based on all {potholeStats.potholeCount} potholes from the latest image</p>
+                        
+                        <Row className="lists-container">
                           <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Body>
-                                <p><strong>Total Potholes Detected:</strong> {autoRecommendations.totalPotholes}</p>
-                                <p><strong>Average Pothole Volume:</strong> {autoRecommendations.avgVolume ? autoRecommendations.avgVolume.toFixed(2) : '0'} cm³</p>
-                                <p><strong>Total Volume:</strong> {autoRecommendations.totalVolume ? autoRecommendations.totalVolume.toFixed(2) : '0'} cm³</p>
-                                <p><strong>Manpower Required:</strong> {autoRecommendations.manpowerRequired}</p>
-                              </Card.Body>
-                            </Card>
+                            <h6 className="mt-4 mb-2">Materials</h6>
+                            <ResponsiveCheckboxList
+                              options={Object.keys(MATERIAL_EQUIPMENT_MAP)}
+                              selectedValues={selectedMaterials}
+                              onChange={(e) => handleMaterialChange(e)}
+                              idPrefix="material"
+                              className="repair-param-item"
+                              containerClassName="repair-param-container"
+                            />
                           </Col>
+                          
                           <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Body>
-                                <p><strong>Cost Estimate (per Pothole):</strong> {autoRecommendations.costPerPothole}</p>
-                                <p><strong>Total Cost:</strong> {autoRecommendations.totalCost}</p>
-                                <p><strong>Traffic Disruption:</strong> {autoRecommendations.trafficDisruption}</p>
-                              </Card.Body>
-                            </Card>
+                            <h6 className="mt-4 mb-2">Equipment</h6>
+                            <ResponsiveCheckboxList
+                              options={EQUIPMENT_OPTIONS}
+                              selectedValues={selectedEquipment}
+                              onChange={(e) => handleEquipmentChange(e)}
+                              idPrefix="equipment"
+                              className="repair-param-item"
+                              containerClassName="repair-param-container"
+                            />
                           </Col>
                         </Row>
-                        <Row>
-                          <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Header>Materials & Equipment</Card.Header>
-                              <Card.Body>
-                                <p><strong>Materials Required:</strong> {autoRecommendations.materialsRequired}</p>
-                                <p><strong>Equipment Used:</strong> {autoRecommendations.equipmentUsed}</p>
-                                <p><strong>Time Taken (Per Pothole):</strong> {autoRecommendations.timePerPothole}</p>
-                                <p><strong>Durability:</strong> {autoRecommendations.durability}</p>
-                              </Card.Body>
-                            </Card>
+                        
+                        <h6 className="mt-4 mb-2">Labor Requirements</h6>
+                        <Row className="mb-4">
+                          <Col xs={12} sm={4} className="mb-3">
+                            <Form.Group>
+                              <Form.Label>Unskilled Labor</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="0"
+                                value={laborCounts.Unskilled}
+                                onChange={(e) => handleLaborChange('Unskilled', e.target.value)}
+                              />
+                            </Form.Group>
                           </Col>
-                          <Col md={6}>
-                            <Card className="mb-3 recommendation-card">
-                              <Card.Header>Risk Assessment</Card.Header>
-                              <Card.Body>
-                                <p><strong>What If Not Fixed?:</strong> {autoRecommendations.ifNotFixed}</p>
-                              </Card.Body>
-                            </Card>
+                          <Col xs={12} sm={4} className="mb-3">
+                            <Form.Group>
+                              <Form.Label>Skilled Labor</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="0"
+                                value={laborCounts.Skilled}
+                                onChange={(e) => handleLaborChange('Skilled', e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col xs={12} sm={4} className="mb-3">
+                            <Form.Group>
+                              <Form.Label>Supervisors</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="0"
+                                value={laborCounts.Supervisors}
+                                onChange={(e) => handleLaborChange('Supervisors', e.target.value)}
+                              />
+                            </Form.Group>
                           </Col>
                         </Row>
+                        
+                        <div className="d-grid gap-2 col-md-6 mx-auto mb-4">
+                          <Button 
+                            variant="primary" 
+                            size="lg" 
+                            onClick={calculateRepairEstimates}
+                            disabled={selectedMaterials.length === 0}
+                          >
+                            Calculate Repair Estimates
+                          </Button>
+                        </div>
+
+                        {repairResults && (
+                          <div>
+                            <h5 className="mb-3">Repair Analysis Summary</h5>
+                            <Row>
+                              <Col md={4}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Body>
+                                    <h6>Pothole Category</h6>
+                                    <h4>{repairResults.category}</h4>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                              <Col md={4}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Body>
+                                    <h6>Base Repair Cost</h6>
+                                    <h4>₹{repairResults.base_cost_min.toFixed(2)} – ₹{repairResults.base_cost_max.toFixed(2)}</h4>
+                                  </Card.Body>
+                                </Card>
+                                {repairResults.extra_equip_cost > 0 && (
+                                  <Card className="mb-3 recommendation-card">
+                                    <Card.Body>
+                                      <h6>Additional Equipment Cost</h6>
+                                      <h4>₹{repairResults.extra_equip_cost.toFixed(2)}</h4>
+                                    </Card.Body>
+                                  </Card>
+                                )}
+                              </Col>
+                              <Col md={4}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Body>
+                                    <h6>Estimated Repair Time</h6>
+                                    <h4>{repairResults.total_time_minutes} minutes (~{repairResults.repair_days} day(s))</h4>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                            </Row>
+                            <Row>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Header>Total Repair Cost Estimate</Card.Header>
+                                  <Card.Body>
+                                    <h3>₹{repairResults.total_cost_min.toFixed(2)} – ₹{repairResults.total_cost_max.toFixed(2)}</h3>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Header>Additional Considerations</Card.Header>
+                                  <Card.Body>
+                                    <p>The estimates adjust based on your input selections and the cost rubric.</p>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                            </Row>
+                          </div>
+                        )}
                       </div>
                     ) : (
-                      <div className="text-center">
-                        <div className="spinner-border text-primary" role="status">
-                          <span className="visually-hidden">Loading automatic recommendations...</span>
-                        </div>
+                      /* Automatic Recommendations */
+                      <div>
+                        {autoRecommendations ? (
+                          <div>
+                            <h4 className="mb-3">Pothole Type: {autoRecommendations.potholeType}</h4>
+                            <p className="text-muted mb-3">Comprehensive analysis based on all {autoRecommendations.totalPotholes} potholes from the latest image upload</p>
+                            <Row>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Body>
+                                    <p><strong>Total Potholes Detected:</strong> {autoRecommendations.totalPotholes}</p>
+                                    <p><strong>Average Pothole Volume:</strong> {autoRecommendations.avgVolume ? autoRecommendations.avgVolume.toFixed(2) : '0'} cm³</p>
+                                    <p><strong>Total Volume:</strong> {autoRecommendations.totalVolume ? autoRecommendations.totalVolume.toFixed(2) : '0'} cm³</p>
+                                    <p><strong>Manpower Required:</strong> {autoRecommendations.manpowerRequired}</p>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Body>
+                                    <p><strong>Cost Estimate (per Pothole):</strong> {autoRecommendations.costPerPothole}</p>
+                                    <p><strong>Total Cost:</strong> {autoRecommendations.totalCost}</p>
+                                    <p><strong>Traffic Disruption:</strong> {autoRecommendations.trafficDisruption}</p>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                            </Row>
+                            <Row>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Header>Materials & Equipment</Card.Header>
+                                  <Card.Body>
+                                    <p><strong>Materials Required:</strong> {autoRecommendations.materialsRequired}</p>
+                                    <p><strong>Equipment Used:</strong> {autoRecommendations.equipmentUsed}</p>
+                                    <p><strong>Time Taken (Per Pothole):</strong> {autoRecommendations.timePerPothole}</p>
+                                    <p><strong>Durability:</strong> {autoRecommendations.durability}</p>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                              <Col md={6}>
+                                <Card className="mb-3 recommendation-card">
+                                  <Card.Header>Risk Assessment</Card.Header>
+                                  <Card.Body>
+                                    <p><strong>What If Not Fixed?:</strong> {autoRecommendations.ifNotFixed}</p>
+                                  </Card.Body>
+                                </Card>
+                              </Col>
+                            </Row>
+                          </div>
+                        ) : (
+                          <div className="text-center">
+                            <div className="spinner-border text-primary" role="status">
+                              <span className="visually-hidden">Loading automatic recommendations...</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                )}
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-      )}
+                  </Col>
+                </Row>
+              )}
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
     </Container>
   );
 }

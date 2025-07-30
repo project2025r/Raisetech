@@ -4,9 +4,10 @@
 }
 
 .content-container {
-  flex-grow: 1;
+  flex: 1;
   padding: 20px;
   overflow-y: auto;
+  min-width: 0; /* Prevent flex item from shrinking below content size */
 }
 
 /* Header */
@@ -173,6 +174,13 @@
   .content-container {
     padding: 12px;
     margin-bottom: 60px; /* Space for mobile navigation */
+    margin-left: 0; /* Remove left margin on mobile since sidebar is overlay */
+  }
+  
+  /* Ensure sidebar maintains proper width on mobile */
+  .sidebar {
+    width: 80%;
+    max-width: 300px;
   }
 
   .big-font {
@@ -228,6 +236,7 @@
 
   .content-container {
     padding: 8px;
+    margin-left: 0; /* Remove left margin on mobile since sidebar is overlay */
   }
 
   .header-title {
@@ -237,6 +246,29 @@
   .header-logo {
     height: 24px;
   }
+}
+
+/* Ensure sidebar width is maintained */
+.sidebar {
+  flex-shrink: 0 !important;
+  width: 250px !important;
+  min-width: 250px !important;
+  max-width: 250px !important;
+}
+
+/* Ensure app container respects sidebar width */
+.app-container {
+  display: flex !important;
+  min-height: 100vh;
+}
+
+/* Ensure content container doesn't affect sidebar */
+.content-container {
+  flex: 1 !important;
+  min-width: 0 !important;
+  padding: 20px;
+  overflow-y: auto;
+  margin-left: 250px; /* Account for fixed sidebar width */
 }
 
 /* Multiple image upload styling */

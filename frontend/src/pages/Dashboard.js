@@ -5,6 +5,10 @@ import Plot from 'react-plotly.js';
 import ChartContainer from '../components/ChartContainer';
 import DefectMap from '../components/DefectMap';
 import './dashboard.css';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
+import { saveAs } from 'file-saver';
 
 // ImageCard component to isolate state for each image
 const ImageCard = ({ defect, defectType, defectIdKey }) => {
@@ -81,7 +85,7 @@ const ImageCard = ({ defect, defectType, defectIdKey }) => {
               </>
             )}
             <p className="mb-1"><strong>Uploaded by:</strong> {defect.username}</p>
-            <p className="mb-1"><strong>Timestamp:</strong> {new Date(defect.timestamp).toLocaleString()}</p>
+            <p className="mb-1"><strong>Timestamp:</strong> {new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
             <div className="mt-2">
               <Button
                 variant={isOriginal ? 'primary' : 'outline-primary'}
@@ -170,15 +174,22 @@ function Dashboard({ user }) {
     types: [],
     counts: []
   });
+  
+  // Dashboard tab state
+  const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Get current date and 30 days ago for default date range
+  // Set default date range to previous week and auto-apply filter
   useEffect(() => {
     const currentDate = new Date();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    setEndDate(currentDate.toISOString().split('T')[0]);
-    setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
+    const lastWeek = new Date();
+    lastWeek.setDate(currentDate.getDate() - 6); // 6 days ago + today = 7 days
+
+    const formattedEndDate = currentDate.toISOString().split('T')[0];
+    const formattedStartDate = lastWeek.toISOString().split('T')[0];
+
+    setEndDate(formattedEndDate);
+    setStartDate(formattedStartDate);
+    fetchData({ startDate: formattedStartDate, endDate: formattedEndDate });
   }, []);
 
   // Fetch dashboard data from backend
@@ -287,13 +298,6 @@ function Dashboard({ user }) {
     }
   };
 
-  // Initial data fetch
-  useEffect(() => {
-    if (startDate && endDate) {
-      fetchData({ startDate, endDate });
-    }
-  }, []);
-
   // Fetch users list for filter dropdown
   useEffect(() => {
     const fetchUsers = async () => {
@@ -329,11 +333,11 @@ function Dashboard({ user }) {
   // Handle date filter reset
   const handleResetDateFilter = () => {
     const currentDate = new Date();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
+    const lastWeek = new Date();
+    lastWeek.setDate(currentDate.getDate() - 6); // 6 days ago + today = 7 days
+
     const newEndDate = currentDate.toISOString().split('T')[0];
-    const newStartDate = thirtyDaysAgo.toISOString().split('T')[0];
+    const newStartDate = lastWeek.toISOString().split('T')[0];
     
     setEndDate(newEndDate);
     setStartDate(newStartDate);
@@ -402,110 +406,318 @@ function Dashboard({ user }) {
     }));
   };
 
+  // Add export handlers
+  const handleDownloadPDF = () => {
+    const doc = new jsPDF();
+    let yPosition = 20;
+    
+    // Header
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Road AI Safety Enhancement - Dashboard Report', 105, yPosition, { align: 'center' });
+    yPosition += 15;
+    
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generated on: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`, 105, yPosition, { align: 'center' });
+    yPosition += 20;
+    
+    // Date Range Info
+    if (dateFilterApplied) {
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Date Range Filter:', 14, yPosition);
+      yPosition += 8;
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`From: ${new Date(startDate).toLocaleDateString()} To: ${new Date(endDate).toLocaleDateString()}`, 14, yPosition);
+      yPosition += 15;
+    }
+    
+    // Statistics Summary
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Statistics Summary', 14, yPosition);
+    yPosition += 10;
+    
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Total Potholes Detected: ${statistics.potholesDetected}`, 14, yPosition);
+    yPosition += 7;
+    doc.text(`Total Cracks Detected: ${statistics.cracksDetected}`, 14, yPosition);
+    yPosition += 7;
+    doc.text(`Total Kerbs Detected: ${statistics.kerbsDetected}`, 14, yPosition);
+    yPosition += 7;
+    doc.text(`Total Users: ${statistics.totalUsers}`, 14, yPosition);
+    yPosition += 15;
+    
+    // Infrastructure Distribution
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Infrastructure Distribution', 14, yPosition);
+    yPosition += 10;
+    
+    const totalIssues = statistics.potholesDetected + statistics.cracksDetected + statistics.kerbsDetected;
+    if (totalIssues > 0) {
+      const potholePercent = ((statistics.potholesDetected / totalIssues) * 100).toFixed(1);
+      const crackPercent = ((statistics.cracksDetected / totalIssues) * 100).toFixed(1);
+      const kerbPercent = ((statistics.kerbsDetected / totalIssues) * 100).toFixed(1);
+      
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Potholes: ${statistics.potholesDetected} (${potholePercent}%)`, 14, yPosition);
+      yPosition += 7;
+      doc.text(`Cracks: ${statistics.cracksDetected} (${crackPercent}%)`, 14, yPosition);
+      yPosition += 7;
+      doc.text(`Kerbs: ${statistics.kerbsDetected} (${kerbPercent}%)`, 14, yPosition);
+      yPosition += 15;
+    }
+    
+    // User Overview
+    if (dashboardData.users?.latest && dashboardData.users.latest.length > 0) {
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Recent Users', 14, yPosition);
+      yPosition += 10;
+      
+      const userTableData = dashboardData.users.latest.map((user, idx) => [
+        idx + 1,
+        user.username,
+        user.role,
+        new Date(user.last_login).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      ]);
+      
+      autoTable(doc, {
+        head: [['#', 'Username', 'Role', 'Last Login']],
+        body: userTableData,
+        startY: yPosition,
+        margin: { top: 10 },
+        styles: { fontSize: 10 },
+        headStyles: { fillColor: [0, 123, 255] }
+      });
+      
+      yPosition = doc.lastAutoTable.finalY + 15;
+    }
+    
+    // Potholes Section
+    if (dashboardData.potholes.latest && dashboardData.potholes.latest.length > 0) {
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Potholes Detected', 14, yPosition);
+      yPosition += 10;
+      
+      const potholeTableData = dashboardData.potholes.latest.map((defect, idx) => [
+        idx + 1,
+        defect.area_cm2 ? defect.area_cm2.toFixed(2) + ' cm²' : 'N/A',
+        defect.depth_cm ? defect.depth_cm.toFixed(2) + ' cm' : 'N/A',
+        defect.volume ? defect.volume.toFixed(2) : 'N/A',
+        defect.username || 'Unknown',
+        new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      ]);
+      
+      autoTable(doc, {
+        head: [['#', 'Area', 'Depth', 'Volume', 'Uploaded By', 'Timestamp']],
+        body: potholeTableData,
+        startY: yPosition,
+        margin: { top: 10 },
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [220, 53, 69] }
+      });
+      
+      yPosition = doc.lastAutoTable.finalY + 15;
+    }
+    
+    // Cracks Section
+    if (dashboardData.cracks.latest && dashboardData.cracks.latest.length > 0) {
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Cracks Detected', 14, yPosition);
+      yPosition += 10;
+      
+      const crackTableData = dashboardData.cracks.latest.map((defect, idx) => [
+        idx + 1,
+        defect.crack_type || 'Unknown',
+        defect.area_cm2 ? defect.area_cm2.toFixed(2) + ' cm²' : 'N/A',
+        defect.area_range || 'N/A',
+        defect.username || 'Unknown',
+        new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      ]);
+      
+      autoTable(doc, {
+        head: [['#', 'Type', 'Area', 'Range', 'Uploaded By', 'Timestamp']],
+        body: crackTableData,
+        startY: yPosition,
+        margin: { top: 10 },
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [40, 167, 69] }
+      });
+      
+      yPosition = doc.lastAutoTable.finalY + 15;
+    }
+    
+    // Kerbs Section
+    if (dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0) {
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Kerbs Detected', 14, yPosition);
+      yPosition += 10;
+      
+      const kerbTableData = dashboardData.kerbs.latest.map((defect, idx) => [
+        idx + 1,
+        defect.kerb_type || 'Unknown',
+        defect.length_m ? defect.length_m.toFixed(2) + ' m' : 'N/A',
+        defect.condition || 'Unknown',
+        defect.username || 'Unknown',
+        new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      ]);
+      
+      autoTable(doc, {
+        head: [['#', 'Type', 'Length', 'Condition', 'Uploaded By', 'Timestamp']],
+        body: kerbTableData,
+        startY: yPosition,
+        margin: { top: 10 },
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [0, 123, 255] }
+      });
+    }
+    
+    // Footer
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'italic');
+      doc.text(`Page ${i} of ${pageCount}`, 105, doc.internal.pageSize.height - 10, { align: 'center' });
+    }
+    
+    doc.save('Dashboard_Report.pdf');
+  };
+
+  const handleDownloadExcel = () => {
+    const wsData = [
+      ['#', 'Area (cm²)', 'Depth (cm)', 'Volume', 'Uploaded By', 'Timestamp'],
+      ...(dashboardData.potholes.latest || []).map((defect, idx) => [
+        idx + 1,
+        defect.area,
+        defect.depth,
+        defect.volume,
+        defect.username,
+        new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      ])
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Processed Report');
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    saveAs(new Blob([wbout], { type: 'application/octet-stream' }), 'Processed_Report.xlsx');
+  };
+
   return (
     <Container fluid className="dashboard-container">
-      <h2 className="my-4">Dashboard</h2>
-      
       {/* Filters Card */}
-      <Card className="mb-4 shadow-sm dashboard-card filters-card">
-        <Card.Header className="bg-primary text-white">
-          <h5 className="mb-0">Filters</h5>
+      <Card className="mb-3 shadow-sm dashboard-card filters-card">
+        <Card.Header className="bg-primary text-white py-2">
+          <h6 className="mb-0">Filters</h6>
         </Card.Header>
-        <Card.Body>
-          <Row>
-            <Col lg={6} className="filter-section">
-              <h6>Date Range</h6>
-              <div className="filter-controls">
-                <div className="filter-field">
-                  <Form.Group>
-                    <Form.Label className="small">Start Date</Form.Label>
-                    <Form.Control
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
+        <Card.Body className="py-3">
+          <Row className="g-3">
+            <Col lg={6}>
+              <div className="filter-section">
+                <h6 className="mb-2">Date Range</h6>
+                <div className="filter-controls">
+                  <div className="filter-field">
+                    <Form.Group>
+                      <Form.Label className="small mb-1">Start Date</Form.Label>
+                      <Form.Control
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        size="sm"
+                      />
+                    </Form.Group>
+                  </div>
+                  <div className="filter-field">
+                    <Form.Group>
+                      <Form.Label className="small mb-1">End Date</Form.Label>
+                      <Form.Control
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        size="sm"
+                      />
+                    </Form.Group>
+                  </div>
+                  <div className="filter-actions">
+                    <Button
                       size="sm"
-                    />
-                  </Form.Group>
-                </div>
-                <div className="filter-field">
-                  <Form.Group>
-                    <Form.Label className="small">End Date</Form.Label>
-                    <Form.Control
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      size="sm"
-                    />
-                  </Form.Group>
-                </div>
-                <div className="filter-actions">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={handleApplyDateFilter}
-                    disabled={!startDate || !endDate}
-                  >
-                    Apply
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline-secondary"
-                    onClick={handleResetDateFilter}
-                    disabled={!dateFilterApplied}
-                  >
-                    Reset
-                  </Button>
-                </div>
-              </div>
-              {dateFilterApplied && (
-                <div className="filter-status text-success">
-                  Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}
-                </div>
-              )}
-            </Col>
-            <Col lg={6} className="filter-section">
-              <h6>User Filter</h6>
-              <div className="filter-controls">
-                <div className="filter-field">
-                  <Form.Group>
-                    <Form.Label className="small">Select User</Form.Label>
-                    <Form.Select
-                      value={selectedUser}
-                      onChange={handleUserChange}
-                      size="sm"
+                      variant="primary"
+                      onClick={handleApplyDateFilter}
+                      disabled={!startDate || !endDate}
                     >
-                      <option value="">All Users</option>
-                      {usersList.map((user, index) => (
-                        <option key={index} value={user.username}>
-                          {user.username} ({user.role})
-                        </option>
-                      ))}
-                    </Form.Select>
-                  </Form.Group>
+                      Apply
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      onClick={handleResetDateFilter}
+                      disabled={!dateFilterApplied}
+                    >
+                      Reset
+                    </Button>
+                  </div>
                 </div>
-                <div className="filter-actions">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={handleApplyUserFilter}
-                  >
-                    Apply
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline-secondary"
-                    onClick={handleResetUserFilter}
-                    disabled={!userFilterApplied}
-                  >
-                    Reset
-                  </Button>
-                </div>
+                {dateFilterApplied && (
+                  <div className="filter-status text-success mt-2 p-2">
+                    <small>Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</small>
+                  </div>
+                )}
               </div>
-              {userFilterApplied && (
-                <div className="filter-status text-success">
-                  Showing data for user: {selectedUser}
+            </Col>
+            <Col lg={6}>
+              <div className="filter-section">
+                <h6 className="mb-2">User Filter</h6>
+                <div className="filter-controls">
+                  <div className="filter-field">
+                    <Form.Group>
+                      <Form.Label className="small mb-1">Select User</Form.Label>
+                      <Form.Select
+                        value={selectedUser}
+                        onChange={handleUserChange}
+                        size="sm"
+                      >
+                        <option value="">All Users</option>
+                        {usersList.map((user, index) => (
+                          <option key={index} value={user.username}>
+                            {user.username} ({user.role})
+                          </option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </div>
+                  <div className="filter-actions">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={handleApplyUserFilter}
+                    >
+                      Apply
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      onClick={handleResetUserFilter}
+                      disabled={!userFilterApplied}
+                    >
+                      Reset
+                    </Button>
+                  </div>
                 </div>
-              )}
+                {userFilterApplied && (
+                  <div className="filter-status text-success mt-2 p-2">
+                    <small>Showing data for user: {selectedUser}</small>
+                  </div>
+                )}
+              </div>
             </Col>
           </Row>
         </Card.Body>
@@ -518,307 +730,338 @@ function Dashboard({ user }) {
           </div>
         </div>
       ) : error ? (
-        <div className="alert alert-danger">{error}</div>
+        <div className="alert alert-danger p-3">{error}</div>
       ) : (
         <>
-          {/* Top Stats Cards */}
-          <Row className="mb-4">
-            <Col md={3}>
-              <Card className="h-100 shadow-sm dashboard-card">
-                <Card.Body className="text-center">
-                  <h5 className="card-title">Potholes</h5>
-                  <h2 className="text-primary">{statistics.potholesDetected}</h2>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col md={3}>
-              <Card className="h-100 shadow-sm dashboard-card">
-                <Card.Body className="text-center">
-                  <h5 className="card-title">Cracks</h5>
-                  <h2 className="text-primary">{statistics.cracksDetected}</h2>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col md={3}>
-              <Card className="h-100 shadow-sm dashboard-card">
-                <Card.Body className="text-center">
-                  <h5 className="card-title">Kerbs</h5>
-                  <h2 className="text-primary">{statistics.kerbsDetected}</h2>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col md={3}>
-              <Card className="h-100 shadow-sm dashboard-card">
-                <Card.Body className="text-center">
-                  <h5 className="card-title">Users</h5>
-                  <h2 className="text-success">{statistics.totalUsers}</h2>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
+          {/* Dashboard Tabs */}
+          <Card className="mb-3 shadow-sm dashboard-card">
+            <Card.Body className="p-0">
+              <Tabs 
+                activeKey={activeTab} 
+                onSelect={(k) => setActiveTab(k)} 
+                className="dashboard-tabs"
+              >
+                {/* Dashboard View Tab */}
+                <Tab eventKey="dashboard" title="Dashboard View">
+                  <div className="p-3">
+                    {/* Top Stats Cards */}
+                    <Row className="mb-3 g-3">
+                      <Col md={3}>
+                        <Card className="h-100 shadow-sm dashboard-card stats-card">
+                          <Card.Body className="text-center py-3">
+                            <h6 className="card-title mb-2">Potholes</h6>
+                            <h3 className="text-primary mb-0">{statistics.potholesDetected}</h3>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={3}>
+                        <Card className="h-100 shadow-sm dashboard-card stats-card">
+                          <Card.Body className="text-center py-3">
+                            <h6 className="card-title mb-2">Cracks</h6>
+                            <h3 className="text-primary mb-0">{statistics.cracksDetected}</h3>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={3}>
+                        <Card className="h-100 shadow-sm dashboard-card stats-card">
+                          <Card.Body className="text-center py-3">
+                            <h6 className="card-title mb-2">Kerbs</h6>
+                            <h3 className="text-primary mb-0">{statistics.kerbsDetected}</h3>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={3}>
+                        <Card className="h-100 shadow-sm dashboard-card stats-card">
+                          <Card.Body className="text-center py-3">
+                            <h6 className="card-title mb-2">Users</h6>
+                            <h3 className="text-success mb-0">{statistics.totalUsers}</h3>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
 
-
-          
-          {/* Users Overview Section */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <Card className="shadow-sm dashboard-card">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">Users Overview</h5>
-                </Card.Header>
-                <Card.Body>
-                  <Row>
-                    <Col md={6}>
-                      <h6 className="mb-3">User Distribution by Role</h6>
-                      <ChartContainer
-                        data={[
-                          {
-                            type: 'pie',
-                            labels: Object.keys(dashboardData.users?.by_role || {}),
-                            values: Object.values(dashboardData.users?.by_role || {}),
-                            marker: {
-                              colors: ['#007bff', '#28a745', '#dc3545', '#6c757d']
-                            },
-                            textinfo: "label+percent",
-                            insidetextorientation: "radial"
-                          }
-                        ]}
-                        isPieChart={true}
-                      />
-                    </Col>
-                    <Col md={6}>
-                      <h6 className="mb-3">Recent Users</h6>
-                      <div className="table-responsive">
-                        <table className="table table-sm table-hover">
-                          <thead>
-                            <tr>
-                              <th>Username</th>
-                              <th>Role</th>
-                              <th>Last Login</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {dashboardData.users?.latest && dashboardData.users.latest.length > 0 ? (
-                              dashboardData.users.latest.map((user, index) => (
-                                <tr key={`user-${index}`}>
-                                  <td>{user.username}</td>
-                                  <td>
-                                    <span className={`badge bg-${
-                                      user.role === 'admin' ? 'danger' : 
-                                      user.role === 'manager' ? 'warning' : 
-                                      'primary'
-                                    }`}>
-                                      {user.role}
-                                    </span>
-                                  </td>
-                                  <td>{new Date(user.last_login).toLocaleString()}</td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr>
-                                <td colSpan="3" className="text-center">No recent user activity</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </Col>
-                  </Row>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Charts Row */}
-          <Row>
-            <Col md={6}>
-              <Card className="mb-4 shadow-sm dashboard-card">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">Weekly Detection Trend</h5>
-                </Card.Header>
-                <Card.Body>
-                  <ChartContainer
-                    data={[
-                      {
-                        x: weeklyData.days,
-                        y: weeklyData.issues,
-                        type: 'scatter',
-                        mode: 'lines+markers',
-                        marker: { color: '#007bff' }
-                      }
-                    ]}
-                    layout={{
-                      xaxis: { title: 'Day' },
-                      yaxis: { title: 'Issues Detected' }
-                    }}
-                  />
-                </Card.Body>
-              </Card>
-            </Col>
-            
-            <Col md={6}>
-              <Card className="mb-4 shadow-sm dashboard-card">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">Issues by Type</h5>
-                </Card.Header>
-                <Card.Body>
-                  <ChartContainer
-                    data={[
-                      {
-                        type: 'bar',
-                        x: filteredIssuesByType.types,
-                        y: filteredIssuesByType.counts,
-                        marker: {
-                          color: filteredIssuesByType.types.map(type => {
-                            if (type.includes('Pothole')) return '#007bff';
-                            if (type.includes('Crack')) return '#28a745';
-                            if (type.includes('Kerb')) return '#dc3545';
-                            return '#6c757d';
-                          })
-                        }
-                      }
-                    ]}
-                    layout={{
-                      xaxis: { 
-                        title: 'Issue Type',
-                        tickangle: -45,
-                        automargin: true
-                      },
-                      yaxis: { title: 'Count' },
-                      margin: { t: 10, b: 80, l: 50, r: 10 } // More compact margins
-                    }}
-                    showLegend={true}
-                    legendItems={[
-                      {
-                        label: 'Potholes',
-                        color: '#007bff',
-                        checked: defectFilters.potholes,
-                        onChange: () => handleDefectFilterChange('potholes')
-                      },
-                      {
-                        label: 'Cracks',
-                        color: '#28a745',
-                        checked: defectFilters.cracks,
-                        onChange: () => handleDefectFilterChange('cracks')
-                      },
-                      {
-                        label: 'Kerbs',
-                        color: '#dc3545',
-                        checked: defectFilters.kerbs,
-                        onChange: () => handleDefectFilterChange('kerbs')
-                      }
-                    ]}
-                    className="compact-legend"
-                  />
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          {/* Infrastructure Health Row */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <Card className="shadow-sm dashboard-card">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">Infrastructure Distribution</h5>
-                </Card.Header>
-                <Card.Body>
-                  <ChartContainer
-                    data={[
-                      {
-                        type: 'pie',
-                        labels: ['Potholes', 'Cracks', 'Kerbs'],
-                        values: [
-                          statistics.potholesDetected,
-                          statistics.cracksDetected,
-                          statistics.kerbsDetected
-                        ],
-                        marker: {
-                          colors: ['#007bff', '#28a745', '#dc3545']
-                        },
-                        textinfo: "label+percent",
-                        insidetextorientation: "radial"
-                      }
-                    ]}
-                    layout={{
-                      height: 350
-                    }}
-                    isPieChart={true}
-                  />
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Defect Map Section */}
-                          <DefectMap user={user} />
-          
-          {/* Recently Uploaded Images Section */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <Card className="shadow-sm dashboard-card">
-                <Card.Header className="bg-primary text-white">
-                  <h5 className="mb-0">All Uploaded Images</h5>
-                </Card.Header>
-                <Card.Body>
-                  <Tabs defaultActiveKey="potholes" className="mb-3">
-                    <Tab eventKey="potholes" title={`Potholes (${dashboardData.potholes.latest.length})`}>
-                      <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
-                        <Row>
-                          {dashboardData.potholes.latest.map((pothole) => (
-                            <ImageCard 
-                              key={`pothole-${pothole.pothole_id}`}
-                              defect={pothole} 
-                              defectType="potholes" 
-                              defectIdKey="pothole_id" 
+                    {/* Charts Row */}
+                    <Row className="mb-3 g-3">
+                      <Col md={6}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">Weekly Detection Trend</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <ChartContainer
+                              data={[
+                                {
+                                  x: weeklyData.days,
+                                  y: weeklyData.issues,
+                                  type: 'scatter',
+                                  mode: 'lines+markers',
+                                  marker: { color: '#007bff' }
+                                }
+                              ]}
+                              layout={{
+                                xaxis: { title: 'Day' },
+                                yaxis: { title: 'Issues Detected' }
+                              }}
                             />
-                          ))}
-                        </Row>
-                      </div>
-                    </Tab>
-                    <Tab eventKey="cracks" title={`Cracks (${dashboardData.cracks.latest.length})`}>
-                      <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
-                        <Row>
-                          {dashboardData.cracks.latest.map((crack) => (
-                            <ImageCard 
-                              key={`crack-${crack.crack_id}`}
-                              defect={crack} 
-                              defectType="cracks" 
-                              defectIdKey="crack_id" 
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      
+                      <Col md={6}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">Issues by Type</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <ChartContainer
+                              data={[
+                                {
+                                  type: 'bar',
+                                  x: filteredIssuesByType.types,
+                                  y: filteredIssuesByType.counts,
+                                  marker: {
+                                    color: filteredIssuesByType.types.map(type => {
+                                      if (type.includes('Pothole')) return '#007bff';
+                                      if (type.includes('Crack')) return '#28a745';
+                                      if (type.includes('Kerb')) return '#dc3545';
+                                      return '#6c757d';
+                                    })
+                                  }
+                                }
+                              ]}
+                              layout={{
+                                xaxis: { 
+                                  title: 'Issue Type',
+                                  tickangle: -45,
+                                  automargin: true
+                                },
+                                yaxis: { title: 'Count' },
+                                margin: { t: 10, b: 80, l: 50, r: 10 }
+                              }}
+                              showLegend={true}
+                              legendItems={[
+                                {
+                                  label: 'Potholes',
+                                  color: '#007bff',
+                                  checked: defectFilters.potholes,
+                                  onChange: () => handleDefectFilterChange('potholes')
+                                },
+                                {
+                                  label: 'Cracks',
+                                  color: '#28a745',
+                                  checked: defectFilters.cracks,
+                                  onChange: () => handleDefectFilterChange('cracks')
+                                },
+                                {
+                                  label: 'Kerbs',
+                                  color: '#dc3545',
+                                  checked: defectFilters.kerbs,
+                                  onChange: () => handleDefectFilterChange('kerbs')
+                                }
+                              ]}
+                              className="compact-legend"
                             />
-                          ))}
-                        </Row>
-                      </div>
-                    </Tab>
-                    <Tab eventKey="kerbs" title={`Kerbs (${dashboardData.kerbs.latest.length})`}>
-                      <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
-                        <Row>
-                          {dashboardData.kerbs && dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0 ? (
-                            dashboardData.kerbs.latest.map((kerb) => (
-                              <ImageCard 
-                                key={`kerb-${kerb.kerb_id}`}
-                                defect={kerb} 
-                                defectType="kerbs" 
-                                defectIdKey="kerb_id" 
-                              />
-                            ))
-                          ) : (
-                            <Col>
-                              <div className="alert alert-info">
-                                No kerb images available yet. Upload some kerb images using the Pavement Analysis tool.
-                              </div>
-                            </Col>
-                          )}
-                        </Row>
-                      </div>
-                    </Tab>
-                  </Tabs>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
 
-         
+                    {/* Infrastructure Distribution */}
+                    <Row className="mb-3">
+                      <Col md={12}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">Infrastructure Distribution</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <ChartContainer
+                              data={[
+                                {
+                                  type: 'pie',
+                                  labels: ['Potholes', 'Cracks', 'Kerbs'],
+                                  values: [
+                                    statistics.potholesDetected,
+                                    statistics.cracksDetected,
+                                    statistics.kerbsDetected
+                                  ],
+                                  marker: {
+                                    colors: ['#007bff', '#28a745', '#dc3545']
+                                  },
+                                  textinfo: "label+percent",
+                                  insidetextorientation: "radial"
+                                }
+                              ]}
+                              layout={{
+                                height: 300
+                              }}
+                              isPieChart={true}
+                            />
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    {/* All Uploaded Images Section */}
+                    <Row className="mb-3">
+                      <Col md={12}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">All Uploaded Images</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <Tabs defaultActiveKey="potholes" className="mb-2">
+                              <Tab eventKey="potholes" title={`Potholes (${dashboardData.potholes.latest.length})`}>
+                                <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
+                                  <Row>
+                                    {dashboardData.potholes.latest.map((pothole) => (
+                                      <ImageCard 
+                                        key={`pothole-${pothole.pothole_id}`}
+                                        defect={pothole} 
+                                        defectType="potholes" 
+                                        defectIdKey="pothole_id" 
+                                      />
+                                    ))}
+                                  </Row>
+                                </div>
+                              </Tab>
+                              <Tab eventKey="cracks" title={`Cracks (${dashboardData.cracks.latest.length})`}>
+                                <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
+                                  <Row>
+                                    {dashboardData.cracks.latest.map((crack) => (
+                                      <ImageCard 
+                                        key={`crack-${crack.crack_id}`}
+                                        defect={crack} 
+                                        defectType="cracks" 
+                                        defectIdKey="crack_id" 
+                                      />
+                                    ))}
+                                  </Row>
+                                </div>
+                              </Tab>
+                              <Tab eventKey="kerbs" title={`Kerbs (${dashboardData.kerbs.latest.length})`}>
+                                <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
+                                  <Row>
+                                    {dashboardData.kerbs && dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0 ? (
+                                      dashboardData.kerbs.latest.map((kerb) => (
+                                        <ImageCard 
+                                          key={`kerb-${kerb.kerb_id}`}
+                                          defect={kerb} 
+                                          defectType="kerbs" 
+                                          defectIdKey="kerb_id" 
+                                        />
+                                      ))
+                                    ) : (
+                                      <Col>
+                                        <div className="alert alert-info p-3">
+                                          No kerb images available yet. Upload some kerb images using the Pavement Analysis tool.
+                                        </div>
+                                      </Col>
+                                    )}
+                                  </Row>
+                                </div>
+                              </Tab>
+                            </Tabs>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                  </div>
+                </Tab>
+
+                {/* Defect Map Tab */}
+                <Tab eventKey="map" title="Defect Map View">
+                  <div className="p-4">
+                    <DefectMap user={user} />
+                  </div>
+                </Tab>
+
+                {/* Users Overview Tab */}
+                <Tab eventKey="users" title="Users Overview">
+                  <div className="p-3">
+                    <Row className="g-3">
+                      <Col md={6}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">User Distribution by Role</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <ChartContainer
+                              data={[
+                                {
+                                  type: 'pie',
+                                  labels: Object.keys(dashboardData.users?.by_role || {}),
+                                  values: Object.values(dashboardData.users?.by_role || {}),
+                                  marker: {
+                                    colors: ['#007bff', '#28a745', '#dc3545', '#6c757d']
+                                  },
+                                  textinfo: "label+percent",
+                                  insidetextorientation: "radial"
+                                }
+                              ]}
+                              isPieChart={true}
+                            />
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={6}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-primary text-white py-2">
+                            <h6 className="mb-0">Recent Users</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            <div className="table-responsive">
+                              <table className="table table-sm table-hover">
+                                <thead>
+                                  <tr>
+                                    <th>Username</th>
+                                    <th>Role</th>
+                                    <th>Last Login</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {dashboardData.users?.latest && dashboardData.users.latest.length > 0 ? (
+                                    dashboardData.users.latest.map((user, index) => (
+                                      <tr key={`user-${index}`}>
+                                        <td>{user.username}</td>
+                                        <td>
+                                          <span className={`badge bg-${
+                                            user.role === 'admin' ? 'danger' : 
+                                            user.role === 'manager' ? 'warning' : 
+                                            'primary'
+                                          }`}>
+                                            {user.role}
+                                          </span>
+                                        </td>
+                                        <td>{new Date(user.last_login).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
+                                      </tr>
+                                    ))
+                                  ) : (
+                                    <tr>
+                                      <td colSpan="3" className="text-center">No recent user activity</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                  </div>
+                </Tab>
+              </Tabs>
+            </Card.Body>
+          </Card>
+
+          {/* Export buttons */}
+          <div className="d-flex justify-content-end mb-2">
+            <Button variant="outline-danger" size="sm" className="me-2" onClick={handleDownloadPDF}>
+              <i className="fas fa-file-pdf me-1"></i>Download PDF
+            </Button>
+            <Button variant="outline-success" size="sm" onClick={handleDownloadExcel}>
+              <i className="fas fa-file-excel me-1"></i>Download Excel
+            </Button>
+          </div>
         </>
       )}
     </Container>
