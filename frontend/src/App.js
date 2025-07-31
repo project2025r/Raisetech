@@ -42,9 +42,9 @@ function App() {
 
   return (
     <Router>
-      <div className="app-container">
+      <div className={`app-container ${!authenticated ? 'no-sidebar' : ''}`}>
         {authenticated && <Sidebar onLogout={handleLogout} />}
-        <div className="content-container">
+        <div className={`content-container ${!authenticated ? 'full-width' : ''}`}>
           {authenticated && <Header user={currentUser} />}
           <Routes>
             <Route 

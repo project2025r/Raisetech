@@ -1,0 +1,61 @@
+/* Mobile header optimizations */
+@media (max-width: 768px) {
+  .page-header {
+    margin: -10px -5px 10px;
+    padding: 10px;
+    background: #fff;
+    border-bottom: 1px solid #eee;
+  }
+
+  .page-title {
+    font-size: 18px;
+    margin: 0;
+    padding: 0;
+  }
+
+  .page-actions {
+    margin-top: 10px;
+  }
+
+  /* Infrastructure page specific */
+  .detection-settings {
+    padding: 10px;
+    margin: -5px;
+  }
+
+  .detection-settings .form-group {
+    margin-bottom: 10px;
+  }
+
+  .upload-section {
+    padding: 15px 10px;
+  }
+
+  /* Dashboard specific */
+  .dashboard-stats {
+    margin: 0 -5px;
+  }
+
+  .stat-card {
+    margin-bottom: 10px;
+    padding: 12px;
+  }
+
+  /* Recommendation page */
+  .recommendation-card {
+    margin-bottom: 10px;
+  }
+
+  .recommendation-header {
+    padding: 12px;
+  }
+
+  /* Pavement page */
+  .analysis-section {
+    padding: 10px;
+  }
+
+  .results-section {
+    margin-top: 10px;
+  }
+}

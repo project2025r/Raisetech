@@ -1,20 +1,22 @@
 .home-page {
-  padding: 15px 0;
+  padding: 15px;
+  background-color: #ffffff;
 }
 
 .welcome-medium {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   font-weight: 500;
   color: #333;
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
 }
 
 .home-card {
-  transition: transform 0.2s, box-shadow 0.2s;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
   border-radius: 8px;
   overflow: hidden;
-  border: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 12px;
+  box-shadow: none;
 }
 
 .home-card:hover {
@@ -44,30 +46,37 @@
 /* Responsive styles */
 @media (max-width: 768px) {
   .home-page {
-    padding: 12px 0;
+    padding: 15px;
+    margin-bottom: 60px;
   }
 
   .welcome-medium {
     font-size: 1.1rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 20px;
+  }
+
+  .home-card {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 15px;
   }
 
   .module-title {
-    font-size: 1.1rem;
+    font-size: 1rem;
     margin-bottom: 8px;
+    color: #333;
   }
   
   .module-description {
     font-size: 0.85rem;
+    color: #666;
+    line-height: 1.4;
   }
   
   .module-icon-svg {
-    width: 32px !important;
-    height: 32px !important;
-  }
-  
-  .home-card:hover {
-    transform: translateY(-2px);
+    width: 28px !important;
+    height: 28px !important;
   }
 }
 

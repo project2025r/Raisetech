@@ -82,6 +82,11 @@ const Sidebar = ({ onLogout }) => {
         </button>
       )}
 
+      {/* Sidebar overlay backdrop for mobile */}
+      {isMobile && isOpen && (
+        <div className="sidebar-backdrop" onClick={toggleSidebar} />
+      )}
+
       {/* Main sidebar */}
       <div className={`sidebar ${isOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-header">

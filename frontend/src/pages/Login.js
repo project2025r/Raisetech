@@ -65,16 +65,14 @@ const Login = ({ onLogin }) => {
 
   return (
     <div className="login-page">
-      <Container>
-        <Row className="justify-content-center">
-          <Col xs={12} sm={10} md={8} lg={5} xl={4}>
-            <div className="login-box">
-              <div className="login-card">
-                {error && <Alert variant="danger" className="p-3 mb-3">{error}</Alert>}
+      <div className="login-box">
+        <div className="login-card">
+          <h1 className="login-title">Road AI Safety Enhancement</h1>
+          {error && <Alert variant="danger" className="p-3 mb-3">{error}</Alert>}
 
                 <Form onSubmit={handleSubmit} noValidate autoComplete="off">
-                  <Form.Group className="mb-3">
-                    <Form.Label className="mb-1">Role</Form.Label>
+                  <Form.Group className="mb-4">
+                    <Form.Label>Role</Form.Label>
                     <Form.Select 
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
@@ -86,8 +84,8 @@ const Login = ({ onLogin }) => {
                     </Form.Select>
                   </Form.Group>
 
-                  <Form.Group className="mb-3">
-                    <Form.Label className="mb-1">Username</Form.Label>
+                  <Form.Group className="mb-4">
+                    <Form.Label>Username</Form.Label>
                     <Form.Control 
                       type="text" 
                       placeholder="Enter your username"
@@ -98,8 +96,8 @@ const Login = ({ onLogin }) => {
                     />
                   </Form.Group>
 
-                  <Form.Group className="mb-3">
-                    <Form.Label className="mb-1">Password</Form.Label>
+                  <Form.Group className="mb-4">
+                    <Form.Label>Password</Form.Label>
                     <Form.Control 
                       type="password" 
                       placeholder="Enter your password"
@@ -114,21 +112,17 @@ const Login = ({ onLogin }) => {
                     type="submit" 
                     className="w-100"
                     disabled={loading}
-                    style={{ minHeight: "44px" }}
+                    style={{ minHeight: "48px" }}
                   >
                     {loading ? 'Signing in...' : 'Login'}
                   </Button>
                 </Form>
               </div>
-
-              <div className="text-center mt-3 text-muted login-footer">
-                <small>© 2025 Road AI Safety Enhancement. All rights reserved.</small>
+              <div className="login-footer">
+                © 2025 Road AI Safety Enhancement. All rights reserved.
               </div>
             </div>
-          </Col>
-        </Row>
-      </Container>
-    </div>
+          </div>
   );
 };
 

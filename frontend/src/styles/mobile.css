@@ -1,0 +1,112 @@
+/* Mobile-specific styles */
+@media (max-width: 768px) {
+  /* Navigation */
+  .mobile-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #2c3e50;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 6px 0;
+    height: 60px;
+    z-index: 1000;
+    box-shadow: 0 -1px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .mobile-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.7);
+    text-decoration: none;
+    padding: 4px 0;
+  }
+
+  .mobile-nav-icon {
+    font-size: 22px;
+    margin-bottom: 2px;
+  }
+
+  .mobile-nav-text {
+    font-size: 11px;
+  }
+
+  .mobile-nav-item.active {
+    color: #ff8a3d;
+  }
+
+  /* Page layouts */
+  .page-content {
+    padding: 15px;
+    margin-bottom: 60px;
+    background: #ffffff;
+  }
+
+  /* Cards */
+  .card {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    box-shadow: none;
+  }
+
+  .card-body {
+    padding: 15px;
+  }
+
+  .card-header {
+    padding: 12px 15px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  /* Forms */
+  .form-group {
+    margin-bottom: 15px;
+  }
+
+  .form-control {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    height: 40px;
+  }
+
+  /* Buttons */
+  .btn {
+    height: 40px;
+    font-size: 14px;
+    padding: 0 16px;
+  }
+
+  /* Tables */
+  .table {
+    font-size: 14px;
+  }
+
+  .table td, 
+  .table th {
+    padding: 10px;
+  }
+
+  /* Typography */
+  h1, .h1 { font-size: 20px; }
+  h2, .h2 { font-size: 18px; }
+  h3, .h3 { font-size: 16px; }
+  h4, .h4 { font-size: 15px; }
+  
+  /* Spacing */
+  .container {
+    padding: 0;
+  }
+
+  .row {
+    margin: 0;
+  }
+
+  .col, [class*="col-"] {
+    padding: 0;
+  }
+}

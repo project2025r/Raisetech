@@ -1,0 +1,93 @@
+/* Common styles for main pages */
+.page-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 15px;
+  height: calc(100vh - 60px); /* Subtract mobile nav height */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Card styles */
+.card {
+  border-radius: 8px;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .page-container {
+    padding: 10px 5px;
+  }
+
+  /* Tighter spacing for cards */
+  .card {
+    margin-bottom: 10px;
+    border-radius: 6px;
+  }
+
+  .card-body {
+    padding: 12px;
+  }
+
+  /* Optimize form groups */
+  .form-group {
+    margin-bottom: 12px;
+  }
+
+  /* Adjust headings */
+  h1, .h1 { 
+    font-size: 20px;
+    margin-bottom: 15px;
+  }
+
+  h2, .h2 { 
+    font-size: 18px;
+    margin-bottom: 12px;
+  }
+
+  /* Optimize tables */
+  .table td, 
+  .table th {
+    padding: 8px;
+    font-size: 14px;
+  }
+
+  /* Optimize buttons */
+  .btn {
+    padding: 8px 16px;
+  }
+
+  /* Remove extra spacing */
+  .row {
+    margin-left: -5px;
+    margin-right: -5px;
+  }
+
+  .col, [class*="col-"] {
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+
+  /* Navigation tabs */
+  .nav-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .nav-tabs .nav-link {
+    white-space: nowrap;
+    padding: 8px 12px;
+  }
+
+  /* Optimize dropdowns */
+  .dropdown-menu {
+    width: 100%;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+}
