@@ -768,3 +768,173 @@
   width: 100px;
   height: 100px;
 }
+
+/* Image thumbnail styles for detection table */
+.image-thumbnail-container {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.image-thumbnail-container:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.image-thumbnail {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  transition: border-color 0.2s ease;
+}
+
+.image-thumbnail-container:hover .image-thumbnail {
+  border-color: #007bff;
+}
+
+.thumbnail-overlay {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  opacity: 0.8;
+  transition: opacity 0.2s ease;
+}
+
+.image-thumbnail-container:hover .thumbnail-overlay {
+  opacity: 1;
+  background: rgba(0, 123, 255, 0.9);
+}
+
+/* Tooltip styles for image thumbnails */
+.image-thumbnail-container[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+/* Enhanced modal styles */
+.modal-body img {
+  transition: transform 0.3s ease;
+}
+
+.modal-body img:hover {
+  transform: scale(1.02);
+}
+
+/* Enhanced detection table styles */
+.detection-table-container {
+  max-height: 600px;
+  overflow-y: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 0.375rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.detection-table-container table {
+  margin-bottom: 0;
+  font-size: 0.9rem;
+}
+
+.detection-table-container th {
+  position: sticky;
+  top: 0;
+  background-color: #f8f9fa;
+  z-index: 10;
+  border-bottom: 2px solid #dee2e6;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 12px 8px;
+  vertical-align: middle;
+}
+
+.detection-table-container td {
+  padding: 10px 8px;
+  vertical-align: middle;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.detection-table-container tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+/* Responsive table adjustments */
+@media (max-width: 1200px) {
+  .detection-table-container {
+    max-height: 500px;
+  }
+
+  .detection-table-container th,
+  .detection-table-container td {
+    padding: 8px 6px;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .detection-table-container {
+    max-height: 400px;
+  }
+
+  .detection-table-container th,
+  .detection-table-container td {
+    padding: 6px 4px;
+    font-size: 0.8rem;
+  }
+
+  .image-thumbnail {
+    width: 60px !important;
+    height: 45px !important;
+  }
+
+  .thumbnail-overlay {
+    width: 12px !important;
+    height: 12px !important;
+    font-size: 8px !important;
+  }
+}
+
+/* Smooth scrolling for table */
+.detection-table-container {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar for webkit browsers */
+.detection-table-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.detection-table-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.detection-table-container::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+.detection-table-container::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}

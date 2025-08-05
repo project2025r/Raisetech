@@ -31,7 +31,7 @@ MODEL_PATHS = {
     "potholes": os.path.join(BASE_DIR, "assets", "best_ph2.pt"),
     "cracks": os.path.join(BASE_DIR, "assets", "best_ac8_types.pt"),
     "road_infra": os.path.join(BASE_DIR, "assets", "road_infra.pt"),
-    "classification": os.path.join(BASE_DIR, "assets", "best_road_classification.pt")
+    "classification": os.path.join(BASE_DIR, "assets", "best.pt")
 }
 
 # Class mapping for the new classification model

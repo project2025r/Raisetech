@@ -5,7 +5,7 @@ import Webcam from 'react-webcam';
 import './Pavement.css';
 import useResponsive from '../hooks/useResponsive';
 import VideoDefectDetection from '../components/VideoDefectDetection';
-import { FaArrowLeft, FaArrowRight } from 'react-icons/fa';
+
 
 const Pavement = () => {
   const [activeTab, setActiveTab] = useState('detection');
@@ -45,14 +45,15 @@ const Pavement = () => {
   // Add state for image status table filtering
   const [imageFilter, setImageFilter] = useState('all'); // 'all', 'road', 'non-road'
 
-  // Add state for auto-navigation through results
-  const [autoNavigationActive, setAutoNavigationActive] = useState(false);
-  const [autoNavigationIndex, setAutoNavigationIndex] = useState(0);
-  const autoNavigationRef = useRef(null);
+
 
   // Add state for road classification toggle (default to false for better user experience)
   const [roadClassificationEnabled, setRoadClassificationEnabled] = useState(false);
-  
+
+  // Add state for enhanced detection results table
+  const [detectionTableFilter, setDetectionTableFilter] = useState('all'); // 'all', 'potholes', 'cracks', 'kerbs'
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+
   // Auto-clear is always enabled - no toggle needed
   
   const webcamRef = useRef(null);
@@ -363,6 +364,13 @@ const Pavement = () => {
         setProcessedImage(response.data.processed_image);
         setResults(response.data);
 
+        // Extract detailed detection results for table display
+        const detectionResults = {
+          potholes: response.data.potholes || [],
+          cracks: response.data.cracks || [],
+          kerbs: response.data.kerbs || []
+        };
+
         // Create batch result entry for the status table
         const batchResult = {
           filename: currentFilename,
@@ -371,7 +379,15 @@ const Pavement = () => {
           isRoad: isRoad,
           classification: response.data.classification,
           processedImage: response.data.processed_image,
-          data: response.data
+          originalImage: currentImagePreview, // Add original image data
+          data: response.data,
+          detectionResults: detectionResults,
+          detectionCounts: {
+            potholes: detectionResults.potholes.length,
+            cracks: detectionResults.cracks.length,
+            kerbs: detectionResults.kerbs.length,
+            total: detectionResults.potholes.length + detectionResults.cracks.length + detectionResults.kerbs.length
+          }
         };
 
         // Update batch results to show the status table
@@ -527,6 +543,13 @@ const Pavement = () => {
               setResults(response.data);
             }
 
+            // Extract detailed detection results for table display
+            const detectionResults = {
+              potholes: response.data.potholes || [],
+              cracks: response.data.cracks || [],
+              kerbs: response.data.kerbs || []
+            };
+
             results.push({
               filename,
               success: true,
@@ -534,7 +557,15 @@ const Pavement = () => {
               isRoad: isRoad,
               classification: response.data.classification,
               processedImage: response.data.processed_image,
-              data: response.data
+              originalImage: imageData, // Add original image data
+              data: response.data,
+              detectionResults: detectionResults,
+              detectionCounts: {
+                potholes: detectionResults.potholes.length,
+                cracks: detectionResults.cracks.length,
+                kerbs: detectionResults.kerbs.length,
+                total: detectionResults.potholes.length + detectionResults.cracks.length + detectionResults.kerbs.length
+              }
             });
           } else {
             const errorMessage = response.data.message || 'Detection failed';
@@ -573,21 +604,19 @@ const Pavement = () => {
       setBatchResults(results);
 
       // After batch processing is complete, display the first successfully processed road image
-      const firstProcessedRoadImage = results.find(r => r.success && r.processed && r.isRoad);
-      if (firstProcessedRoadImage) {
+      const processedRoadImages = results.filter(r => r.success && r.processed && r.isRoad);
+      if (processedRoadImages.length > 0) {
+        const firstProcessedRoadImage = processedRoadImages[0];
         setProcessedImage(firstProcessedRoadImage.processedImage);
         setResults(firstProcessedRoadImage.data);
 
-        // Set the current image index to the first processed road image
-        const filenames = Object.keys(imagePreviewsMap);
-        const firstProcessedIndex = filenames.findIndex(name => name === firstProcessedRoadImage.filename);
-        if (firstProcessedIndex !== -1) {
-          setCurrentImageIndex(firstProcessedIndex);
-        }
+        // Set the current image index to 0 (first processed road image)
+        setCurrentImageIndex(0);
       } else {
         // No road images were processed, clear the display
         setProcessedImage(null);
         setResults(null);
+        setCurrentImageIndex(0);
       }
 
       // Auto-clear uploaded image icons after processing is complete
@@ -653,17 +682,9 @@ const Pavement = () => {
     }
   };
 
-  // Helper function to get processed road images
-  const getProcessedRoadImages = () => {
-    return batchResults.filter(r => r.success && r.processed && r.isRoad);
-  };
 
-  // Helper function to get current processed image index
-  const getCurrentProcessedImageIndex = () => {
-    const processedImages = getProcessedRoadImages();
-    const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-    return processedImages.findIndex(r => r.filename === currentFilename);
-  };
+
+
 
   // Add function to handle thumbnail clicks
   const handleThumbnailClick = (imageData) => {
@@ -671,66 +692,168 @@ const Pavement = () => {
     setShowImageModal(true);
   };
 
-  // Add a function to handle auto-navigation through results
-  const startAutoNavigation = () => {
-    if (batchResults.length === 0) return;
-    
-    // Find only successful results
-    const successfulResults = batchResults.filter(result => result.success);
-    if (successfulResults.length === 0) return;
-    
-    setAutoNavigationActive(true);
-    setAutoNavigationIndex(0);
-    
-    // Display the first result
-    const firstResult = successfulResults[0];
-    const fileIndex = Object.keys(imagePreviewsMap).findIndex(
-      filename => filename === firstResult.filename
-    );
-    
-    if (fileIndex !== -1) {
-      setCurrentImageIndex(fileIndex);
-      setProcessedImage(firstResult.processedImage);
-      setResults(firstResult.data);
+  // Add sorting function for detection results
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
     }
-    
-    // Set up interval for auto-navigation
-    autoNavigationRef.current = setInterval(() => {
-      setAutoNavigationIndex(prevIndex => {
-        const nextIndex = prevIndex + 1;
-        
-        // If we've reached the end, stop auto-navigation
-        if (nextIndex >= successfulResults.length) {
-          clearInterval(autoNavigationRef.current);
-          setAutoNavigationActive(false);
-          return prevIndex;
-        }
-        
-        // Display the next result
-        const nextResult = successfulResults[nextIndex];
-        const nextFileIndex = Object.keys(imagePreviewsMap).findIndex(
-          filename => filename === nextResult.filename
-        );
-        
-        if (nextFileIndex !== -1) {
-          setCurrentImageIndex(nextFileIndex);
-          setProcessedImage(nextResult.processedImage);
-          setResults(nextResult.data);
-        }
-        
-        return nextIndex;
-      });
-    }, 3000); // Change results every 3 seconds
+    setSortConfig({ key, direction });
   };
 
-  // Clean up interval on component unmount
-  useEffect(() => {
-    return () => {
-      if (autoNavigationRef.current) {
-        clearInterval(autoNavigationRef.current);
+  // Function to sort detection results
+  const sortDetections = (detections) => {
+    if (!sortConfig.key) return detections;
+
+    return [...detections].sort((a, b) => {
+      let aValue = a[sortConfig.key];
+      let bValue = b[sortConfig.key];
+
+      // Handle numeric values
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
       }
-    };
-  }, []);
+
+      // Handle string values
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return sortConfig.direction === 'asc'
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+
+      // Handle null/undefined values
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return sortConfig.direction === 'asc' ? 1 : -1;
+      if (bValue == null) return sortConfig.direction === 'asc' ? -1 : 1;
+
+      return 0;
+    });
+  };
+
+  // Function to export detection results to CSV
+  const exportToCSV = () => {
+    // Flatten all detection results
+    const allDetections = [];
+
+    batchResults.forEach(result => {
+      if (result.success && result.processed && result.detectionResults) {
+        const { potholes, cracks, kerbs } = result.detectionResults;
+
+        // Add potholes
+        potholes.forEach(pothole => {
+          allDetections.push({
+            filename: result.filename,
+            type: 'Pothole',
+            id: pothole.pothole_id,
+            area_cm2: pothole.area_cm2,
+            depth_cm: pothole.depth_cm,
+            volume: pothole.volume,
+            volume_range: pothole.volume_range,
+            crack_type: '',
+            area_range: '',
+            kerb_type: '',
+            condition: '',
+            length_m: '',
+            confidence: pothole.confidence
+          });
+        });
+
+        // Add cracks
+        cracks.forEach(crack => {
+          allDetections.push({
+            filename: result.filename,
+            type: 'Crack',
+            id: crack.crack_id,
+            area_cm2: crack.area_cm2,
+            depth_cm: '',
+            volume: '',
+            volume_range: '',
+            crack_type: crack.crack_type,
+            area_range: crack.area_range,
+            kerb_type: '',
+            condition: '',
+            length_m: '',
+            confidence: crack.confidence
+          });
+        });
+
+        // Add kerbs
+        kerbs.forEach(kerb => {
+          allDetections.push({
+            filename: result.filename,
+            type: 'Kerb',
+            id: kerb.kerb_id,
+            area_cm2: '',
+            depth_cm: '',
+            volume: '',
+            volume_range: '',
+            crack_type: '',
+            area_range: '',
+            kerb_type: kerb.kerb_type,
+            condition: kerb.condition,
+            length_m: kerb.length_m,
+            confidence: kerb.confidence
+          });
+        });
+      }
+    });
+
+    if (allDetections.length === 0) {
+      alert('No detection results to export.');
+      return;
+    }
+
+    // Create CSV content
+    const headers = [
+      'Image Filename',
+      'Detection Type',
+      'ID',
+      'Area (cm²)',
+      'Depth (cm)',
+      'Volume (cm³)',
+      'Volume Range',
+      'Crack Type',
+      'Area Range',
+      'Kerb Type',
+      'Condition',
+      'Length (m)',
+      'Confidence'
+    ];
+
+    const csvContent = [
+      headers.join(','),
+      ...allDetections.map(detection => [
+        detection.filename,
+        detection.type,
+        detection.id || '',
+        detection.area_cm2 || '',
+        detection.depth_cm || '',
+        detection.volume || '',
+        detection.volume_range || '',
+        detection.crack_type || '',
+        detection.area_range || '',
+        detection.kerb_type || '',
+        detection.condition || '',
+        detection.length_m || '',
+        detection.confidence || ''
+      ].join(','))
+    ].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `pavement_detection_results_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+
+
+
 
   // Handle location permission changes
   useEffect(() => {
@@ -783,13 +906,7 @@ const Pavement = () => {
     // The getCurrentImageLocation function will return the correct location for the selected image
   }, [currentImageIndex, imageLocationMap]);
 
-  // Stop auto-navigation
-  const stopAutoNavigation = () => {
-    if (autoNavigationRef.current) {
-      clearInterval(autoNavigationRef.current);
-      setAutoNavigationActive(false);
-    }
-  };
+
 
   return (
     <Container className="pavement-page">
@@ -1154,351 +1271,390 @@ const Pavement = () => {
             </Card.Body>
           </Card>
 
-          {processedImage && (
+
+          {/* Enhanced Detection Results Table */}
+          {batchResults.some(result => result.success && result.processed && result.detectionCounts?.total > 0) && (
             <Card className="mb-4">
-              <Card.Body>
-                <h4 className="mb-3">Detection Results</h4>
-                
-                {/* Location status in results */}
-                <div className="mb-3">
-                  {(() => {
-                    const imageLocation = getCurrentImageLocation();
-                    return imageLocation !== 'Not Available' && imageLocation !== 'Location Error' && imageLocation !== 'Permission Denied' ? (
-                      <Alert variant="success" className="py-2">
-                        <small>
-                          <i className="fas fa-map-marker-alt me-2"></i>
-                          <strong>Image Location Data:</strong> {imageLocation}
-                        </small>
-                      </Alert>
-                    ) : (
-                      <Alert variant="warning" className="py-2">
-                        <small>
-                          <i className="fas fa-exclamation-triangle me-2"></i>
-                          <strong>Location Warning:</strong> Location data was not available for this image. 
-                          {Object.keys(imagePreviewsMap).length > 0 && Object.keys(imagePreviewsMap)[currentImageIndex].includes('camera_capture') 
-                            ? 'The camera may have been disabled before capturing, or location access was denied.'
-                            : 'Uploaded images do not contain GPS data. Use the live camera for location-tagged captures.'}
-                        </small>
-                      </Alert>
-                    );
-                  })()}
-                </div>
-                
-                <div className="processed-image-container mb-3">
-                  <img 
-                    src={processedImage} 
-                    alt="Processed" 
-                    className="processed-image img-fluid" 
-                  />
-                </div>
-
-                {results && (
-                  <div className="results-summary">
-                    {detectionType === 'all' && (
-                      <div className="detection-summary-card">
-                        <h4 className="mb-4 text-center">🔍 All Defects Detection Results</h4>
-                        
-                        {/* Display any error messages for failed models */}
-                        {results.model_errors && Object.keys(results.model_errors).length > 0 && (
-                          <Alert variant="warning" className="mb-3 model-error-alert">
-                            <Alert.Heading as="h6">⚠️ Partial Detection Results</Alert.Heading>
-                            <p>Some detection models encountered errors:</p>
-                            <ul className="mb-0">
-                              {Object.entries(results.model_errors).map(([model, error]) => (
-                                <li key={model}><strong>{model}:</strong> {error}</li>
-                              ))}
-                            </ul>
-                          </Alert>
-                        )}
-                        
-                        {/* Potholes Section */}
-                        <div className="defect-section potholes">
-                          <h5 className="text-danger">
-                            <span className="emoji">🕳️</span>
-                            Potholes Detected: {results.potholes ? results.potholes.length : 0}
-                          </h5>
-                          {results.potholes && results.potholes.length > 0 ? (
-                            <div className="scrollable-table mb-3">
-                              <table className="table table-striped table-bordered">
-                                <thead>
-                                  <tr>
-                                    <th>ID</th>
-                                    <th>Area (cm²)</th>
-                                    <th>Depth (cm)</th>
-                                    <th>Volume (cm³)</th>
-                                    <th>Volume Range</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {results.potholes.map((pothole) => (
-                                    <tr key={pothole.pothole_id}>
-                                      <td>{pothole.pothole_id}</td>
-                                      <td>{pothole.area_cm2.toFixed(2)}</td>
-                                      <td>{pothole.depth_cm.toFixed(2)}</td>
-                                      <td>{pothole.volume.toFixed(2)}</td>
-                                      <td>{pothole.volume_range}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ) : (
-                            <div className="no-defects-message">No potholes detected in this image.</div>
-                          )}
-                        </div>
-
-                        {/* Cracks Section */}
-                        <div className="defect-section cracks">
-                          <h5 className="text-success">
-                            <span className="emoji">🪨</span>
-                            Alligator Cracks Detected: {results.cracks ? results.cracks.length : 0}
-                          </h5>
-                          {results.cracks && results.cracks.length > 0 ? (
-                            <>
-                              <div className="scrollable-table mb-3">
-                                <table className="table table-striped table-bordered">
-                                  <thead>
-                                    <tr>
-                                      <th>ID</th>
-                                      <th>Type</th>
-                                      <th>Area (cm²)</th>
-                                      <th>Area Range</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {results.cracks.map((crack) => (
-                                      <tr key={crack.crack_id}>
-                                        <td>{crack.crack_id}</td>
-                                        <td>{crack.crack_type}</td>
-                                        <td>{crack.area_cm2.toFixed(2)}</td>
-                                        <td>{crack.area_range}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                              
-                              {results.type_counts && (
-                                <div>
-                                  <h6>Crack Types Summary</h6>
-                                  <ul className="crack-types-list">
-                                    {Object.entries(results.type_counts).map(([type, count]) => (
-                                      count > 0 && (
-                                        <li key={type}>
-                                          <strong>{type}:</strong> {count}
-                                        </li>
-                                      )
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="no-defects-message">No cracks detected in this image.</div>
-                          )}
-                        </div>
-
-                        {/* Kerbs Section */}
-                        <div className="defect-section kerbs">
-                          <h5 className="text-primary">
-                            <span className="emoji">🚧</span>
-                            Kerbs Detected: {results.kerbs ? results.kerbs.length : 0}
-                          </h5>
-                          {results.kerbs && results.kerbs.length > 0 ? (
-                            <>
-                              <div className="scrollable-table mb-3">
-                                <table className="table table-striped table-bordered">
-                                  <thead>
-                                    <tr>
-                                      <th>ID</th>
-                                      <th>Type</th>
-                                      <th>Condition</th>
-                                      <th>Length</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {results.kerbs.map((kerb) => (
-                                      <tr key={kerb.kerb_id}>
-                                        <td>{kerb.kerb_id}</td>
-                                        <td>{kerb.kerb_type}</td>
-                                        <td>{kerb.condition}</td>
-                                        <td>{kerb.length_m.toFixed(2)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                              
-                              {results.condition_counts && (
-                                <div>
-                                  <h6>Kerb Conditions Summary</h6>
-                                  <ul className="kerb-types-list">
-                                    {Object.entries(results.condition_counts).map(([condition, count]) => (
-                                      count > 0 && (
-                                        <li key={condition}>
-                                          <strong>{condition}:</strong> {count}
-                                        </li>
-                                      )
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="no-defects-message">No kerbs detected in this image.</div>
-                          )}
-                        </div>
-
-                        {/* Overall Summary */}
-                        <div className="summary-stats">
-                          <h6 className="mb-3">📊 Detection Summary</h6>
-                          <div className="row">
-                            <div className="col-md-4 stat-item">
-                              <div className="stat-value text-danger">{results.potholes ? results.potholes.length : 0}</div>
-                              <div className="stat-label">Potholes</div>
-                            </div>
-                            <div className="col-md-4 stat-item">
-                              <div className="stat-value text-success">{results.cracks ? results.cracks.length : 0}</div>
-                              <div className="stat-label">Cracks</div>
-                            </div>
-                            <div className="col-md-4 stat-item">
-                              <div className="stat-value text-primary">{results.kerbs ? results.kerbs.length : 0}</div>
-                              <div className="stat-label">Kerbs</div>
-                            </div>
-                          </div>
-                          <div className="text-center mt-3">
-                            <span className="total-defects-badge">
-                              Total Defects: {(results.potholes ? results.potholes.length : 0) + (results.cracks ? results.cracks.length : 0) + (results.kerbs ? results.kerbs.length : 0)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {detectionType === 'potholes' && results.potholes && (
-                      <div>
-                        <h5>Detected Potholes: {results.potholes.length}</h5>
-                        {results.potholes.length > 0 && (
-                          <div className="scrollable-table mb-3">
-                            <table className="table table-striped table-bordered">
-                              <thead>
-                                <tr>
-                                  <th>ID</th>
-                                  <th>Area (cm²)</th>
-                                  <th>Depth (cm)</th>
-                                  <th>Volume (cm³)</th>
-                                  <th>Volume Range</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {results.potholes.map((pothole) => (
-                                  <tr key={pothole.pothole_id}>
-                                    <td>{pothole.pothole_id}</td>
-                                    <td>{pothole.area_cm2.toFixed(2)}</td>
-                                    <td>{pothole.depth_cm.toFixed(2)}</td>
-                                    <td>{pothole.volume.toFixed(2)}</td>
-                                    <td>{pothole.volume_range}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {detectionType === 'cracks' && results.cracks && (
-                      <div>
-                        <h5>Detected Cracks: {results.cracks.length}</h5>
-                        {results.cracks.length > 0 && (
-                          <div className="scrollable-table mb-3">
-                            <table className="table table-striped table-bordered">
-                              <thead>
-                                <tr>
-                                  <th>ID</th>
-                                  <th>Type</th>
-                                  <th>Area (cm²)</th>
-                                  <th>Area Range</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {results.cracks.map((crack) => (
-                                  <tr key={crack.crack_id}>
-                                    <td>{crack.crack_id}</td>
-                                    <td>{crack.crack_type}</td>
-                                    <td>{crack.area_cm2.toFixed(2)}</td>
-                                    <td>{crack.area_range}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-
-                        {results.type_counts && (
-                          <div>
-                            <h5>Crack Types Summary</h5>
-                            <ul className="crack-types-list">
-                              {Object.entries(results.type_counts).map(([type, count]) => (
-                                count > 0 && (
-                                  <li key={type}>
-                                    <strong>{type}:</strong> {count}
-                                  </li>
-                                )
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {detectionType === 'kerbs' && results.kerbs && (
-                      <div>
-                        <h5>Detected Kerbs: {results.kerbs.length}</h5>
-                        {results.kerbs.length > 0 && (
-                          <div className="scrollable-table mb-3">
-                            <table className="table table-striped table-bordered">
-                              <thead>
-                                <tr>
-                                  <th>ID</th>
-                                  <th>Type</th>
-                                  <th>Condition</th>
-                                  <th>Length</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {results.kerbs.map((kerb) => (
-                                  <tr key={kerb.kerb_id}>
-                                    <td>{kerb.kerb_id}</td>
-                                    <td>{kerb.kerb_type}</td>
-                                    <td>{kerb.condition}</td>
-                                    <td>{kerb.length_m.toFixed(2)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-
-                        {results.condition_counts && (
-                          <div>
-                            <h5>Kerb Conditions Summary</h5>
-                            <ul className="kerb-conditions-list">
-                              {Object.entries(results.condition_counts).map(([condition, count]) => (
-                                count > 0 && (
-                                  <li key={condition}>
-                                    <strong>{condition}:</strong> {count}
-                                  </li>
-                                )
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    )}
+              <Card.Header>
+                <div className="d-flex justify-content-between align-items-center">
+                  <h5 className="mb-0">
+                    <i className="fas fa-table me-2"></i>
+                    Detailed Detection Results
+                  </h5>
+                  <div className="d-flex gap-2">
+                    <Button
+                      variant="success"
+                      size="sm"
+                      onClick={exportToCSV}
+                      title="Export results to CSV"
+                    >
+                      <i className="fas fa-download me-1"></i>
+                      Export CSV
+                    </Button>
                   </div>
-                )}
-              </Card.Body>
+                </div>
+              </Card.Header>
+              <Card.Body>
+                  {/* Filter Controls */}
+                  <div className="mb-3">
+                    <div className="d-flex gap-2 flex-wrap">
+                      <Button
+                        variant={detectionTableFilter === 'all' ? 'primary' : 'outline-primary'}
+                        size="sm"
+                        onClick={() => setDetectionTableFilter('all')}
+                      >
+                        All Detections
+                      </Button>
+                      <Button
+                        variant={detectionTableFilter === 'potholes' ? 'danger' : 'outline-danger'}
+                        size="sm"
+                        onClick={() => setDetectionTableFilter('potholes')}
+                      >
+                        Potholes Only
+                      </Button>
+                      <Button
+                        variant={detectionTableFilter === 'cracks' ? 'warning' : 'outline-warning'}
+                        size="sm"
+                        onClick={() => setDetectionTableFilter('cracks')}
+                      >
+                        Cracks Only
+                      </Button>
+                      <Button
+                        variant={detectionTableFilter === 'kerbs' ? 'info' : 'outline-info'}
+                        size="sm"
+                        onClick={() => setDetectionTableFilter('kerbs')}
+                      >
+                        Kerbs Only
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Summary Statistics */}
+                  <div className="mb-4 detection-summary-cards">
+                    <div className="row">
+                      <div className="col-md-3">
+                        <div className="card bg-danger text-white">
+                          <div className="card-body text-center py-2">
+                            <h6 className="mb-1">Total Potholes</h6>
+                            <h4 className="mb-0">
+                              {batchResults.reduce((sum, result) => sum + (result.detectionCounts?.potholes || 0), 0)}
+                            </h4>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-md-3">
+                        <div className="card bg-warning text-white">
+                          <div className="card-body text-center py-2">
+                            <h6 className="mb-1">Total Cracks</h6>
+                            <h4 className="mb-0">
+                              {batchResults.reduce((sum, result) => sum + (result.detectionCounts?.cracks || 0), 0)}
+                            </h4>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-md-3">
+                        <div className="card bg-info text-white">
+                          <div className="card-body text-center py-2">
+                            <h6 className="mb-1">Total Kerbs</h6>
+                            <h4 className="mb-0">
+                              {batchResults.reduce((sum, result) => sum + (result.detectionCounts?.kerbs || 0), 0)}
+                            </h4>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-md-3">
+                        <div className="card bg-success text-white">
+                          <div className="card-body text-center py-2">
+                            <h6 className="mb-1">Total Detections</h6>
+                            <h4 className="mb-0">
+                              {batchResults.reduce((sum, result) => sum + (result.detectionCounts?.total || 0), 0)}
+                            </h4>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Detailed Results Table */}
+                  <div className="table-responsive detection-table-container">
+                    {(() => {
+                      // Flatten all detection results into a single array
+                      const allDetections = [];
+
+                      batchResults.forEach(result => {
+                        if (result.success && result.processed && result.detectionResults) {
+                          const { potholes, cracks, kerbs } = result.detectionResults;
+
+                          // Add potholes
+                          if (detectionTableFilter === 'all' || detectionTableFilter === 'potholes') {
+                            potholes.forEach(pothole => {
+                              allDetections.push({
+                                ...pothole,
+                                type: 'Pothole',
+                                filename: result.filename,
+                                detectionType: 'potholes'
+                              });
+                            });
+                          }
+
+                          // Add cracks
+                          if (detectionTableFilter === 'all' || detectionTableFilter === 'cracks') {
+                            cracks.forEach(crack => {
+                              allDetections.push({
+                                ...crack,
+                                type: 'Crack',
+                                filename: result.filename,
+                                detectionType: 'cracks'
+                              });
+                            });
+                          }
+
+                          // Add kerbs
+                          if (detectionTableFilter === 'all' || detectionTableFilter === 'kerbs') {
+                            kerbs.forEach(kerb => {
+                              allDetections.push({
+                                ...kerb,
+                                type: 'Kerb',
+                                filename: result.filename,
+                                detectionType: 'kerbs'
+                              });
+                            });
+                          }
+                        }
+                      });
+
+                      if (allDetections.length === 0) {
+                        return (
+                          <div className="text-center py-5">
+                            <div className="mb-3">
+                              <i className="fas fa-search fa-3x text-muted"></i>
+                            </div>
+                            <h6 className="text-muted">No detections found</h6>
+                            <p className="text-muted mb-0">
+                              {detectionTableFilter === 'all'
+                                ? 'No defects were detected in the processed images.'
+                                : `No ${detectionTableFilter} were detected in the processed images.`}
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <table className="table table-striped table-bordered">
+                          <thead>
+                            <tr>
+                              <th>Original Image</th>
+                              <th>Processed Image</th>
+                              <th
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => handleSort('detectionType')}
+                              >
+                                Type {sortConfig.key === 'detectionType' && (
+                                  <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                )}
+                              </th>
+                              <th>ID</th>
+                              {(detectionTableFilter === 'all' || detectionTableFilter === 'potholes') && (
+                                <>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('area_cm2')}
+                                  >
+                                    Area (cm²) {sortConfig.key === 'area_cm2' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('depth_cm')}
+                                  >
+                                    Depth (cm) {sortConfig.key === 'depth_cm' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('volume')}
+                                  >
+                                    Volume (cm³) {sortConfig.key === 'volume' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th>Volume Range</th>
+                                </>
+                              )}
+                              {(detectionTableFilter === 'all' || detectionTableFilter === 'cracks') && (
+                                <>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('crack_type')}
+                                  >
+                                    Crack Type {sortConfig.key === 'crack_type' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('area_cm2')}
+                                  >
+                                    Area (cm²) {sortConfig.key === 'area_cm2' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th>Area Range</th>
+                                </>
+                              )}
+                              {(detectionTableFilter === 'all' || detectionTableFilter === 'kerbs') && (
+                                <>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('kerb_type')}
+                                  >
+                                    Kerb Type {sortConfig.key === 'kerb_type' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('condition')}
+                                  >
+                                    Condition {sortConfig.key === 'condition' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                  <th
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => handleSort('length_m')}
+                                  >
+                                    Length (m) {sortConfig.key === 'length_m' && (
+                                      <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                    )}
+                                  </th>
+                                </>
+                              )}
+                              <th
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => handleSort('confidence')}
+                              >
+                                Confidence {sortConfig.key === 'confidence' && (
+                                  <i className={`fas fa-sort-${sortConfig.direction === 'asc' ? 'up' : 'down'} ms-1`}></i>
+                                )}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sortDetections(allDetections).map((detection, index) => (
+                              <tr key={`${detection.filename}-${detection.detectionType}-${index}`}>
+                                {/* Original Image Column */}
+                                <td style={{ width: '120px', textAlign: 'center' }}>
+                                  {(() => {
+                                    const result = batchResults.find(r => r.filename === detection.filename);
+                                    const originalImage = result?.originalImage;
+                                    return originalImage ? (
+                                      <div
+                                        className="image-thumbnail-container"
+                                        onClick={() => handleThumbnailClick({
+                                          originalImage: originalImage,
+                                          processedImage: result?.processedImage,
+                                          isRoad: result?.isRoad,
+                                          filename: detection.filename
+                                        })}
+                                        title="Click to enlarge 🔍"
+                                      >
+                                        <img
+                                          src={originalImage}
+                                          alt="Original"
+                                          className="image-thumbnail"
+                                        />
+                                        <div className="thumbnail-overlay">
+                                          🔍
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <small className="text-muted">No image</small>
+                                    );
+                                  })()}
+                                </td>
+
+                                {/* Processed Image Column */}
+                                <td style={{ width: '120px', textAlign: 'center' }}>
+                                  {(() => {
+                                    const result = batchResults.find(r => r.filename === detection.filename);
+                                    const processedImage = result?.processedImage;
+                                    const originalImage = result?.originalImage;
+
+                                    return processedImage && result?.isRoad ? (
+                                      <div
+                                        className="image-thumbnail-container"
+                                        onClick={() => handleThumbnailClick({
+                                          originalImage: originalImage,
+                                          processedImage: processedImage,
+                                          isRoad: result.isRoad,
+                                          filename: detection.filename
+                                        })}
+                                        title="Click to enlarge 🔍"
+                                      >
+                                        <img
+                                          src={processedImage}
+                                          alt="Processed"
+                                          className="image-thumbnail"
+                                        />
+                                        <div className="thumbnail-overlay">
+                                          🔍
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <small className="text-muted">No processed image</small>
+                                    );
+                                  })()}
+                                </td>
+                                <td>
+                                  <span className={`badge ${
+                                    detection.detectionType === 'potholes' ? 'bg-danger' :
+                                    detection.detectionType === 'cracks' ? 'bg-warning' : 'bg-info'
+                                  }`}>
+                                    {detection.type}
+                                  </span>
+                                </td>
+                                <td>{detection.pothole_id || detection.crack_id || detection.kerb_id || index + 1}</td>
+
+                                {/* Pothole-specific columns */}
+                                {(detectionTableFilter === 'all' || detectionTableFilter === 'potholes') && (
+                                  <>
+                                    <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.depth_cm ? detection.depth_cm.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.volume ? detection.volume.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.volume_range || 'N/A'}</td>
+                                  </>
+                                )}
+
+                                {/* Crack-specific columns */}
+                                {(detectionTableFilter === 'all' || detectionTableFilter === 'cracks') && (
+                                  <>
+                                    <td>{detection.crack_type || 'N/A'}</td>
+                                    <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.area_range || 'N/A'}</td>
+                                  </>
+                                )}
+
+                                {/* Kerb-specific columns */}
+                                {(detectionTableFilter === 'all' || detectionTableFilter === 'kerbs') && (
+                                  <>
+                                    <td>{detection.kerb_type || 'N/A'}</td>
+                                    <td>{detection.condition || 'N/A'}</td>
+                                    <td>{detection.length_m ? detection.length_m.toFixed(2) : 'N/A'}</td>
+                                  </>
+                                )}
+
+                                <td>{detection.confidence ? (detection.confidence * 100).toFixed(1) + '%' : 'N/A'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      );
+                    })()}
+                  </div>
+                </Card.Body>
             </Card>
           )}
 
@@ -1528,79 +1684,7 @@ const Pavement = () => {
 
 
 
-          {/* Navigation buttons for processed road images only */}
-          {getProcessedRoadImages().length > 1 && !batchProcessing && (
-            <div className="image-navigation mt-3 d-flex justify-content-between">
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                disabled={(() => {
-                  const processedImages = getProcessedRoadImages();
-                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
-                  return currentProcessedIndex <= 0;
-                })()}
-                onClick={() => {
-                  const processedImages = getProcessedRoadImages();
-                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
 
-                  if (currentProcessedIndex > 0) {
-                    const prevProcessedImage = processedImages[currentProcessedIndex - 1];
-                    const filenames = Object.keys(imagePreviewsMap);
-                    const newIndex = filenames.findIndex(name => name === prevProcessedImage.filename);
-
-                    if (newIndex !== -1) {
-                      setCurrentImageIndex(newIndex);
-                      setProcessedImage(prevProcessedImage.processedImage);
-                      setResults(prevProcessedImage.data);
-                    }
-                  }
-                }}
-              >
-                <FaArrowLeft className="me-1" />
-              </Button>
-
-              <div className="image-counter">
-                {(() => {
-                  const processedImages = getProcessedRoadImages();
-                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
-                  return `Processed Image ${currentProcessedIndex + 1} of ${processedImages.length}`;
-                })()}
-              </div>
-              
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                disabled={(() => {
-                  const processedImages = getProcessedRoadImages();
-                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
-                  return currentProcessedIndex >= processedImages.length - 1;
-                })()}
-                onClick={() => {
-                  const processedImages = getProcessedRoadImages();
-                  const currentFilename = Object.keys(imagePreviewsMap)[currentImageIndex];
-                  const currentProcessedIndex = processedImages.findIndex(r => r.filename === currentFilename);
-
-                  if (currentProcessedIndex < processedImages.length - 1) {
-                    const nextProcessedImage = processedImages[currentProcessedIndex + 1];
-                    const filenames = Object.keys(imagePreviewsMap);
-                    const newIndex = filenames.findIndex(name => name === nextProcessedImage.filename);
-
-                    if (newIndex !== -1) {
-                      setCurrentImageIndex(newIndex);
-                      setProcessedImage(nextProcessedImage.processedImage);
-                      setResults(nextProcessedImage.data);
-                    }
-                  }
-                }}
-              >
-                <FaArrowRight className="ms-1" />
-              </Button>
-            </div>
-          )}
 
           {/* Batch Processing Summary */}
           {!batchProcessing && batchResults.length > 0 && (() => {
@@ -1948,29 +2032,47 @@ const Pavement = () => {
         <Modal.Header closeButton>
           <Modal.Title>
             <i className="fas fa-image me-2"></i>
-            Image View
+            Image View {selectedImageData?.filename && (
+              <small className="text-muted">- {selectedImageData.filename}</small>
+            )}
           </Modal.Title>
         </Modal.Header>
         <Modal.Body>
           {selectedImageData && (
             <div className="text-center">
-              <div className="mb-3">
-                <h6>Original Image</h6>
+              <div className="mb-4">
+                <h6 className="mb-3">
+                  <i className="fas fa-camera me-2"></i>
+                  Original Image
+                </h6>
                 <img
                   src={selectedImageData.originalImage}
                   alt="Original Image"
                   className="img-fluid"
-                  style={{ maxHeight: '400px', borderRadius: '8px' }}
+                  style={{
+                    maxHeight: '400px',
+                    borderRadius: '8px',
+                    border: '2px solid #dee2e6',
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.1)'
+                  }}
                 />
               </div>
               {selectedImageData.processedImage && selectedImageData.isRoad && (
                 <div className="mt-4">
-                  <h6>Processed Image (Road Detection Results)</h6>
+                  <h6 className="mb-3">
+                    <i className="fas fa-search me-2"></i>
+                    Processed Image (Detection Results)
+                  </h6>
                   <img
                     src={selectedImageData.processedImage}
                     alt="Processed Image"
                     className="img-fluid"
-                    style={{ maxHeight: '400px', borderRadius: '8px' }}
+                    style={{
+                      maxHeight: '400px',
+                      borderRadius: '8px',
+                      border: '2px solid #28a745',
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.1)'
+                    }}
                   />
                 </div>
               )}
@@ -1998,5 +2100,63 @@ const Pavement = () => {
   );
 };
 
-export default Pavement; 
+// Add CSS styles for the enhanced detection table
+const styles = `
+  .detection-table-container {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+
+  .detection-table-container th {
+    position: sticky;
+    top: 0;
+    background-color: #f8f9fa;
+    z-index: 10;
+  }
+
+  .detection-table-container th:hover {
+    background-color: #e9ecef;
+  }
+
+  .detection-summary-cards .card {
+    transition: transform 0.2s ease-in-out;
+  }
+
+  .detection-summary-cards .card:hover {
+    transform: translateY(-2px);
+  }
+
+  .table-responsive {
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+
+  .badge {
+    font-size: 0.75em;
+  }
+
+  @media (max-width: 768px) {
+    .detection-summary-cards .col-md-3 {
+      margin-bottom: 1rem;
+    }
+
+    .d-flex.gap-2.flex-wrap {
+      flex-direction: column;
+    }
+
+    .d-flex.gap-2.flex-wrap .btn {
+      margin-bottom: 0.5rem;
+    }
+  }
+`;
+
+// Inject styles into the document head
+if (typeof document !== 'undefined') {
+  const styleSheet = document.createElement('style');
+
+  styleSheet.innerText = styles;
+  document.head.appendChild(styleSheet);
+}
+
+export default Pavement;
  
