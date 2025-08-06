@@ -26,6 +26,7 @@ instance/
 .webassets-cache
 
 # VideoFiles
+backend/routes/.mp4
 .mp4
 backend/processed_videos/
 backend/routes/temp_video.mp4
