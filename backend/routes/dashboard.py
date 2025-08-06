@@ -135,6 +135,7 @@ def get_dashboard_summary():
                             **pothole,
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
+                            "username": image.get("username"),
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
@@ -199,6 +200,7 @@ def get_dashboard_summary():
                             **crack,
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
+                            "username": image.get("username"),
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
@@ -260,6 +262,7 @@ def get_dashboard_summary():
                             **kerb,
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
+                            "username": image.get("username"),
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
