@@ -214,6 +214,11 @@ const Pavement = () => {
           ...prev,
           [file.name]: 'Not Available'
         }));
+        
+        // Show AVIF conversion notice if applicable
+        if (file.name.toLowerCase().endsWith('.avif')) {
+          console.log(`AVIF file detected: ${file.name} - will be automatically converted to JPG during processing`);
+        }
       });
       
       // Reset results
@@ -1089,20 +1094,24 @@ const Pavement = () => {
                       cameraActive ? "Disable Camera" : "Enable Camera"
                     )}
                   </Button>
-                  <div className="file-input-container">
-                    <label className="file-input-label">
-                      Upload Image
-                      <input
-                        type="file"
-                        className="file-input"
-                        accept="image/*"
-                        onChange={handleFileChange}
-                        ref={fileInputRef}
-                        disabled={cameraActive}
-                        multiple
-                      />
-                    </label>
-                  </div>
+                                      <div className="file-input-container">
+                      <label className="file-input-label">
+                        Upload Image
+                        <input
+                          type="file"
+                          className="file-input"
+                          accept="image/*,.avif"
+                          onChange={handleFileChange}
+                          ref={fileInputRef}
+                          disabled={cameraActive}
+                          multiple
+                        />
+                      </label>
+                      <small className="text-muted d-block mt-1">
+                        <i className="fas fa-info-circle me-1"></i>
+                        Supports all image formats including AVIF (automatically converted to JPG for processing)
+                      </small>
+                    </div>
                 </div>
                 
                 {/* Location Status Display */}
@@ -1193,6 +1202,13 @@ const Pavement = () => {
                           alt={`Preview ${index + 1}`} 
                           className="img-thumbnail" 
                         />
+                        {/* AVIF conversion indicator */}
+                        {name.toLowerCase().endsWith('.avif') && (
+                          <div className="avif-indicator" title="AVIF file - will be converted to JPG during processing">
+                            <i className="fas fa-sync-alt text-info"></i>
+                            <small className="ms-1">AVIF</small>
+                          </div>
+                        )}
                         <button 
                           className="btn btn-sm btn-danger remove-image" 
                           onClick={(e) => {
@@ -1971,6 +1987,27 @@ const Pavement = () => {
                 <li>Review the detection results and measurements</li>
               </ol>
               
+              <h5>Supported Image Formats</h5>
+              <p>
+                The system supports all common image formats including:
+              </p>
+              <ul>
+                <li><strong>JPEG/JPG</strong> - Standard format, optimal for processing</li>
+                <li><strong>PNG</strong> - Lossless format, good for detailed images</li>
+                <li><strong>AVIF</strong> - Modern format, automatically converted to JPG for processing</li>
+                <li><strong>WebP</strong> - Google's format, also automatically converted</li>
+                <li><strong>Other formats</strong> - BMP, TIFF, etc. are also supported</li>
+              </ul>
+              
+              <div className="alert alert-info">
+                <h6><i className="fas fa-info-circle me-2"></i>Automatic Format Conversion</h6>
+                <p className="mb-0">
+                  <strong>AVIF and WebP images</strong> are automatically converted to JPG format during processing 
+                  to ensure compatibility with the YOLO detection models. This conversion maintains image quality 
+                  while ensuring reliable detection results.
+                </p>
+              </div>
+              
               <p>
                 The detected defects are automatically recorded in the database for tracking 
                 and analysis in the Dashboard module.
@@ -2133,6 +2170,24 @@ const styles = `
 
   .badge {
     font-size: 0.75em;
+  }
+
+  .avif-indicator {
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    background-color: rgba(23, 162, 184, 0.9);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 12px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    z-index: 5;
+  }
+
+  .image-thumbnail {
+    position: relative;
   }
 
   @media (max-width: 768px) {
