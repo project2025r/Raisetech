@@ -13,6 +13,7 @@ pillow==10.0.0
 timm==1.0.15
 imageio==2.37.0
 imageio-ffmpeg==0.6.0
+pillow-avif-plugin==1.5.2
 
 # Data Processing & Visualization
 pandas==2.0.3
