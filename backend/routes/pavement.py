@@ -300,8 +300,19 @@ def get_models():
 
 
 def decode_base64_image(base64_string):
-    """Decode a base64 image to cv2 format"""
+    """Decode a base64 image to cv2 format with automatic AVIF to JPG conversion"""
     print(f"🔍 DEBUG: Base64 string prefix: {base64_string[:50]}...")
+
+    # Check if this is an AVIF image and convert if necessary
+    if 'data:image/avif;base64,' in base64_string or 'data:image/;base64,' in base64_string:
+        print("🔄 AVIF image detected, converting to JPG...")
+        try:
+            from utils.image_converter import convert_image_to_yolo_supported
+            base64_string = convert_image_to_yolo_supported(base64_string)
+            print("✅ AVIF successfully converted to JPG")
+        except Exception as e:
+            print(f"❌ Error converting AVIF to JPG: {str(e)}")
+            return None
 
     if 'base64,' in base64_string:
         header = base64_string.split('base64,')[0]
