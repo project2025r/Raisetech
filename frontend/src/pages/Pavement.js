@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner, OverlayTrigger, Popover, Modal } from 'react-bootstrap';
 import axios from 'axios';
@@ -387,6 +388,7 @@ const Pavement = () => {
           originalImage: currentImagePreview, // Add original image data
           data: response.data,
           detectionResults: detectionResults,
+          wasClassificationEnabled: roadClassificationEnabled, // ADD THIS LINE
           detectionCounts: {
             potholes: detectionResults.potholes.length,
             cracks: detectionResults.cracks.length,
@@ -565,6 +567,7 @@ const Pavement = () => {
               originalImage: imageData, // Add original image data
               data: response.data,
               detectionResults: detectionResults,
+              wasClassificationEnabled: roadClassificationEnabled, // ADD THIS LINE
               detectionCounts: {
                 potholes: detectionResults.potholes.length,
                 cracks: detectionResults.cracks.length,
@@ -857,7 +860,15 @@ const Pavement = () => {
   };
 
 
-
+// Clear results when road classification toggle is changed
+  useEffect(() => {
+    if (batchResults.length > 0) {
+      // Clear batch results when toggle changes to prevent showing outdated classification data
+      setBatchResults([]);
+      setProcessedImage(null);
+      setResults(null);
+    }
+  }, [roadClassificationEnabled]);
 
 
   // Handle location permission changes
@@ -1711,7 +1722,8 @@ const Pavement = () => {
             let alertVariant = 'light';
             let alertClass = '';
 
-            if (roadClassificationEnabled) {
+            if (batchResults.some(result => result.wasClassificationEnabled)) {
+              // When classification was enabled during processing, use road/non-road logic
               // When classification is enabled, use road/non-road logic
               const nonRoadImages = batchResults.filter(r => !r.isRoad).length;
               const nonRoadPercentage = totalImages > 0 ? (nonRoadImages / totalImages) * 100 : 0;
@@ -1766,7 +1778,8 @@ const Pavement = () => {
           })()}
 
           {/* Image Status Table - Only show when road classification is enabled */}
-          {!batchProcessing && batchResults.length > 0 && roadClassificationEnabled && (
+          {/* Image Status Table - Only show when road classification was enabled during processing */}
+          {!batchProcessing && batchResults.length > 0 && batchResults.some(result => result.wasClassificationEnabled) && (
             <div className="image-status-table mt-4">
               <Card>
                 <Card.Header>
@@ -2215,3 +2228,5 @@ if (typeof document !== 'undefined') {
 
 export default Pavement;
  
+
+
