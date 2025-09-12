@@ -20,6 +20,9 @@ from collections import defaultdict
 import boto3
 from botocore.exceptions import ClientError
 
+# Import our comprehensive S3-MongoDB integration
+from s3_mongodb_integration import ImageProcessingWorkflow, S3ImageManager, MongoDBImageManager
+
 pavement_bp = Blueprint('pavement', __name__)
 
 # Global variables for models - lazy loaded or preloaded
@@ -1207,7 +1210,7 @@ def detect_potholes():
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
             # Perform road classification with lower confidence threshold
-            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.4)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -1268,14 +1271,7 @@ def detect_potholes():
         timestamp = pd.Timestamp.now().isoformat()
         image_upload_id = str(uuid.uuid4())
         
-        # Store the original image
-        fs = get_gridfs()
-        _, original_buffer = cv2.imencode('.jpg', image)
-        original_image_id = fs.put(
-            original_buffer.tobytes(),
-            filename=f"image_{image_upload_id}_original.jpg",
-            content_type="image/jpeg"
-        )
+        # We'll upload images to S3 after processing
         
         for result in results:
             if result.boxes is not None:
@@ -1368,31 +1364,42 @@ def detect_potholes():
                         pothole_results.append(pothole_info)
                         pothole_id += 1
         
-        # Store processed image
-        _, processed_buffer = cv2.imencode('.jpg', processed_image)
-        processed_image_id = fs.put(
-            processed_buffer.tobytes(),
-            filename=f"image_{image_upload_id}_processed.jpg",
-            content_type="image/jpeg"
-        )
-        
-        # Store in database
-        db = connect_to_db()
-        if db is not None and pothole_results:
-            try:
-                db.pothole_images.insert_one({
-                    "image_id": image_upload_id,
-                    "timestamp": timestamp,
-                    "coordinates": coordinates,
-                    "username": username,
-                    "role": role,
-                    "original_image_id": str(original_image_id),
-                    "processed_image_id": str(processed_image_id),
-                    "pothole_count": len(pothole_results),
-                    "potholes": pothole_results
-                })
-            except Exception as e:
-                print(f"❌ Error saving to database: {str(e)}")
+        # Use comprehensive S3-MongoDB integration workflow
+        try:
+            # Initialize the workflow manager
+            workflow = ImageProcessingWorkflow()
+
+            # Prepare metadata
+            metadata = {
+                'username': username,
+                'role': role,
+                'coordinates': coordinates,
+                'timestamp': timestamp
+            }
+
+            # Execute complete workflow: S3 upload + MongoDB storage
+            workflow_success, workflow_result = workflow.process_and_store_images(
+                image, processed_image, metadata, pothole_results, 'pothole'
+            )
+
+            if not workflow_success:
+                return jsonify({
+                    "success": False,
+                    "message": f"Failed to process and store images: {workflow_result}"
+                }), 500
+
+            # Extract S3 URLs from workflow result for response
+            original_s3_url = workflow_result['original_s3_url']
+            processed_s3_url = workflow_result['processed_s3_url']
+
+            logger.info(f"✅ Complete workflow successful for pothole detection: {workflow_result['image_id']}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in comprehensive workflow: {str(e)}")
+            return jsonify({
+                "success": False,
+                "message": f"Error in image processing workflow: {str(e)}"
+            }), 500
         
         # Return results
         return jsonify({
@@ -1460,7 +1467,7 @@ def detect_cracks():
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
             # Perform road classification with lower confidence threshold
-            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.4)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -1511,13 +1518,7 @@ def detect_cracks():
         timestamp = pd.Timestamp.now().isoformat()
         image_upload_id = str(uuid.uuid4())
 
-        fs = get_gridfs()
-        _, original_buffer = cv2.imencode('.jpg', image)
-        original_image_id = fs.put(
-            original_buffer.tobytes(),
-            filename=f"image_{image_upload_id}_original.jpg",
-            content_type="image/jpeg"
-        )
+        # We'll upload images to S3 after processing
 
         current_detections = []
 
@@ -1609,12 +1610,16 @@ def detect_cracks():
             condition_counts[det["type"]["name"]] += 1
             crack_id += 1
 
-        _, processed_buffer = cv2.imencode('.jpg', processed_image)
-        processed_image_id = fs.put(
-            processed_buffer.tobytes(),
-            filename=f"image_{image_upload_id}_processed.jpg",
-            content_type="image/jpeg"
+        # Upload images to S3
+        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
+            image, processed_image, image_upload_id, role, username
         )
+
+        if not upload_success:
+            return jsonify({
+                "success": False,
+                "message": f"Failed to upload images to S3: {upload_error}"
+            }), 500
 
         db = connect_to_db()
         if db is not None and crack_results:
@@ -1625,8 +1630,8 @@ def detect_cracks():
                     "coordinates": coordinates,
                     "username": username,
                     "role": role,
-                    "original_image_id": str(original_image_id),
-                    "processed_image_id": str(processed_image_id),
+                    "original_image_s3_url": original_s3_url,
+                    "processed_image_s3_url": processed_s3_url,
                     "crack_count": len(crack_results),
                     "cracks": crack_results,
                     "type_counts": condition_counts
@@ -1710,7 +1715,7 @@ def detect_kerbs():
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
             # Perform road classification with lower confidence threshold
-            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.2)
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.4)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -1754,15 +1759,7 @@ def detect_kerbs():
         timestamp = pd.Timestamp.now().isoformat()
         image_upload_id = str(uuid.uuid4())  # Create a unique ID for this image upload
         
-        # Store the original image once for all kerbs
-        fs = get_gridfs()
-        _, original_buffer = cv2.imencode('.jpg', image)
-        original_image_bytes = original_buffer.tobytes()
-        original_image_id = fs.put(
-            original_image_bytes, 
-            filename=f"image_{image_upload_id}_original.jpg",
-            content_type="image/jpeg"
-        )
+        # We'll upload images to S3 after processing
         
         # Initialize condition counts
         condition_counts = {
@@ -1857,15 +1854,17 @@ def detect_kerbs():
                     kerb_results.append(kerb_info)
                     kerb_id += 1
         
-        # Store processed image with all kerbs marked
-        _, processed_buffer = cv2.imencode('.jpg', processed_image)
-        processed_image_bytes = processed_buffer.tobytes()
-        processed_image_id = fs.put(
-            processed_image_bytes, 
-            filename=f"image_{image_upload_id}_processed.jpg",
-            content_type="image/jpeg"
+        # Upload images to S3
+        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
+            image, processed_image, image_upload_id, role, username
         )
-        
+
+        if not upload_success:
+            return jsonify({
+                "success": False,
+                "message": f"Failed to upload images to S3: {upload_error}"
+            }), 500
+
         # Store consolidated entry in the database
         db = connect_to_db()
         if db is not None and kerb_results:
@@ -1876,8 +1875,8 @@ def detect_kerbs():
                     "coordinates": coordinates,
                     "username": username,
                     "role": role,
-                    "original_image_id": str(original_image_id),
-                    "processed_image_id": str(processed_image_id),
+                    "original_image_s3_url": original_s3_url,
+                    "processed_image_s3_url": processed_s3_url,
                     "kerb_count": len(kerb_results),
                     "kerbs": kerb_results,
                     "condition_counts": condition_counts
@@ -1950,6 +1949,112 @@ def get_image(image_id):
             "success": False,
             "message": f"Error retrieving image: {str(e)}"
         }), 500
+
+
+@pavement_bp.route('/get-image-url/<path:s3_key>', methods=['GET'])
+def get_image_url(s3_key):
+    """
+    API endpoint to generate a public S3 URL for an image
+    """
+    try:
+        # Generate the public S3 URL
+        image_url = generate_s3_url(s3_key)
+
+        return jsonify({
+            "success": True,
+            "image_url": image_url
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error generating image URL: {str(e)}"
+        }), 500
+
+
+@pavement_bp.route('/get-s3-image/<path:s3_key>', methods=['GET'])
+def get_s3_image(s3_key):
+    """
+    API endpoint to proxy S3 images through the backend
+    This solves the issue of S3 bucket not being publicly accessible
+    """
+    try:
+        # Add detailed logging for debugging
+        logger.info(f"🔍 S3 Image Request - S3 Key: {s3_key}")
+
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+
+        # Get AWS folder and bucket info
+        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Smart S3 key handling to avoid path duplication
+        if prefix and s3_key.startswith(prefix):
+            # S3 key already contains the full path (e.g., from database with full path)
+            full_s3_key = s3_key
+            logger.info(f"🔍 S3 key already contains full path: {s3_key}")
+        elif prefix and s3_key.startswith(f"{prefix}/"):
+            # S3 key starts with prefix/ (another variation)
+            full_s3_key = s3_key
+            logger.info(f"🔍 S3 key already contains full path with slash: {s3_key}")
+        else:
+            # S3 key is relative, add prefix
+            full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+            logger.info(f"🔍 Added prefix to relative S3 key: {prefix}/{s3_key}")
+
+        logger.info(f"🔍 S3 Configuration - Bucket: {bucket}, Prefix: {prefix}")
+        logger.info(f"🔍 Full S3 Key: {full_s3_key}")
+
+        # Fetch image from S3
+        response = s3_client.get_object(Bucket=bucket, Key=full_s3_key)
+        image_data = response['Body'].read()
+        content_type = response.get('ContentType', 'image/jpeg')
+
+        logger.info(f"✅ Successfully fetched image from S3 - Size: {len(image_data)} bytes, Content-Type: {content_type}")
+
+        # Return image with proper headers
+        from flask import Response
+        return Response(
+            image_data,
+            mimetype=content_type,
+            headers={
+                'Cache-Control': 'public, max-age=3600',  # Cache for 1 hour
+                'Content-Length': str(len(image_data))
+            }
+        )
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        logger.error(f"❌ S3 ClientError - Code: {error_code}, Message: {str(e)}")
+        logger.error(f"❌ Failed S3 Key: {full_s3_key if 'full_s3_key' in locals() else s3_key}")
+
+        if error_code == 'NoSuchKey':
+            return jsonify({
+                "success": False,
+                "message": f"Image not found in S3: {full_s3_key if 'full_s3_key' in locals() else s3_key}"
+            }), 404
+        else:
+            return jsonify({
+                "success": False,
+                "message": f"S3 error: {str(e)}"
+            }), 500
+    except Exception as e:
+        logger.error(f"❌ Unexpected error fetching S3 image: {str(e)}")
+        logger.error(f"❌ Failed S3 Key: {full_s3_key if 'full_s3_key' in locals() else s3_key}")
+        return jsonify({
+            "success": False,
+            "message": f"Error fetching S3 image: {str(e)}"
+        }), 500
+
 
 @pavement_bp.route('/potholes/list', methods=['GET'])
 def list_potholes():
@@ -2661,7 +2766,7 @@ def detect_all():
             classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
         else:
             # Perform road classification with lower confidence threshold
-            classification_result = classify_road_image(original_image, models, confidence_threshold=0.2)
+            classification_result = classify_road_image(original_image, models, confidence_threshold=0.4)
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
@@ -2709,15 +2814,7 @@ def detect_all():
         timestamp = pd.Timestamp.now().isoformat()
         image_upload_id = str(uuid.uuid4())  # Create a unique ID for this image upload
         
-        # Store the original image once for all detections
-        fs = get_gridfs()
-        _, original_buffer = cv2.imencode('.jpg', image)
-        original_image_bytes = original_buffer.tobytes()
-        original_image_id = fs.put(
-            original_image_bytes, 
-            filename=f"image_{image_upload_id}_original.jpg",
-            content_type="image/jpeg"
-        )
+        # We'll upload images to S3 after processing all detections
         
         # Track which models succeeded
         successful_models = []
@@ -2821,7 +2918,6 @@ def detect_all():
                                     "bbox": [x1, y1, x2, y2],
                                     "username": username,
                                     "role": role,
-                                    "original_image_id": str(original_image_id),
                                     "image_upload_id": image_upload_id,
                                     "has_mask": True
                                 }
@@ -2869,7 +2965,6 @@ def detect_all():
                                 "bbox": [x1, y1, x2, y2],
                                 "username": username,
                                 "role": role,
-                                "original_image_id": str(original_image_id),
                                 "image_upload_id": image_upload_id,
                                 "has_mask": False
                             }
@@ -3001,7 +3096,6 @@ def detect_all():
                         "bbox": [x1, y1, x2, y2],
                         "username": username,
                         "role": role,
-                        "original_image_id": str(original_image_id),
                         "image_upload_id": image_upload_id
                     }
                     
@@ -3129,7 +3223,6 @@ def detect_all():
                             "bbox": [x1, y1, x2, y2],
                             "username": username,
                             "role": role,
-                            "original_image_id": str(original_image_id),
                             "image_upload_id": image_upload_id
                         }
                         
@@ -3187,7 +3280,6 @@ def detect_all():
                                 "bbox": [x1, y1, x2, y2],
                                 "username": username,
                                 "role": role,
-                                "original_image_id": str(original_image_id),
                                 "image_upload_id": image_upload_id
                             }
                             
@@ -3217,18 +3309,16 @@ def detect_all():
             print(f"Error in kerb detection: {str(e)}")
             all_results["model_errors"]["kerbs"] = str(e)
         
-        # Store processed image
-        processed_image_id = None
-        try:
-            _, processed_buffer = cv2.imencode('.jpg', display_image)
-            processed_image_bytes = processed_buffer.tobytes()
-            processed_image_id = fs.put(
-                processed_image_bytes,
-                filename=f"image_{image_upload_id}_processed_all.jpg",
-                content_type="image/jpeg"
-            )
-        except Exception as e:
-            print(f"Error storing processed image: {str(e)}")
+        # Upload images to S3
+        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
+            original_image, display_image, image_upload_id, role, username
+        )
+
+        if not upload_success:
+            return jsonify({
+                "success": False,
+                "message": f"Failed to upload images to S3: {upload_error}"
+            }), 500
         
         # Encode processed image for response
         all_results["processed_image"] = encode_processed_image(display_image)
@@ -3253,8 +3343,8 @@ def detect_all():
                 "coordinates": coordinates,
                 "username": username,
                 "role": role,
-                "original_image_id": str(original_image_id),
-                "processed_image_id": str(processed_image_id) if processed_image_id else None,
+                "original_image_s3_url": original_s3_url,
+                "processed_image_s3_url": processed_s3_url,
                 "detection_type": "all"
             }
             
@@ -3360,6 +3450,135 @@ def upload_video_to_s3(local_path, aws_folder, s3_key):
     except ClientError as e:
         print(f"S3 upload error: {e}")
         return False, str(e)
+
+
+def upload_image_to_s3(image_buffer, aws_folder, s3_key, content_type='image/jpeg'):
+    """
+    Upload an image buffer to S3 at the specified bucket/key.
+
+    Args:
+        image_buffer: Image data as bytes (from cv2.imencode)
+        aws_folder: AWS folder path (e.g., 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+        s3_key: S3 key path (e.g., 'role/username/image_xxx_original.jpg')
+        content_type: MIME type for the image
+
+    Returns:
+        tuple: (success: bool, s3_url_or_error: str)
+    """
+    try:
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION')
+        )
+
+        # Extract bucket and prefix from aws_folder
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Compose full S3 key
+        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+        # Upload image buffer to S3
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=full_s3_key,
+            Body=image_buffer,
+            ContentType=content_type
+        )
+
+        return True, f's3://{bucket}/{full_s3_key}'
+    except ClientError as e:
+        logger.error(f"S3 image upload error: {e}")
+        return False, str(e)
+    except Exception as e:
+        logger.error(f"Unexpected error during S3 image upload: {e}")
+        return False, str(e)
+
+
+def upload_images_to_s3(original_image, processed_image, image_upload_id, role, username):
+    """
+    Upload both original and processed images to S3 with organized folder structure.
+
+    Args:
+        original_image: Original image as numpy array
+        processed_image: Processed image as numpy array
+        image_upload_id: Unique identifier for this image upload
+        role: User role for folder structure
+        username: Username for folder structure
+
+    Returns:
+        tuple: (original_s3_url: str, processed_s3_url: str, success: bool, error_msg: str)
+    """
+    try:
+        # Get AWS configuration
+        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+
+        # Encode images to JPEG format
+        _, original_buffer = cv2.imencode('.jpg', original_image)
+        _, processed_buffer = cv2.imencode('.jpg', processed_image)
+
+        # Create S3 keys with organized folder structure
+        # Structure: {AWS_FOLDER}/{role}/{username}/original/image_{id}.jpg
+        #           {AWS_FOLDER}/{role}/{username}/processed/image_{id}.jpg
+        original_s3_key = f"{role}/{username}/original/image_{image_upload_id}.jpg"
+        processed_s3_key = f"{role}/{username}/processed/image_{image_upload_id}.jpg"
+
+        # Upload original image
+        original_success, original_result = upload_image_to_s3(
+            original_buffer.tobytes(), aws_folder, original_s3_key
+        )
+
+        if not original_success:
+            return None, None, False, f"Failed to upload original image: {original_result}"
+
+        # Upload processed image
+        processed_success, processed_result = upload_image_to_s3(
+            processed_buffer.tobytes(), aws_folder, processed_s3_key
+        )
+
+        if not processed_success:
+            return None, None, False, f"Failed to upload processed image: {processed_result}"
+
+        logger.info(f"Successfully uploaded images to S3: {original_s3_key}, {processed_s3_key}")
+
+        # Return the relative S3 paths (not full S3 URLs)
+        return original_s3_key, processed_s3_key, True, None
+
+    except Exception as e:
+        logger.error(f"Error uploading images to S3: {e}")
+        return None, None, False, str(e)
+
+
+def generate_s3_url(s3_key, aws_folder=None):
+    """
+    Generate a public S3 URL from an S3 key.
+
+    Args:
+        s3_key: S3 key path (e.g., 'role/username/image_xxx_original.jpg')
+        aws_folder: AWS folder path (optional, will use env var if not provided)
+
+    Returns:
+        str: Full S3 URL
+    """
+    if aws_folder is None:
+        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+
+    # Extract bucket and prefix from aws_folder
+    aws_folder = aws_folder.strip('/')
+    parts = aws_folder.split('/', 1)
+    bucket = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ''
+
+    # Compose full S3 key
+    full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+    # Generate public URL
+    region = os.environ.get('AWS_REGION', 'us-east-1')
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{full_s3_key}"
 
 @pavement_bp.route('/detect-video', methods=['POST'])
 def detect_video():

@@ -9,12 +9,12 @@ def get_allowed_roles(user_role):
         list: List of roles whose data the user can view
     """
     role_hierarchy = {
-        'Admin': ['Admin', 'Supervisor', 'Field Officer'],
-        'Supervisor': ['Supervisor', 'Field Officer'],
-        'Field Officer': ['Field Officer']
+        'Admin': ['Admin', 'Supervisor', 'Inspector'],
+        'Supervisor': ['Supervisor', 'Inspector'],
+        'Inspector': ['Inspector']
     }
     
-    return role_hierarchy.get(user_role, ['Field Officer'])  # Default to Field Officer if role not found
+    return role_hierarchy.get(user_role, ['Inspector'])  # Default to Inspector if role not found
 
 def create_role_filter(user_role):
     """
@@ -43,7 +43,7 @@ def validate_user_role(user_role):
     Returns:
         bool: True if role is valid, False otherwise
     """
-    valid_roles = ['Admin', 'Supervisor', 'Field Officer']
+    valid_roles = ['Admin', 'Supervisor', 'Inspector']
     return user_role in valid_roles
 
 def can_user_access_data(user_role, data_owner_role):

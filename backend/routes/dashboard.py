@@ -8,9 +8,40 @@ import datetime
 from utils.rbac import get_allowed_roles, create_role_filter, validate_user_role
 from utils.auth_middleware import validate_rbac_access
 
+# Import our comprehensive S3-MongoDB integration
+from s3_mongodb_integration import DashboardImageManager, ImageProcessingWorkflow
+
 logger = logging.getLogger(__name__)
 
 dashboard_bp = Blueprint('dashboard', __name__)
+
+def generate_s3_url_for_dashboard(s3_key):
+    """
+    Helper function to generate S3 URLs for dashboard display
+
+    Args:
+        s3_key: S3 key path (e.g., 'Supervisor/supervisor1/original/image_abc123.jpg')
+
+    Returns:
+        str: Full S3 URL or None if s3_key is None/empty
+    """
+    if not s3_key:
+        return None
+
+    aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+
+    # Extract bucket and prefix from aws_folder
+    aws_folder = aws_folder.strip('/')
+    parts = aws_folder.split('/', 1)
+    bucket = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ''
+
+    # Compose full S3 key
+    full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+    # Generate public URL
+    region = os.environ.get('AWS_REGION', 'us-east-1')
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{full_s3_key}"
 
 def parse_filters():
     """Helper function to parse filter parameters including RBAC"""
@@ -54,6 +85,150 @@ def parse_filters():
         filters.update(role_filter)
     
     return filters if filters else {}
+
+@dashboard_bp.route('/summary-v2', methods=['GET'])
+@validate_rbac_access
+def get_dashboard_summary_v2():
+    """
+    Enhanced dashboard summary using comprehensive S3-MongoDB integration
+    Returns latest detections with proper S3 URLs and GridFS fallback
+    """
+    try:
+        # Get filters
+        query_filter = parse_filters()
+
+        logger.info(f"Enhanced dashboard summary requested with filters: {query_filter}")
+
+        # Use comprehensive S3-MongoDB integration for dashboard data
+        try:
+            # Initialize the workflow manager
+            workflow = ImageProcessingWorkflow()
+
+            # Get comprehensive dashboard data with S3 URLs and GridFS fallback
+            dashboard_success, dashboard_result = workflow.get_dashboard_data(
+                defect_types=['pothole', 'crack', 'kerb'],
+                limit_per_type=50
+            )
+
+            if not dashboard_success:
+                logger.error(f"Failed to get dashboard data: {dashboard_result}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Failed to retrieve dashboard data: {dashboard_result}"
+                }), 500
+
+            # Apply RBAC filters to the dashboard data
+            filtered_dashboard_data = apply_rbac_filters_to_dashboard_data(dashboard_result, query_filter)
+
+            # Add summary statistics
+            summary_stats = calculate_dashboard_summary_stats(filtered_dashboard_data)
+            filtered_dashboard_data['summary'] = summary_stats
+
+            logger.info(f"✅ Enhanced dashboard data retrieved successfully")
+
+            return jsonify({
+                "success": True,
+                "data": filtered_dashboard_data,
+                "message": "Dashboard data retrieved successfully"
+            })
+
+        except Exception as e:
+            logger.error(f"Error in comprehensive dashboard workflow: {str(e)}")
+            return jsonify({
+                "success": False,
+                "message": f"Error retrieving dashboard data: {str(e)}"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error in dashboard summary v2: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Internal server error: {str(e)}"
+        }), 500
+
+def apply_rbac_filters_to_dashboard_data(dashboard_data, filters):
+    """
+    Apply RBAC and other filters to dashboard data
+
+    Args:
+        dashboard_data (dict): Raw dashboard data from workflow
+        filters (dict): Filters to apply
+
+    Returns:
+        dict: Filtered dashboard data
+    """
+    filtered_data = {}
+
+    for defect_type, data in dashboard_data.items():
+        if 'latest' in data:
+            # Apply filters to the latest data
+            filtered_latest = []
+
+            for item in data['latest']:
+                # Apply username filter
+                if 'username' in filters and item.get('username') != filters['username']:
+                    continue
+
+                # Apply role filter (handle both simple string and MongoDB-style $in queries)
+                if 'role' in filters:
+                    role_filter = filters['role']
+                    item_role = item.get('role')
+
+                    # Handle MongoDB-style $in query
+                    if isinstance(role_filter, dict) and '$in' in role_filter:
+                        allowed_roles = role_filter['$in']
+                        if item_role not in allowed_roles:
+                            continue
+                    # Handle simple string comparison
+                    elif isinstance(role_filter, str):
+                        if item_role != role_filter:
+                            continue
+
+                # Apply timestamp filter (if needed)
+                # Add more filters as needed
+
+                filtered_latest.append(item)
+
+            filtered_data[defect_type] = {
+                'latest': filtered_latest,
+                'count': len(filtered_latest)
+            }
+        else:
+            filtered_data[defect_type] = data
+
+    return filtered_data
+
+def calculate_dashboard_summary_stats(dashboard_data):
+    """
+    Calculate summary statistics for dashboard
+
+    Args:
+        dashboard_data (dict): Dashboard data
+
+    Returns:
+        dict: Summary statistics
+    """
+    total_images = 0
+    total_defects = 0
+
+    for defect_type, data in dashboard_data.items():
+        if 'latest' in data:
+            total_images += len(data['latest'])
+
+            # Count individual defects
+            for item in data['latest']:
+                if defect_type == 'potholes' and 'potholes' in item:
+                    total_defects += len(item['potholes'])
+                elif defect_type == 'cracks' and 'cracks' in item:
+                    total_defects += len(item['cracks'])
+                elif defect_type == 'kerbs' and 'kerbs' in item:
+                    total_defects += len(item['kerbs'])
+
+    return {
+        'total_images': total_images,
+        'total_defects': total_defects,
+        'defect_types': len([k for k in dashboard_data.keys() if 'latest' in dashboard_data[k]])
+    }
 
 @dashboard_bp.route('/summary', methods=['GET'])
 @validate_rbac_access
@@ -136,6 +311,12 @@ def get_dashboard_summary():
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
                             "username": image.get("username"),
+                            "original_image_s3_url": image.get("original_image_s3_url"),
+                            "processed_image_s3_url": image.get("processed_image_s3_url"),
+                            # Full S3 URLs for direct image display
+                            "original_image_full_url": generate_s3_url_for_dashboard(image.get("original_image_s3_url")),
+                            "processed_image_full_url": generate_s3_url_for_dashboard(image.get("processed_image_s3_url")),
+                            # Keep legacy fields for backward compatibility
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
@@ -201,6 +382,12 @@ def get_dashboard_summary():
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
                             "username": image.get("username"),
+                            "original_image_s3_url": image.get("original_image_s3_url"),
+                            "processed_image_s3_url": image.get("processed_image_s3_url"),
+                            # Full S3 URLs for direct image display
+                            "original_image_full_url": generate_s3_url_for_dashboard(image.get("original_image_s3_url")),
+                            "processed_image_full_url": generate_s3_url_for_dashboard(image.get("processed_image_s3_url")),
+                            # Keep legacy fields for backward compatibility
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
@@ -263,6 +450,12 @@ def get_dashboard_summary():
                             "image_id": image.get("image_id"),
                             "timestamp": image.get("timestamp"),
                             "username": image.get("username"),
+                            "original_image_s3_url": image.get("original_image_s3_url"),
+                            "processed_image_s3_url": image.get("processed_image_s3_url"),
+                            # Full S3 URLs for direct image display
+                            "original_image_full_url": generate_s3_url_for_dashboard(image.get("original_image_s3_url")),
+                            "processed_image_full_url": generate_s3_url_for_dashboard(image.get("processed_image_s3_url")),
+                            # Keep legacy fields for backward compatibility
                             "original_image_id": image.get("original_image_id"),
                             "processed_image_id": image.get("processed_image_id")
                         }
@@ -351,6 +544,8 @@ def get_pothole_data():
             role = image.get("role", "Unknown")
             original_image_id = image.get("original_image_id")
             processed_image_id = image.get("processed_image_id")
+            original_image_s3_url = image.get("original_image_s3_url")
+            processed_image_s3_url = image.get("processed_image_s3_url")
             
             for pothole in image.get("potholes", []):
                 results.append({
@@ -365,6 +560,8 @@ def get_pothole_data():
                     "Timestamp": timestamp,
                     "Original Image": original_image_id,
                     "Processed Image": processed_image_id,
+                    "Original Image S3 URL": original_image_s3_url,
+                    "Processed Image S3 URL": processed_image_s3_url,
                     "Image ID": image_id,
                     "Data Model": "new"
                 })
@@ -441,7 +638,9 @@ def get_crack_data():
             role = image.get("role", "Unknown")
             original_image_id = image.get("original_image_id")
             processed_image_id = image.get("processed_image_id")
-            
+            original_image_s3_url = image.get("original_image_s3_url")
+            processed_image_s3_url = image.get("processed_image_s3_url")
+
             for crack in image.get("cracks", []):
                 results.append({
                     "Crack ID": crack.get("crack_id"),
@@ -454,6 +653,8 @@ def get_crack_data():
                     "Timestamp": timestamp,
                     "Original Image": original_image_id,
                     "Processed Image": processed_image_id,
+                    "Original Image S3 URL": original_image_s3_url,
+                    "Processed Image S3 URL": processed_image_s3_url,
                     "Image ID": image_id,
                     "Confidence": crack.get("confidence"),
                     "Data Model": "new"
@@ -532,7 +733,9 @@ def get_kerb_data():
             role = image.get("role", "Unknown")
             original_image_id = image.get("original_image_id")
             processed_image_id = image.get("processed_image_id")
-            
+            original_image_s3_url = image.get("original_image_s3_url")
+            processed_image_s3_url = image.get("processed_image_s3_url")
+
             for kerb in image.get("kerbs", []):
                 results.append({
                     "Kerb ID": kerb.get("kerb_id"),
@@ -545,6 +748,8 @@ def get_kerb_data():
                     "Timestamp": timestamp,
                     "Original Image": original_image_id,
                     "Processed Image": processed_image_id,
+                    "Original Image S3 URL": original_image_s3_url,
+                    "Processed Image S3 URL": processed_image_s3_url,
                     "Image ID": image_id,
                     "Confidence": kerb.get("confidence"),
                     "Data Model": "new"
@@ -584,35 +789,38 @@ def get_image_stats():
         
         # Get all images from the database
         pothole_images = list(db.pothole_images.find(query_filter, {
-            '_id': 1, 
-            'image_id': 1, 
-            'timestamp': 1, 
+            '_id': 1,
+            'image_id': 1,
+            'timestamp': 1,
             'coordinates': 1,
             'username': 1,
             'pothole_count': 1,
-            'original_image_id': 1
+            'original_image_id': 1,
+            'original_image_s3_url': 1
         }))
         
         crack_images = list(db.crack_images.find(query_filter, {
-            '_id': 1, 
-            'image_id': 1, 
-            'timestamp': 1, 
+            '_id': 1,
+            'image_id': 1,
+            'timestamp': 1,
             'coordinates': 1,
             'username': 1,
-            'crack_count': 1, 
+            'crack_count': 1,
             'type_counts': 1,
-            'original_image_id': 1
+            'original_image_id': 1,
+            'original_image_s3_url': 1
         }))
-        
+
         kerb_images = list(db.kerb_images.find(query_filter, {
-            '_id': 1, 
-            'image_id': 1, 
-            'timestamp': 1, 
+            '_id': 1,
+            'image_id': 1,
+            'timestamp': 1,
             'coordinates': 1,
             'username': 1,
-            'kerb_count': 1, 
+            'kerb_count': 1,
             'condition_counts': 1,
-            'original_image_id': 1
+            'original_image_id': 1,
+            'original_image_s3_url': 1
         }))
         
         # Process images for response
@@ -628,7 +836,9 @@ def get_image_stats():
                 "username": img.get('username', 'Unknown'),
                 "type": "pothole",
                 "defect_count": img.get('pothole_count', 0),
-                "original_image_id": img.get('original_image_id')
+                "original_image_id": img.get('original_image_id'),
+                "original_image_s3_url": img.get('original_image_s3_url'),
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
             })
         
         # Process crack images
@@ -642,9 +852,11 @@ def get_image_stats():
                 "type": "crack",
                 "defect_count": img.get('crack_count', 0),
                 "type_counts": img.get('type_counts', {}),
-                "original_image_id": img.get('original_image_id')
+                "original_image_id": img.get('original_image_id'),
+                "original_image_s3_url": img.get('original_image_s3_url'),
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
             })
-        
+
         # Process kerb images
         for img in kerb_images:
             all_images.append({
@@ -656,7 +868,9 @@ def get_image_stats():
                 "type": "kerb",
                 "defect_count": img.get('kerb_count', 0),
                 "condition_counts": img.get('condition_counts', {}),
-                "original_image_id": img.get('original_image_id')
+                "original_image_id": img.get('original_image_id'),
+                "original_image_s3_url": img.get('original_image_s3_url'),
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
             })
         
         # Sort all images by timestamp
