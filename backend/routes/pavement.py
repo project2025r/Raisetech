@@ -2158,15 +2158,25 @@ def get_recent_potholes():
         
         if latest_image:
             # Get all potholes from the most recent image using the new data structure
+            image_data = {
+                "image_id": latest_image.get("image_id"),
+                "timestamp": latest_image.get("timestamp")
+            }
+
+            # Handle both old GridFS-based and new S3-based data structures
+            if "original_image_id" in latest_image:
+                image_data["original_image_id"] = latest_image["original_image_id"]
+            if "processed_image_id" in latest_image:
+                image_data["processed_image_id"] = latest_image["processed_image_id"]
+            if "original_image_s3_url" in latest_image:
+                image_data["original_image_s3_url"] = latest_image["original_image_s3_url"]
+            if "processed_image_s3_url" in latest_image:
+                image_data["processed_image_s3_url"] = latest_image["processed_image_s3_url"]
+
             return jsonify({
                 "success": True,
                 "potholes": latest_image["potholes"],
-                "image_data": {
-                    "image_id": latest_image["image_id"],
-                    "timestamp": latest_image["timestamp"],
-                    "original_image_id": latest_image["original_image_id"],
-                    "processed_image_id": latest_image["processed_image_id"]
-                }
+                "image_data": image_data
             })
         
         # Fallback to old structure if no data in pothole_images collection
