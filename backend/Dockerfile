@@ -2,10 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (including those for OpenCV)
+# Install system dependencies (including those for OpenCV and AVIF)
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    ffmpeg \
+    libavif-dev \
+    libavif-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file and install dependencies

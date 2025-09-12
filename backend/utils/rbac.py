@@ -12,6 +12,7 @@ def get_allowed_roles(user_role):
         'Admin': ['Admin', 'Supervisor', 'Inspector'],
         'Supervisor': ['Supervisor', 'Inspector'],
         'Inspector': ['Inspector']
+    
     }
     
     return role_hierarchy.get(user_role, ['Inspector'])  # Default to Inspector if role not found
