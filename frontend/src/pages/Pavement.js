@@ -6,6 +6,7 @@ import Webcam from 'react-webcam';
 import './Pavement.css';
 import useResponsive from '../hooks/useResponsive';
 import VideoDefectDetection from '../components/VideoDefectDetection';
+import { validateMultipleFiles, showFileValidationError } from '../utils/fileValidation';
 
 
 const Pavement = () => {
@@ -197,8 +198,22 @@ const Pavement = () => {
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
+      // Validate files before processing
+      const validation = validateMultipleFiles(files, 'image', 'pavement_detection');
+      if (!validation.isValid) {
+        showFileValidationError(validation.errorMessage, setError);
+        // Clear the file input
+        if (e.target) {
+          e.target.value = '';
+        }
+        return;
+      }
+
+      // Clear any previous errors
+      setError('');
+
       setImageFiles([...imageFiles, ...files]);
-      
+
       // Create previews and location data for each file
       files.forEach(file => {
         const reader = new FileReader();

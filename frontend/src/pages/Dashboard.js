@@ -10,27 +10,236 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 
+/**
+ * Comprehensive Image URL Resolution Logic
+ * Handles both S3 URLs (new data) and GridFS IDs (legacy data)
+ *
+ * Priority order:
+ * 1. S3 Full URL (direct HTTPS link)
+ * 2. S3 Key (generate URL via API)
+ * 3. GridFS ID (legacy endpoint)
+ * 4. Fallback to "No image available"
+ */
+const getImageUrlForDisplay = (imageData, imageType = 'original') => {
+  console.log('getImageUrlForDisplay called:', { imageData, imageType });
+
+  if (!imageData) {
+    console.log('No imageData provided');
+    return null;
+  }
+
+  // Try S3 full URL first (new images with pre-generated URLs) - proxy through backend
+  const fullUrlField = `${imageType}_image_full_url`;
+  if (imageData[fullUrlField]) {
+    console.log('Using full URL field:', fullUrlField, imageData[fullUrlField]);
+    // Extract S3 key from full URL and use proxy endpoint
+    const urlParts = imageData[fullUrlField].split('/');
+    const bucketIndex = urlParts.findIndex(part => part.includes('.s3.'));
+    if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
+      const s3Key = urlParts.slice(bucketIndex + 1).join('/');
+      const proxyUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('Generated proxy URL from full URL:', proxyUrl);
+      return proxyUrl;
+    }
+  }
+
+  // Try S3 key with proxy endpoint (new images without full URL)
+  const s3KeyField = `${imageType}_image_s3_url`;
+  if (imageData[s3KeyField]) {
+    console.log('Using S3 key field:', s3KeyField, imageData[s3KeyField]);
+
+    // Properly encode the S3 key for URL path
+    const s3Key = imageData[s3KeyField];
+    const encodedKey = s3Key.split('/').map(part => encodeURIComponent(part)).join('/');
+    const url = `/api/pavement/get-s3-image/${encodedKey}`;
+
+    console.log('Generated proxy URL from S3 key:', url);
+    console.log('Original S3 key:', s3Key);
+    console.log('Encoded S3 key:', encodedKey);
+
+    return url;
+  }
+
+  // Fall back to GridFS endpoint (legacy images)
+  const gridfsIdField = `${imageType}_image_id`;
+  if (imageData[gridfsIdField]) {
+    console.log('Using GridFS field:', gridfsIdField, imageData[gridfsIdField]);
+    const url = `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    console.log('Generated GridFS URL:', url);
+    return url;
+  }
+
+  // No image URL available
+  console.log('No image URL available for:', imageType, imageData);
+  return null;
+};
+
+/**
+ * Enhanced Image Component with comprehensive error handling
+ * Supports S3 URLs, GridFS fallback, and graceful error handling
+ */
+const EnhancedImageDisplay = ({ imageData, imageType = 'original', alt, className, style, onError }) => {
+  const [currentImageUrl, setCurrentImageUrl] = useState(null);
+  const [hasError, setHasError] = useState(false);
+  const [fallbackAttempts, setFallbackAttempts] = useState(0);
+
+  useEffect(() => {
+    // Reset state when imageData changes
+    setHasError(false);
+    setFallbackAttempts(0);
+
+    // Get initial image URL
+    const imageUrl = getImageUrlForDisplay(imageData, imageType);
+
+    // Debug logging
+    console.log('EnhancedImageDisplay Debug:', {
+      imageType,
+      imageData,
+      generatedUrl: imageUrl,
+      s3KeyField: `${imageType}_image_s3_url`,
+      s3KeyValue: imageData?.[`${imageType}_image_s3_url`],
+      fullUrlField: `${imageType}_image_full_url`,
+      fullUrlValue: imageData?.[`${imageType}_image_full_url`]
+    });
+
+    setCurrentImageUrl(imageUrl);
+  }, [imageData, imageType]);
+
+  const handleImageError = (event) => {
+    console.error('🚨 Image load error:', {
+      imageType,
+      currentImageUrl,
+      fallbackAttempts,
+      error: event?.target?.error,
+      src: event?.target?.src,
+      naturalWidth: event?.target?.naturalWidth,
+      naturalHeight: event?.target?.naturalHeight,
+      complete: event?.target?.complete
+    });
+
+    // Test if the URL is reachable
+    if (currentImageUrl) {
+      fetch(currentImageUrl, { method: 'HEAD' })
+        .then(response => {
+          console.log('🔍 URL HEAD check:', {
+            url: currentImageUrl,
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries())
+          });
+        })
+        .catch(fetchError => {
+          console.error('🚨 URL HEAD check failed:', {
+            url: currentImageUrl,
+            error: fetchError.message
+          });
+        });
+    }
+
+    if (fallbackAttempts === 0) {
+      // First error: try alternative image type or fallback
+      const fallbackUrl = getFallbackImageUrl(imageData, imageType);
+      console.log('🔄 Trying fallback URL:', fallbackUrl);
+
+      if (fallbackUrl && fallbackUrl !== currentImageUrl) {
+        setCurrentImageUrl(fallbackUrl);
+        setFallbackAttempts(1);
+        return;
+      }
+    }
+
+    // All fallbacks failed
+    console.error('❌ All image loading attempts failed for:', imageType);
+    setHasError(true);
+    if (onError) onError();
+  };
+
+  const getFallbackImageUrl = (imageData, imageType) => {
+    console.log('🔄 Getting fallback URL for:', imageType, imageData);
+
+    // Try direct S3 URL if we have the full URL field
+    const fullUrlField = `${imageType}_image_full_url`;
+    if (imageData[fullUrlField]) {
+      console.log('🔄 Trying direct S3 URL:', imageData[fullUrlField]);
+      return imageData[fullUrlField];
+    }
+
+    // Try GridFS if S3 failed
+    const gridfsIdField = `${imageType}_image_id`;
+    if (imageData[gridfsIdField]) {
+      console.log('🔄 Trying GridFS URL:', imageData[gridfsIdField]);
+      return `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    }
+
+    // Try alternative S3 proxy with different encoding
+    const s3KeyField = `${imageType}_image_s3_url`;
+    if (imageData[s3KeyField]) {
+      console.log('🔄 Trying alternative S3 proxy encoding');
+      const s3Key = imageData[s3KeyField];
+      const alternativeUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('🔄 Alternative proxy URL:', alternativeUrl);
+      return alternativeUrl;
+    }
+
+    console.log('❌ No fallback URL available');
+    return null;
+  };
+
+  if (hasError || !currentImageUrl) {
+    return (
+      <div className={`text-muted d-flex align-items-center justify-content-center ${className}`} style={style}>
+        <div className="text-center">
+          <i className="fas fa-image-slash fa-2x mb-2"></i>
+          <div>No image available</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="position-relative">
+      <img
+        src={currentImageUrl}
+        alt={alt}
+        className={className}
+        style={style}
+        onError={handleImageError}
+        loading="lazy"
+        onLoad={() => {
+          console.log('✅ Image loaded successfully:', currentImageUrl);
+          setHasError(false);
+        }}
+      />
+    </div>
+  );
+};
+
 // ImageCard component to isolate state for each image
 const ImageCard = ({ defect, defectType, defectIdKey }) => {
   const [isOriginal, setIsOriginal] = useState(false);
-  
+
+  // Safety check: return null if defect is not provided
+  if (!defect) {
+    return null;
+  }
+
   const toggleView = (showOriginal) => {
     setIsOriginal(showOriginal);
   };
-  
+
   // Check if this is a multi-defect image
   const isMultiDefect = defect.detected_defects && defect.detected_defects.length > 1;
   const detectedDefects = defect.detected_defects || [];
   
   return (
-    <Col md={4} className="mb-4" key={`${defectType}-${defect[defectIdKey]}`}>
+    <Col md={4} className="mb-4" key={`${defectType}-${defect[defectIdKey] || defect.image_id || Math.random()}`}>
       <Card className={`h-100 shadow-sm ${isMultiDefect ? 'border-warning' : ''}`}>
         <Card.Header className={isMultiDefect ? 'bg-warning bg-opacity-10' : ''}>
           <div className="d-flex justify-content-between align-items-center">
             <h6 className="mb-0">
-              {defectType === 'cracks' ? `${defect.crack_type} #${defect.crack_id}` : 
-               defectType === 'kerbs' ? `${defect.condition} #${defect.kerb_id}` : 
-               `Pothole #${defect.pothole_id}`}
+              {defectType === 'cracks' ? `${defect.crack_type || 'Crack'} #${defect.crack_id || 'N/A'}` :
+               defectType === 'kerbs' ? `${defect.condition || 'Kerb'} #${defect.kerb_id || 'N/A'}` :
+               `Pothole #${defect.pothole_id || 'N/A'}`}
             </h6>
             {isMultiDefect && (
               <small className="text-warning fw-bold">
@@ -48,44 +257,41 @@ const ImageCard = ({ defect, defectType, defectIdKey }) => {
         </Card.Header>
         <Card.Body>
           <div className="mb-2 text-center">
-            {defect.processed_image_id ? (
-              <img 
-                src={`/api/pavement/get-image/${isOriginal 
-                  ? defect.original_image_id 
-                  : defect.processed_image_id
-                }`}
-                alt={`${defectType === 'cracks' ? 'Crack' : defectType === 'kerbs' ? 'Kerb' : 'Pothole'} ${defect[defectIdKey]}`}
-                className="img-fluid mb-2 border"
-                style={{ maxHeight: "200px" }}
-              />
-            ) : (
-              <div className="text-muted">No image available</div>
-            )}
+            <EnhancedImageDisplay
+              imageData={defect}
+              imageType={isOriginal ? 'original' : 'processed'}
+              alt={`${defectType === 'cracks' ? 'Crack' : defectType === 'kerbs' ? 'Kerb' : 'Pothole'} ${defect[defectIdKey]}`}
+              className="img-fluid mb-2 border"
+              style={{ maxHeight: "200px" }}
+              onError={() => {
+                console.warn(`Failed to load ${isOriginal ? 'original' : 'processed'} image for ${defectType} ${defect[defectIdKey]}`);
+              }}
+            />
           </div>
           <div className="small">
             {defectType === 'potholes' && (
               <>
-                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2.toFixed(2)} cm²</p>
-                <p className="mb-1"><strong>Depth:</strong> {defect.depth_cm.toFixed(2)} cm</p>
-                <p className="mb-1"><strong>Volume:</strong> {defect.volume.toFixed(2)}</p>
+                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2 ? defect.area_cm2.toFixed(2) : 'N/A'} cm²</p>
+                <p className="mb-1"><strong>Depth:</strong> {defect.depth_cm ? defect.depth_cm.toFixed(2) : 'N/A'} cm</p>
+                <p className="mb-1"><strong>Volume:</strong> {defect.volume ? defect.volume.toFixed(2) : 'N/A'}</p>
               </>
             )}
             {defectType === 'cracks' && (
               <>
-                <p className="mb-1"><strong>Type:</strong> {defect.crack_type}</p>
-                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2.toFixed(2)} cm²</p>
-                <p className="mb-1"><strong>Range:</strong> {defect.area_range}</p>
+                <p className="mb-1"><strong>Type:</strong> {defect.crack_type || 'N/A'}</p>
+                <p className="mb-1"><strong>Area:</strong> {defect.area_cm2 ? defect.area_cm2.toFixed(2) : 'N/A'} cm²</p>
+                <p className="mb-1"><strong>Range:</strong> {defect.area_range || 'N/A'}</p>
               </>
             )}
             {defectType === 'kerbs' && (
               <>
-                <p className="mb-1"><strong>Type:</strong> {defect.kerb_type}</p>
-                <p className="mb-1"><strong>Length:</strong> {defect.length_m && defect.length_m.toFixed(2)} m</p>
-                <p className="mb-1"><strong>Condition:</strong> {defect.condition}</p>
+                <p className="mb-1"><strong>Type:</strong> {defect.kerb_type || 'N/A'}</p>
+                <p className="mb-1"><strong>Length:</strong> {defect.length_m ? defect.length_m.toFixed(2) : 'N/A'} m</p>
+                <p className="mb-1"><strong>Condition:</strong> {defect.condition || 'N/A'}</p>
               </>
             )}
-            <p className="mb-1"><strong>Uploaded by:</strong> {defect.username}</p>
-            <p className="mb-1"><strong>Timestamp:</strong> {new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
+            <p className="mb-1"><strong>Uploaded by:</strong> {defect.username || 'Unknown'}</p>
+            <p className="mb-1"><strong>Timestamp:</strong> {defect.timestamp ? new Date(defect.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A'}</p>
             <div className="mt-2">
               <Button
                 variant={isOriginal ? 'primary' : 'outline-primary'}
@@ -229,11 +435,22 @@ function Dashboard({ user }) {
         counts: typesResponse.data.counts
       });
       
-      // Get detailed dashboard data including latest images
-      const dashboardResponse = await axios.get('/api/dashboard/summary', { params });
+      // Get detailed dashboard data including latest images with enhanced S3-MongoDB integration
+      let dashboardResponse;
+      try {
+        // Try enhanced API endpoint first (with comprehensive S3-MongoDB integration)
+        dashboardResponse = await axios.get('/api/dashboard/summary-v2', { params });
+        console.log('✅ Using enhanced dashboard API with comprehensive S3-MongoDB integration');
+      } catch (enhancedError) {
+        console.warn('⚠️ Enhanced API not available, falling back to standard API:', enhancedError.message);
+        // Fallback to original API
+        dashboardResponse = await axios.get('/api/dashboard/summary', { params });
+        console.log('✅ Using standard dashboard API');
+      }
+
       if (dashboardResponse.data.success) {
         const dashboardData = dashboardResponse.data.data;
-        
+
         // Calculate multi-defect statistics
         const multiDefectStats = {
           totalImages: 0,
@@ -913,12 +1130,12 @@ function Dashboard({ user }) {
                               <Tab eventKey="potholes" title={`Potholes (${dashboardData.potholes.latest.length})`}>
                                 <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                                   <Row>
-                                    {dashboardData.potholes.latest.map((pothole) => (
-                                      <ImageCard 
-                                        key={`pothole-${pothole.pothole_id}`}
-                                        defect={pothole} 
-                                        defectType="potholes" 
-                                        defectIdKey="pothole_id" 
+                                    {dashboardData.potholes.latest.map((pothole, index) => (
+                                      <ImageCard
+                                        key={`pothole-${pothole.pothole_id || pothole.image_id || index}`}
+                                        defect={pothole}
+                                        defectType="potholes"
+                                        defectIdKey="pothole_id"
                                       />
                                     ))}
                                   </Row>
@@ -927,12 +1144,12 @@ function Dashboard({ user }) {
                               <Tab eventKey="cracks" title={`Cracks (${dashboardData.cracks.latest.length})`}>
                                 <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                                   <Row>
-                                    {dashboardData.cracks.latest.map((crack) => (
-                                      <ImageCard 
-                                        key={`crack-${crack.crack_id}`}
-                                        defect={crack} 
-                                        defectType="cracks" 
-                                        defectIdKey="crack_id" 
+                                    {dashboardData.cracks.latest.map((crack, index) => (
+                                      <ImageCard
+                                        key={`crack-${crack.crack_id || crack.image_id || index}`}
+                                        defect={crack}
+                                        defectType="cracks"
+                                        defectIdKey="crack_id"
                                       />
                                     ))}
                                   </Row>
@@ -942,12 +1159,12 @@ function Dashboard({ user }) {
                                 <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                                   <Row>
                                     {dashboardData.kerbs && dashboardData.kerbs.latest && dashboardData.kerbs.latest.length > 0 ? (
-                                      dashboardData.kerbs.latest.map((kerb) => (
-                                        <ImageCard 
-                                          key={`kerb-${kerb.kerb_id}`}
-                                          defect={kerb} 
-                                          defectType="kerbs" 
-                                          defectIdKey="kerb_id" 
+                                      dashboardData.kerbs.latest.map((kerb, index) => (
+                                        <ImageCard
+                                          key={`kerb-${kerb.kerb_id || kerb.image_id || index}`}
+                                          defect={kerb}
+                                          defectType="kerbs"
+                                          defectIdKey="kerb_id"
                                         />
                                       ))
                                     ) : (

@@ -4,6 +4,7 @@ import axios from 'axios';
 import Webcam from 'react-webcam';
 import useResponsive from '../hooks/useResponsive';
 import './VideoDefectDetection.css';
+import { validateUploadFile, showFileValidationError } from '../utils/fileValidation';
 
 const VideoDefectDetection = () => {
   const [selectedModel, setSelectedModel] = useState('All');
@@ -172,6 +173,20 @@ const VideoDefectDetection = () => {
   const handleVideoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate video file first
+      const validation = validateUploadFile(file, 'video', 'video_defect_detection');
+      if (!validation.isValid) {
+        showFileValidationError(validation.errorMessage, setError);
+        // Clear the file input
+        if (e.target) {
+          e.target.value = '';
+        }
+        return;
+      }
+
+      // Clear any previous errors
+      setError('');
+
       const video = document.createElement('video');
       video.preload = 'metadata';
       video.onloadedmetadata = () => {

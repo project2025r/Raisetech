@@ -104,20 +104,38 @@ function DefectDetail() {
             <Card.Body>
               <Row>
                 <Col md={6} className="text-center mb-4">
-                  {defectData.image && (
-                    <div className="defect-image-container">
-                      <img 
-                        src={`/api/pavement/get-image/${
-                          imageType === 'original' 
-                            ? defectData.image.original_image_id 
-                            : defectData.image.processed_image_id
-                        }`}
-                        alt={`${defectData.type} defect`}
-                        className="img-fluid border rounded shadow-sm"
-                        style={{ maxHeight: '400px' }}
-                      />
-                    </div>
-                  )}
+                  {defectData.image && (() => {
+                    // Check if S3 URLs are available (new format)
+                    const s3Url = imageType === 'original'
+                      ? (defectData.image.original_image_full_url || defectData.image.original_image_s3_url)
+                      : (defectData.image.processed_image_full_url || defectData.image.processed_image_s3_url);
+
+                    const gridfsId = imageType === 'original'
+                      ? defectData.image.original_image_id
+                      : defectData.image.processed_image_id;
+
+                    // Use S3 URL if available, otherwise fall back to GridFS
+                    const imageSrc = s3Url || (gridfsId ? `/api/pavement/get-image/${gridfsId}` : null);
+
+                    return imageSrc ? (
+                      <div className="defect-image-container">
+                        <img
+                          src={imageSrc}
+                          alt={`${defectData.type} defect`}
+                          className="img-fluid border rounded shadow-sm"
+                          style={{ maxHeight: '400px' }}
+                          onError={(e) => {
+                            // If S3 image fails to load and we have GridFS ID, try GridFS as fallback
+                            if (s3Url && gridfsId) {
+                              e.target.src = `/api/pavement/get-image/${gridfsId}`;
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-muted">No image available</div>
+                    );
+                  })()}
                 </Col>
                 <Col md={6}>
                   <h5>Basic Information</h5>

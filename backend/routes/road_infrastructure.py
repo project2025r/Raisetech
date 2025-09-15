@@ -8,6 +8,7 @@ import time
 import json
 import torch
 from utils.models import load_yolo_models
+from utils.file_validation import validate_upload_file, get_context_specific_error_message
 from threading import Lock, Thread
 from datetime import datetime
 import pandas as pd
@@ -583,8 +584,14 @@ def detect_infrastructure():
         if 'video' in request.files and request.files['video']:
             # Process video input
             video_file = request.files['video']
-            logger.info(f"Processing video input")
-            
+            logger.info(f"Processing video input: {video_file.filename}")
+
+            # Validate video file
+            is_valid, error_message = validate_upload_file(video_file, 'video')
+            if not is_valid:
+                logger.warning(f"Video validation failed: {error_message}")
+                return jsonify({"success": False, "message": error_message}), 400
+
             # Save video temporarily
             temp_video_path = os.path.join(os.path.dirname(__file__), "temp_video.mp4")
             logger.info(f"Saving video to temporary path: {temp_video_path}")
@@ -606,13 +613,19 @@ def detect_infrastructure():
         elif 'image' in request.files and request.files['image']:
             # Process image input
             image_file = request.files['image']
-            logger.info(f"Processing image input")
-            
+            logger.info(f"Processing image input: {image_file.filename}")
+
+            # Validate image file
+            is_valid, error_message = validate_upload_file(image_file, 'image')
+            if not is_valid:
+                logger.warning(f"Image validation failed: {error_message}")
+                return jsonify({"success": False, "message": error_message}), 400
+
             # Save image temporarily
             temp_image_path = os.path.join(os.path.dirname(__file__), "temp_image.jpg")
             logger.info(f"Saving image to temporary path: {temp_image_path}")
             image_file.save(temp_image_path)
-            
+
             # Read the image
             frame = cv2.imread(temp_image_path)
             if frame is None:

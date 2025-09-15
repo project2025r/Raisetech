@@ -7,6 +7,7 @@ import L from 'leaflet';
 import Webcam from 'react-webcam';
 import './RoadInfrastructure.css';
 import useResponsive from '../hooks/useResponsive';
+import { validateUploadFile, showFileValidationError } from '../utils/fileValidation';
 
 // Fix the marker icon issue with Leaflet in React
 delete L.Icon.Default.prototype._getIconUrl;
@@ -117,11 +118,24 @@ function RoadInfrastructure() {
   const handleVideoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate video file first
+      const validation = validateUploadFile(file, 'video', 'road_infrastructure_detection');
+      if (!validation.isValid) {
+        showFileValidationError(validation.errorMessage, setError);
+        // Clear the file input
+        if (e.target) {
+          e.target.value = '';
+        }
+        return;
+      }
+
+      // Clear any previous errors
+      setError('');
+
       setVideoFile(file);
       setVideoPreview(URL.createObjectURL(file));
       setProcessedImage(null);
       setDetectionResults(null);
-      setError('');
     }
   };
 
@@ -129,19 +143,32 @@ function RoadInfrastructure() {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate image file first
+      const validation = validateUploadFile(file, 'image', 'road_infrastructure_detection');
+      if (!validation.isValid) {
+        showFileValidationError(validation.errorMessage, setError);
+        // Clear the file input
+        if (e.target) {
+          e.target.value = '';
+        }
+        return;
+      }
+
+      // Clear any previous errors
+      setError('');
+
       setImageFile(file);
-      
+
       // Create preview
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result);
       };
       reader.readAsDataURL(file);
-      
+
       // Reset results
       setProcessedImage(null);
       setDetectionResults(null);
-      setError('');
     }
   };
 

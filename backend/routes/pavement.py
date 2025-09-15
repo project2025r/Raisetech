@@ -23,6 +23,9 @@ from botocore.exceptions import ClientError
 # Import our comprehensive S3-MongoDB integration
 from s3_mongodb_integration import ImageProcessingWorkflow, S3ImageManager, MongoDBImageManager
 
+# Import file validation utilities
+from utils.file_validation import validate_upload_file, validate_base64_image, get_context_specific_error_message
+
 pavement_bp = Blueprint('pavement', __name__)
 
 # Global variables for models - lazy loaded or preloaded
@@ -1185,18 +1188,26 @@ def detect_potholes():
                 "success": False,
                 "message": "No image data provided"
             }), 400
-        
+
+        # Get image data and validate it
+        image_data = request.json['image']
+        is_valid, error_message = validate_base64_image(image_data, 'pothole_detection')
+        if not is_valid:
+            logger.warning(f"Image validation failed for pothole detection: {error_message}")
+            return jsonify({
+                "success": False,
+                "message": error_message
+            }), 400
+
         # Extract coordinates if provided
         client_coordinates = request.json.get('coordinates', 'Not Available')
-        
+
         # Get user information
         username = request.json.get('username', 'Unknown')
         role = request.json.get('role', 'Unknown')
 
         # Check if road classification should be skipped
         skip_road_classification = request.json.get('skip_road_classification', False)
-        # Get image data
-        image_data = request.json['image']
         image = decode_base64_image(image_data)
         
         if image is None:
@@ -1453,6 +1464,16 @@ def detect_cracks():
             "message": "No image data provided"
         }), 400
 
+    # Get image data and validate it
+    image_data = request.json['image']
+    is_valid, error_message = validate_base64_image(image_data, 'crack_detection')
+    if not is_valid:
+        logger.warning(f"Image validation failed for crack detection: {error_message}")
+        return jsonify({
+            "success": False,
+            "message": error_message
+        }), 400
+
     client_coordinates = request.json.get('coordinates', 'Not Available')
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
@@ -1693,10 +1714,20 @@ def detect_kerbs():
             "success": False,
             "message": "No image data provided"
         }), 400
-    
+
+    # Get image data and validate it
+    image_data = request.json['image']
+    is_valid, error_message = validate_base64_image(image_data, 'kerb_detection')
+    if not is_valid:
+        logger.warning(f"Image validation failed for kerb detection: {error_message}")
+        return jsonify({
+            "success": False,
+            "message": error_message
+        }), 400
+
     # Extract coordinates if provided
     client_coordinates = request.json.get('coordinates', 'Not Available')
-    
+
     # Get user information
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
@@ -2753,10 +2784,20 @@ def detect_all():
             "success": False,
             "message": "No image data provided"
         }), 400
-    
+
+    # Get image data and validate it
+    image_data = request.json['image']
+    is_valid, error_message = validate_base64_image(image_data, 'all_defects_detection')
+    if not is_valid:
+        logger.warning(f"Image validation failed for all defects detection: {error_message}")
+        return jsonify({
+            "success": False,
+            "message": error_message
+        }), 400
+
     # Extract coordinates if provided
     client_coordinates = request.json.get('coordinates', 'Not Available')
-    
+
     # Get user information
     username = request.json.get('username', 'Unknown')
     role = request.json.get('role', 'Unknown')
@@ -3635,8 +3676,18 @@ def detect_video():
                 "success": False,
                 "message": "No video file provided"
             }), 400
+
         video_file = request.files['video']
         logger.info(f"Processing video file: {video_file.filename}")
+
+        # Validate video file
+        is_valid, error_message = validate_upload_file(video_file, 'video')
+        if not is_valid:
+            logger.warning(f"Video validation failed: {error_message}")
+            return jsonify({
+                "success": False,
+                "message": error_message
+            }), 400
         
         # Generate timestamp-based filename with conflict resolution
         video_timestamp = generate_timestamp_filename()

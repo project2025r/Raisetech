@@ -87,9 +87,9 @@ ReactApp/
 
 1. Open your browser and navigate to http://localhost:3000
 2. Log in with the following credentials:
-   - Username: `supervisor1`, Password: `1234`, Role: `Supervisor`
-   - Username: `fieldofficer1`, Password: `1234`, Role: `Field Officer`
-   - Username: `admin1`, Password: `1234`, Role: `Admin`
+   - Username: `supervisor1`, Password: `123456`, Role: `Supervisor`
+   - Username: `fieldofficer1`, Password: `123456`, Role: `Field Officer`
+   - Username: `admin1`, Password: `123456`, Role: `Admin`
 
 3. Use the sidebar to navigate between different modules:
    - Home: Overview of all modules
