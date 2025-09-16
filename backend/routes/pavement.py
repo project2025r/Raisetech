@@ -833,10 +833,13 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
         frame_count = 0
         all_detections = []
         processing_times = []
-        
+        representative_frame = None
+        representative_frame_detections = []
+        max_detections_count = 0
+
         # Initialize tracking
         tracker = DefectTracker(max_missing_frames=30, confidence_threshold=0.3)
-        
+
         # Performance monitoring
         start_time = time.time()
         
@@ -856,10 +859,29 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
             
             # Add detections to overall list (these include track IDs)
             all_detections.extend(detections)
-            
+
+            # Check if this frame has more detections than previous frames (for representative frame)
+            current_detections_count = len(detections)
+            if current_detections_count > max_detections_count:
+                max_detections_count = current_detections_count
+                # Store the frame as base64 for MongoDB storage
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+                success, buffer = cv2.imencode('.jpg', detection_frame, encode_params)
+                if success:
+                    representative_frame = base64.b64encode(buffer).decode('utf-8')
+                    representative_frame_detections = detections.copy()
+
+            # If no detections found yet and this is the middle frame, use it as representative
+            elif representative_frame is None and frame_count == total_frames // 2:
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+                success, buffer = cv2.imencode('.jpg', detection_frame, encode_params)
+                if success:
+                    representative_frame = base64.b64encode(buffer).decode('utf-8')
+                    representative_frame_detections = detections.copy()
+
             # Write frame to output video
             out.write(detection_frame)
-            
+
             # Track processing time
             frame_processing_time = time.time() - frame_start_time
             processing_times.append(frame_processing_time)
@@ -1013,14 +1035,22 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                 elif "Kerb" in detection["type"]:
                     model_outputs["kerbs"].append(detection)
         
-        # Update MongoDB document with model outputs
+        # Update MongoDB document with model outputs and representative frame
         if db is not None:
+            update_data = {
+                "model_outputs": model_outputs,
+                "updated_at": datetime.now().isoformat()
+            }
+
+            # Add representative frame if we captured one
+            if representative_frame is not None:
+                update_data["representative_frame"] = representative_frame
+                update_data["representative_frame_detections"] = representative_frame_detections
+                update_data["representative_frame_detection_count"] = len(representative_frame_detections)
+
             db.video_processing.update_one(
                 {"video_id": video_id},
-                {"$set": {
-                    "model_outputs": model_outputs,
-                    "updated_at": datetime.now().isoformat()
-                }}
+                {"$set": update_data}
             )
         
         # Send final results with performance summary
@@ -3491,27 +3521,64 @@ def detect_all():
 
 
 def upload_video_to_s3(local_path, aws_folder, s3_key):
-    """Upload a file to S3 at the specified bucket/key using put_object. aws_folder is used to extract bucket and prefix."""
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-        region_name=os.environ.get('AWS_REGION')
-    )
-    # Extract bucket and prefix from aws_folder
-    aws_folder = aws_folder.strip('/')
-    parts = aws_folder.split('/', 1)
-    bucket = parts[0]
-    prefix = parts[1] if len(parts) > 1 else ''
-    # Compose full S3 key
-    full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+    """
+    Upload a video file to S3 at the specified bucket/key using put_object.
+
+    Args:
+        local_path: Local file path to upload
+        aws_folder: AWS folder path (e.g., 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+        s3_key: S3 key path (e.g., 'role/username/video_xxx.mp4')
+
+    Returns:
+        tuple: (success: bool, s3_url_or_error: str)
+    """
     try:
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+
+        # Extract bucket and prefix from aws_folder
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Compose full S3 key
+        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+        logger.info(f"🔄 Uploading video to S3 - Bucket: {bucket}, Key: {full_s3_key}")
+
+        # Check if local file exists
+        if not os.path.exists(local_path):
+            error_msg = f"Local video file not found: {local_path}"
+            logger.error(f"❌ {error_msg}")
+            return False, error_msg
+
+        # Upload video file to S3 using put_object
         with open(local_path, 'rb') as f:
-            s3_client.put_object(Bucket=bucket, Key=full_s3_key, Body=f)
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=full_s3_key,
+                Body=f,
+                ContentType='video/mp4'
+            )
+
+        logger.info(f"✅ Successfully uploaded video to S3: {full_s3_key}")
         return True, f's3://{bucket}/{full_s3_key}'
+
     except ClientError as e:
-        print(f"S3 upload error: {e}")
-        return False, str(e)
+        error_code = e.response['Error']['Code']
+        error_msg = f"S3 upload error ({error_code}): {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Unexpected error during video upload: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return False, error_msg
 
 
 def upload_image_to_s3(image_buffer, aws_folder, s3_key, content_type='image/jpeg'):
@@ -3641,6 +3708,74 @@ def generate_s3_url(s3_key, aws_folder=None):
     # Generate public URL
     region = os.environ.get('AWS_REGION', 'us-east-1')
     return f"https://{bucket}.s3.{region}.amazonaws.com/{full_s3_key}"
+
+
+def download_video_from_s3(s3_key, aws_folder=None):
+    """
+    Download a video file from S3 using get_object.
+
+    Args:
+        s3_key: S3 key path (e.g., 'role/username/video_xxx.mp4')
+        aws_folder: AWS folder path (optional, will use env var if not provided)
+
+    Returns:
+        tuple: (success: bool, video_data_or_error: bytes/str, content_type: str)
+    """
+    try:
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+
+        if aws_folder is None:
+            aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+
+        # Extract bucket and prefix from aws_folder
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Compose full S3 key
+        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+        logger.info(f"🔄 Downloading video from S3 - Bucket: {bucket}, Key: {full_s3_key}")
+
+        # Check if object exists first
+        try:
+            s3_client.head_object(Bucket=bucket, Key=full_s3_key)
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == '404':
+                return False, f"Video file not found in storage: {s3_key}", None
+            elif error_code == '403':
+                return False, f"Access denied to video file: {s3_key}", None
+            else:
+                return False, f"Storage access error ({error_code}): {s3_key}", None
+
+        # Download the video using get_object
+        response = s3_client.get_object(Bucket=bucket, Key=full_s3_key)
+        video_data = response['Body'].read()
+
+        # Always return video/mp4 content type regardless of what S3 returns
+        # S3 sometimes stores videos as binary/octet-stream which causes download issues
+        content_type = 'video/mp4'
+
+        logger.info(f"✅ Successfully downloaded video from S3 - Size: {len(video_data)} bytes")
+        logger.info(f"🎬 Forcing Content-Type to: {content_type}")
+        return True, video_data, content_type
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        logger.error(f"❌ S3 ClientError downloading video: {e}")
+        return False, f"Storage service error ({error_code})", None
+    except Exception as e:
+        logger.error(f"❌ Unexpected error downloading video from S3: {e}")
+        return False, f"Video download error: {str(e)}", None
+
 
 @pavement_bp.route('/detect-video', methods=['POST'])
 def detect_video():
@@ -3844,6 +3979,167 @@ def get_video_processing_status(video_id):
         }), 500
 
 
+@pavement_bp.route('/get-s3-video/<video_id>/<video_type>', methods=['GET'])
+def get_s3_video(video_id, video_type):
+    """
+    API endpoint to proxy S3 videos through the backend
+    This solves the issue of S3 bucket not being publicly accessible
+    video_type: 'original' or 'processed'
+    """
+    try:
+        # Add detailed logging for debugging
+        logger.info(f"🔍 S3 Video Request - Video ID: {video_id}, Type: {video_type}")
+
+        # Validate video_type parameter
+        if video_type not in ['original', 'processed']:
+            return jsonify({
+                "success": False,
+                "message": "Invalid video type. Use 'original' or 'processed'"
+            }), 400
+
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect to database"
+            }), 500
+
+        # Find video processing document
+        from bson import ObjectId
+        video_doc = None
+        try:
+            # Try to find by MongoDB ObjectId first
+            video_doc = db.video_processing.find_one({"_id": ObjectId(video_id)})
+        except Exception as e:
+            logger.debug(f"Could not find by ObjectId: {e}")
+            # Fallback to video_id field if ObjectId conversion fails
+            video_doc = db.video_processing.find_one({"video_id": video_id})
+
+        if not video_doc:
+            logger.error(f"❌ Video processing record not found for ID: {video_id}")
+            return jsonify({
+                "success": False,
+                "message": f"Video not found in storage. Please check if the video exists or contact support."
+            }), 404
+
+        logger.info(f"🔍 Found video document for user: {video_doc.get('username', 'unknown')}")
+
+        # Get the appropriate S3 key from MongoDB
+        s3_key = None
+        if video_type == 'original':
+            s3_key = video_doc.get('original_video_url')
+        elif video_type == 'processed':
+            s3_key = video_doc.get('processed_video_url')
+
+        if not s3_key:
+            logger.error(f"❌ {video_type.capitalize()} video URL not found in document")
+            logger.error(f"❌ Available fields: {list(video_doc.keys())}")
+            return jsonify({
+                "success": False,
+                "message": f"{video_type.capitalize()} video not found in storage. The video may not have been processed yet."
+            }), 404
+
+        logger.info(f"🔍 S3 Video Key from DB: {s3_key}")
+
+        # Download video from S3 using helper function
+        success, video_data_or_error, content_type = download_video_from_s3(s3_key)
+
+        if not success:
+            # video_data_or_error contains the error message
+            error_message = video_data_or_error
+
+            # Determine appropriate HTTP status code based on error type
+            if "not found" in error_message.lower():
+                status_code = 404
+                user_message = f"Video not found in storage. The {video_type} video file may have been moved or deleted."
+            elif "access denied" in error_message.lower():
+                status_code = 403
+                user_message = "Access denied to video storage. Please contact support."
+            else:
+                status_code = 500
+                user_message = "Video download error. Please contact support."
+
+            logger.error(f"❌ Video download failed: {error_message}")
+            return jsonify({
+                "success": False,
+                "message": user_message
+            }), status_code
+
+        # video_data_or_error contains the actual video data
+        video_data = video_data_or_error
+        if content_type is None:
+            content_type = 'video/mp4'
+
+        # Extract original filename from S3 key or create a meaningful one
+        if s3_key:
+            original_filename = s3_key.split('/')[-1]
+            if not original_filename.endswith('.mp4'):
+                original_filename += '.mp4'
+        else:
+            original_filename = f"{video_type}_video_{video_id[:8]}.mp4"
+
+        # Return video with proper headers for direct download
+        from flask import Response
+        return Response(
+            video_data,
+            mimetype='video/mp4',  # Force video/mp4 mimetype
+            headers={
+                'Content-Disposition': f'attachment; filename="{original_filename}"',
+                'Content-Length': str(len(video_data)),
+                'Content-Type': 'video/mp4',  # Explicit content type
+                'Cache-Control': 'no-cache, no-store, must-revalidate',  # Prevent caching issues
+                'Pragma': 'no-cache',  # HTTP/1.0 compatibility
+                'Expires': '0',  # Prevent caching
+                'Accept-Ranges': 'bytes',  # Enable range requests for video streaming
+                'Content-Transfer-Encoding': 'binary',  # Ensure binary transfer
+                'X-Content-Type-Options': 'nosniff',  # Prevent MIME type sniffing
+                'Access-Control-Allow-Origin': '*',  # Allow CORS for frontend
+                'Access-Control-Allow-Headers': 'Content-Type, Accept',
+                'Access-Control-Allow-Methods': 'GET'
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in get_s3_video: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": "Video download service error. Please contact support."
+        }), 500
+
+@pavement_bp.route('/debug-videos', methods=['GET'])
+def debug_videos():
+    """
+    Debug endpoint to check what videos are in the database
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect to database"
+            }), 500
+
+        # Get all video processing documents
+        videos = list(db.video_processing.find({}).limit(10))
+
+        # Convert ObjectId to string for JSON serialization
+        for video in videos:
+            if '_id' in video:
+                video['_id'] = str(video['_id'])
+
+        return jsonify({
+            "success": True,
+            "count": len(videos),
+            "videos": videos
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching debug videos: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error fetching debug videos: {str(e)}"
+        }), 500
+
 @pavement_bp.route('/video-processing/list', methods=['GET'])
 def list_video_processing():
     """
@@ -3856,12 +4152,12 @@ def list_video_processing():
                 "success": False,
                 "message": "Failed to connect to database"
             }), 500
-        
+
         # Get optional query parameters
         username = request.args.get('username')
         role = request.args.get('role')
         status = request.args.get('status')
-        
+
         # Build query filter
         query = {}
         if username:
@@ -3870,7 +4166,7 @@ def list_video_processing():
             query["role"] = role
         if status:
             query["status"] = status
-        
+
         # Get all video processing records, sorted by timestamp descending
         video_docs = list(db.video_processing.find(
             query,

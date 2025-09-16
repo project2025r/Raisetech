@@ -84,6 +84,30 @@ def get_image_details_route(image_id):
 def get_image_stats_route():
     return get_image_stats()
 
+# Register the route for video processing data
+@app.route('/api/dashboard/video-processing-data', methods=['GET'])
+def get_video_processing_data_route():
+    from routes.dashboard import get_video_processing_data
+    return get_video_processing_data()
+
+# Register the route for video processing export
+@app.route('/api/dashboard/video-processing-export', methods=['GET'])
+def export_video_processing_data_route():
+    from routes.dashboard import export_video_processing_data
+    return export_video_processing_data()
+
+# Register the route for S3 video proxy
+@app.route('/api/pavement/get-s3-video/<video_id>/<video_type>', methods=['GET'])
+def get_s3_video_route(video_id, video_type):
+    from routes.pavement import get_s3_video
+    return get_s3_video(video_id, video_type)
+
+# Register debug endpoint for videos
+@app.route('/api/pavement/debug-videos', methods=['GET'])
+def debug_videos_route():
+    from routes.pavement import debug_videos
+    return debug_videos()
+
 # Basic route for testing
 @app.route('/')
 def index():

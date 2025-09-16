@@ -120,6 +120,27 @@ def get_dashboard_summary_v2():
             # Apply RBAC filters to the dashboard data
             filtered_dashboard_data = apply_rbac_filters_to_dashboard_data(dashboard_result, query_filter)
 
+            # Add video processing data to dashboard
+            try:
+                video_success, video_data = get_video_processing_summary(query_filter, limit=20)
+                if video_success:
+                    filtered_dashboard_data['videos'] = video_data
+                    logger.info(f"✅ Video processing data added to dashboard: {len(video_data.get('latest', []))} videos")
+                else:
+                    logger.warning(f"⚠️  Failed to fetch video processing data: {video_data}")
+                    filtered_dashboard_data['videos'] = {
+                        'latest': [],
+                        'count': 0,
+                        'error': video_data
+                    }
+            except Exception as video_error:
+                logger.error(f"Error fetching video processing data: {video_error}")
+                filtered_dashboard_data['videos'] = {
+                    'latest': [],
+                    'count': 0,
+                    'error': str(video_error)
+                }
+
             # Add summary statistics
             summary_stats = calculate_dashboard_summary_stats(filtered_dashboard_data)
             filtered_dashboard_data['summary'] = summary_stats
@@ -145,6 +166,78 @@ def get_dashboard_summary_v2():
             "success": False,
             "message": f"Internal server error: {str(e)}"
         }), 500
+
+def get_video_processing_summary(query_filter=None, limit=20):
+    """
+    Get video processing summary data for dashboard
+
+    Args:
+        query_filter (dict): Optional query filter
+        limit (int): Maximum number of videos to return
+
+    Returns:
+        tuple: (success: bool, data: dict)
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return False, "Database connection failed"
+
+        # Build query filter
+        video_query = {"status": "completed"}
+        if query_filter:
+            # Apply RBAC filters
+            if 'username' in query_filter:
+                video_query['username'] = query_filter['username']
+            if 'role' in query_filter:
+                video_query['role'] = query_filter['role']
+
+        # Get completed video processing records with representative frames
+        video_docs = list(db.video_processing.find(
+            video_query,
+            sort=[("timestamp", -1)],
+            limit=limit
+        ))
+
+        processed_videos = []
+        for video_doc in video_docs:
+            # Only include videos that have representative frames
+            if video_doc.get('representative_frame'):
+                # Count total detections
+                model_outputs = video_doc.get('model_outputs', {})
+                total_potholes = len(model_outputs.get('potholes', []))
+                total_cracks = len(model_outputs.get('cracks', []))
+                total_kerbs = len(model_outputs.get('kerbs', []))
+
+                processed_video = {
+                    'video_id': video_doc['video_id'],
+                    'timestamp': video_doc.get('timestamp'),
+                    'username': video_doc.get('username'),
+                    'role': video_doc.get('role'),
+                    'models_run': video_doc.get('models_run', []),
+                    'representative_frame': video_doc['representative_frame'],
+                    'representative_frame_detections': video_doc.get('representative_frame_detections', []),
+                    'detection_counts': {
+                        'potholes': total_potholes,
+                        'cracks': total_cracks,
+                        'kerbs': total_kerbs,
+                        'total': total_potholes + total_cracks + total_kerbs
+                    },
+                    'original_video_url': video_doc.get('original_video_url'),
+                    'processed_video_url': video_doc.get('processed_video_url'),
+                    'status': video_doc.get('status'),
+                    '_id': str(video_doc['_id'])
+                }
+                processed_videos.append(processed_video)
+
+        return True, {
+            'latest': processed_videos,
+            'count': len(processed_videos)
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching video processing summary: {str(e)}")
+        return False, str(e)
 
 def apply_rbac_filters_to_dashboard_data(dashboard_data, filters):
     """
@@ -768,6 +861,432 @@ def get_kerb_data():
         return jsonify({
             "success": False,
             "message": f"Error fetching kerb data: {str(e)}"
+        }), 500
+
+@dashboard_bp.route('/video-processing-data', methods=['GET'])
+@validate_rbac_access
+def get_video_processing_data():
+    """
+    Get processed videos with representative frames for dashboard display
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
+
+        # Get filters
+        query_filter = parse_filters()
+
+        # Add status filter to only get completed videos
+        query_filter["status"] = "completed"
+
+        # Get all completed video processing records with representative frames
+        video_docs = list(db.video_processing.find(
+            query_filter,
+            sort=[("timestamp", -1)],
+            limit=50  # Limit to latest 50 videos
+        ))
+
+        processed_videos = []
+        for video_doc in video_docs:
+            # Only include videos that have representative frames
+            if video_doc.get('representative_frame'):
+                # Count total detections
+                model_outputs = video_doc.get('model_outputs', {})
+                total_potholes = len(model_outputs.get('potholes', []))
+                total_cracks = len(model_outputs.get('cracks', []))
+                total_kerbs = len(model_outputs.get('kerbs', []))
+
+                processed_video = {
+                    'video_id': video_doc['video_id'],
+                    'timestamp': video_doc.get('timestamp'),
+                    'username': video_doc.get('username'),
+                    'role': video_doc.get('role'),
+                    'models_run': video_doc.get('models_run', []),
+                    'representative_frame': video_doc['representative_frame'],
+                    'representative_frame_detections': video_doc.get('representative_frame_detections', []),
+                    'detection_counts': {
+                        'potholes': total_potholes,
+                        'cracks': total_cracks,
+                        'kerbs': total_kerbs,
+                        'total': total_potholes + total_cracks + total_kerbs
+                    },
+                    'original_video_url': video_doc.get('original_video_url'),
+                    'processed_video_url': video_doc.get('processed_video_url'),
+                    'status': video_doc.get('status'),
+                    '_id': str(video_doc['_id'])
+                }
+                processed_videos.append(processed_video)
+
+        return jsonify({
+            "success": True,
+            "count": len(processed_videos),
+            "videos": processed_videos
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching video processing data: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error fetching video processing data: {str(e)}"
+        }), 500
+
+@dashboard_bp.route('/video-processing-export', methods=['GET'])
+@validate_rbac_access
+def export_video_processing_data():
+    """
+    Export all video processing data as CSV
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            return jsonify({
+                "success": False,
+                "message": "Database connection failed"
+            }), 500
+
+        # Get filters
+        query_filter = parse_filters()
+
+        # Add status filter to only get completed videos
+        query_filter["status"] = "completed"
+
+        # Check if specific video_id is requested
+        video_id = request.args.get('video_id')
+        if video_id:
+            from bson import ObjectId
+            try:
+                # Try to find by MongoDB ObjectId first
+                query_filter["_id"] = ObjectId(video_id)
+            except:
+                # Fallback to video_id field if ObjectId conversion fails
+                query_filter["video_id"] = video_id
+
+        # Get completed video processing records
+        video_docs = list(db.video_processing.find(
+            query_filter,
+            sort=[("timestamp", -1)]
+        ))
+
+        # Get export format from query parameter
+        export_format = request.args.get('format', 'csv').lower()
+
+        if export_format == 'csv':
+            # Prepare CSV data with detailed detection information
+            csv_data = []
+
+            # Summary header
+            csv_data.append([
+                'Video ID', 'Username', 'Role', 'Timestamp', 'Models Run',
+                'Potholes', 'Cracks', 'Kerbs', 'Total Detections', 'Status',
+                'Original Video URL', 'Processed Video URL'
+            ])
+
+            for video_doc in video_docs:
+                model_outputs = video_doc.get('model_outputs', {})
+                total_potholes = len(model_outputs.get('potholes', []))
+                total_cracks = len(model_outputs.get('cracks', []))
+                total_kerbs = len(model_outputs.get('kerbs', []))
+                total_detections = total_potholes + total_cracks + total_kerbs
+
+                csv_data.append([
+                    video_doc.get('video_id', ''),
+                    video_doc.get('username', ''),
+                    video_doc.get('role', ''),
+                    video_doc.get('timestamp', ''),
+                    '; '.join(video_doc.get('models_run', [])),
+                    total_potholes,
+                    total_cracks,
+                    total_kerbs,
+                    total_detections,
+                    video_doc.get('status', ''),
+                    video_doc.get('original_video_url', ''),
+                    video_doc.get('processed_video_url', '')
+                ])
+
+            # Add detailed detection tables
+            csv_data.append([])  # Empty row separator
+            csv_data.append(['DETAILED DETECTION INFORMATION'])
+            csv_data.append([])
+
+            for video_doc in video_docs:
+                video_id = video_doc.get('video_id', '')
+                username = video_doc.get('username', '')
+
+                csv_data.append([f'Video: {video_id} (User: {username})'])
+                csv_data.append([])
+
+                model_outputs = video_doc.get('model_outputs', {})
+
+                # Potholes table
+                potholes = model_outputs.get('potholes', [])
+                if potholes:
+                    csv_data.append(['POTHOLES'])
+                    csv_data.append([
+                        'Detection ID', 'Frame', 'Timestamp', 'Confidence',
+                        'Area (cm²)', 'Depth (cm)', 'Volume', 'Volume Range'
+                    ])
+                    for pothole in potholes:
+                        csv_data.append([
+                            pothole.get('detection_id', ''),
+                            pothole.get('frame', ''),
+                            f"{pothole.get('timestamp', 0):.2f}s",
+                            f"{pothole.get('confidence', 0):.3f}",
+                            pothole.get('area_cm2', ''),
+                            pothole.get('depth_cm', ''),
+                            pothole.get('volume', ''),
+                            pothole.get('volume_range', '')
+                        ])
+                    csv_data.append([])
+
+                # Cracks table
+                cracks = model_outputs.get('cracks', [])
+                if cracks:
+                    csv_data.append(['CRACKS'])
+                    csv_data.append([
+                        'Detection ID', 'Frame', 'Timestamp', 'Confidence', 'Type'
+                    ])
+                    for crack in cracks:
+                        csv_data.append([
+                            crack.get('detection_id', ''),
+                            crack.get('frame', ''),
+                            f"{crack.get('timestamp', 0):.2f}s",
+                            f"{crack.get('confidence', 0):.3f}",
+                            crack.get('type', '')
+                        ])
+                    csv_data.append([])
+
+                # Kerbs table
+                kerbs = model_outputs.get('kerbs', [])
+                if kerbs:
+                    csv_data.append(['KERBS'])
+                    csv_data.append([
+                        'Detection ID', 'Frame', 'Timestamp', 'Confidence', 'Type'
+                    ])
+                    for kerb in kerbs:
+                        csv_data.append([
+                            kerb.get('detection_id', ''),
+                            kerb.get('frame', ''),
+                            f"{kerb.get('timestamp', 0):.2f}s",
+                            f"{kerb.get('confidence', 0):.3f}",
+                            kerb.get('type', '')
+                        ])
+                    csv_data.append([])
+
+                csv_data.append(['=' * 50])  # Separator between videos
+                csv_data.append([])
+
+            return jsonify({
+                "success": True,
+                "csv_data": csv_data,
+                "count": len(video_docs)
+            })
+
+        elif export_format == 'pdf':
+            # Generate PDF with detection tables
+            from reportlab.lib.pagesizes import letter, A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from io import BytesIO
+            import base64
+
+            # Create PDF buffer
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=A4)
+            styles = getSampleStyleSheet()
+            story = []
+
+            # Title
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=16,
+                spaceAfter=30,
+                alignment=1  # Center alignment
+            )
+            story.append(Paragraph("Video Processing Detection Report", title_style))
+            story.append(Spacer(1, 20))
+
+            # Summary table
+            summary_data = [['Video ID', 'User', 'Role', 'Timestamp', 'Potholes', 'Cracks', 'Kerbs', 'Total']]
+
+            for video_doc in video_docs:
+                model_outputs = video_doc.get('model_outputs', {})
+                total_potholes = len(model_outputs.get('potholes', []))
+                total_cracks = len(model_outputs.get('cracks', []))
+                total_kerbs = len(model_outputs.get('kerbs', []))
+                total_detections = total_potholes + total_cracks + total_kerbs
+
+                summary_data.append([
+                    video_doc.get('video_id', '')[:8] + '...',
+                    video_doc.get('username', ''),
+                    video_doc.get('role', ''),
+                    video_doc.get('timestamp', '')[:10],
+                    str(total_potholes),
+                    str(total_cracks),
+                    str(total_kerbs),
+                    str(total_detections)
+                ])
+
+            # Create summary table
+            summary_table = Table(summary_data)
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+
+            story.append(Paragraph("Summary", styles['Heading2']))
+            story.append(summary_table)
+            story.append(PageBreak())
+
+            # Detailed detection tables for each video
+            for video_doc in video_docs:
+                video_id = video_doc.get('video_id', '')
+                username = video_doc.get('username', '')
+
+                story.append(Paragraph(f"Video: {video_id} (User: {username})", styles['Heading2']))
+                story.append(Spacer(1, 12))
+
+                model_outputs = video_doc.get('model_outputs', {})
+
+                # Potholes table
+                potholes = model_outputs.get('potholes', [])
+                if potholes:
+                    story.append(Paragraph("Potholes Detected", styles['Heading3']))
+                    pothole_data = [['ID', 'Frame', 'Time', 'Confidence', 'Area (cm²)', 'Depth (cm)', 'Volume', 'Range']]
+
+                    for pothole in potholes:
+                        pothole_data.append([
+                            str(pothole.get('detection_id', '')),
+                            str(pothole.get('frame', '')),
+                            f"{pothole.get('timestamp', 0):.2f}s",
+                            f"{pothole.get('confidence', 0):.3f}",
+                            f"{pothole.get('area_cm2', 0):.2f}",
+                            f"{pothole.get('depth_cm', 0):.2f}",
+                            f"{pothole.get('volume', 0):.2f}",
+                            pothole.get('volume_range', '')
+                        ])
+
+                    pothole_table = Table(pothole_data)
+                    pothole_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ]))
+
+                    story.append(pothole_table)
+                    story.append(Spacer(1, 12))
+
+                # Cracks table
+                cracks = model_outputs.get('cracks', [])
+                if cracks:
+                    story.append(Paragraph("Cracks Detected", styles['Heading3']))
+                    crack_data = [['ID', 'Frame', 'Time', 'Confidence', 'Type']]
+
+                    for crack in cracks:
+                        crack_data.append([
+                            str(crack.get('detection_id', '')),
+                            str(crack.get('frame', '')),
+                            f"{crack.get('timestamp', 0):.2f}s",
+                            f"{crack.get('confidence', 0):.3f}",
+                            crack.get('type', '')
+                        ])
+
+                    crack_table = Table(crack_data)
+                    crack_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.lightcoral),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ]))
+
+                    story.append(crack_table)
+                    story.append(Spacer(1, 12))
+
+                # Kerbs table
+                kerbs = model_outputs.get('kerbs', [])
+                if kerbs:
+                    story.append(Paragraph("Kerbs Detected", styles['Heading3']))
+                    kerb_data = [['ID', 'Frame', 'Time', 'Confidence', 'Type']]
+
+                    for kerb in kerbs:
+                        kerb_data.append([
+                            str(kerb.get('detection_id', '')),
+                            str(kerb.get('frame', '')),
+                            f"{kerb.get('timestamp', 0):.2f}s",
+                            f"{kerb.get('confidence', 0):.3f}",
+                            kerb.get('type', '')
+                        ])
+
+                    kerb_table = Table(kerb_data)
+                    kerb_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgreen),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ]))
+
+                    story.append(kerb_table)
+                    story.append(Spacer(1, 12))
+
+                if video_doc != video_docs[-1]:  # Add page break except for last video
+                    story.append(PageBreak())
+
+            # Build PDF
+            doc.build(story)
+
+            # Get PDF data and encode as base64
+            pdf_data = buffer.getvalue()
+            buffer.close()
+            pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+
+            return jsonify({
+                "success": True,
+                "pdf_data": pdf_base64,
+                "count": len(video_docs)
+            })
+
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Invalid export format. Use 'csv' or 'pdf'"
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "csv_data": csv_data,
+            "count": len(video_docs)
+        })
+
+    except Exception as e:
+        logger.error(f"Error exporting video processing data: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Error exporting video processing data: {str(e)}"
         }), 500
 
 @dashboard_bp.route('/image-stats', methods=['GET'])
