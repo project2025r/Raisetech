@@ -739,7 +739,7 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
         return frame, []
 
 
-def process_pavement_video(video_path, selected_model, coordinates, video_timestamp=None, aws_folder=None, s3_folder=None, username=None, role=None, video_id=None):
+def process_pavement_video(video_path, selected_model, coordinates, video_timestamp=None, aws_folder=None, s3_folder=None, username=None, role=None, video_id=None, original_video_name=None):
     """Process pavement video and yield frames with detection results using CUDA optimization"""
     global video_processing_stop_flag
     
@@ -972,7 +972,12 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
         processed_video_s3_url = None
         if aws_folder and s3_folder and video_timestamp:
             try:
-                processed_video_name = f"video_{video_timestamp}_processed.mp4"
+                # Extract original name from the original video name for consistency
+                if original_video_name:
+                    original_name_part = original_video_name.replace(f"_{video_timestamp}.mp4", "")
+                    processed_video_name = f"{original_name_part}_{video_timestamp}_processed.mp4"
+                else:
+                    processed_video_name = f"video_{video_timestamp}_processed.mp4"
                 s3_key_processed = f"{s3_folder}/{processed_video_name}"
                 upload_success, s3_url_or_error = upload_video_to_s3(output_path, aws_folder, s3_key_processed)
                 if upload_success:
@@ -3824,11 +3829,16 @@ def detect_video():
                 "message": error_message
             }), 400
         
-        # Generate timestamp-based filename with conflict resolution
+        # Generate timestamp-based filename with conflict resolution, preserving original name
         video_timestamp = generate_timestamp_filename()
-        original_video_name = f"video_{video_timestamp}.mp4"
+        original_filename = video_file.filename or "video.mp4"
+        # Clean the filename to remove any path separators and ensure it's safe
+        original_filename = os.path.basename(original_filename)
+        name_without_ext = os.path.splitext(original_filename)[0]
+        # Create a unique filename that includes both timestamp and original name
+        original_video_name = f"{name_without_ext}_{video_timestamp}.mp4"
         temp_video_path = os.path.join(os.path.dirname(__file__), original_video_name)
-        logger.info(f"Saving video to temporary path: {temp_video_path}")
+        logger.info(f"Saving video to temporary path: {temp_video_path} (original: {original_filename})")
         video_file.save(temp_video_path)
         
         # Get AWS configuration
@@ -3895,15 +3905,16 @@ def detect_video():
         # The processed video will be uploaded to S3 automatically when processing completes
         sse_response = Response(
             stream_with_context(process_pavement_video(
-                temp_video_path, 
-                selected_model, 
-                coordinates, 
-                video_timestamp, 
-                aws_folder, 
+                temp_video_path,
+                selected_model,
+                coordinates,
+                video_timestamp,
+                aws_folder,
                 s3_folder,
                 username,
                 role,
-                video_id  # Pass video_id to processing function
+                video_id,  # Pass video_id to processing function
+                original_video_name  # Pass original video name for S3 naming
             )),
             mimetype='text/event-stream',
             headers={

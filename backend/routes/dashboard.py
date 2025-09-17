@@ -57,19 +57,24 @@ def parse_filters():
     date_filter = {}
     if start_date:
         try:
-            # Convert to datetime and set to start of day
+            # Convert to datetime and set to start of day (00:00:00)
             start_datetime = datetime.datetime.fromisoformat(start_date)
+            start_datetime = start_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
             date_filter['$gte'] = start_datetime.isoformat()
-        except ValueError:
+            logger.info(f"Date filter start: {start_datetime.isoformat()}")
+        except ValueError as e:
+            logger.warning(f"Invalid start_date format: {start_date}, error: {e}")
             pass
-    
+
     if end_date:
         try:
-            # Convert to datetime and set to end of day
+            # Convert to datetime and set to end of day (23:59:59.999999)
             end_datetime = datetime.datetime.fromisoformat(end_date)
-            end_datetime = end_datetime.replace(hour=23, minute=59, second=59)
+            end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
             date_filter['$lte'] = end_datetime.isoformat()
-        except ValueError:
+            logger.info(f"Date filter end: {end_datetime.isoformat()}")
+        except ValueError as e:
+            logger.warning(f"Invalid end_date format: {end_date}, error: {e}")
             pass
     
     if date_filter:
@@ -191,6 +196,12 @@ def get_video_processing_summary(query_filter=None, limit=20):
                 video_query['username'] = query_filter['username']
             if 'role' in query_filter:
                 video_query['role'] = query_filter['role']
+            # Apply date filters
+            if 'timestamp' in query_filter:
+                video_query['timestamp'] = query_filter['timestamp']
+                logger.info(f"Video query with date filter: {video_query}")
+
+        logger.info(f"Final video query: {video_query}")
 
         # Get completed video processing records with representative frames
         video_docs = list(db.video_processing.find(
@@ -198,6 +209,8 @@ def get_video_processing_summary(query_filter=None, limit=20):
             sort=[("timestamp", -1)],
             limit=limit
         ))
+
+        logger.info(f"Found {len(video_docs)} video documents")
 
         processed_videos = []
         for video_doc in video_docs:
@@ -277,8 +290,33 @@ def apply_rbac_filters_to_dashboard_data(dashboard_data, filters):
                         if item_role != role_filter:
                             continue
 
-                # Apply timestamp filter (if needed)
-                # Add more filters as needed
+                # Apply timestamp filter
+                if 'timestamp' in filters:
+                    timestamp_filter = filters['timestamp']
+                    item_timestamp = item.get('timestamp')
+
+                    if item_timestamp:
+                        # Handle MongoDB-style date range queries
+                        if isinstance(timestamp_filter, dict):
+                            # Check $gte (greater than or equal)
+                            if '$gte' in timestamp_filter:
+                                if item_timestamp < timestamp_filter['$gte']:
+                                    logger.debug(f"Filtering out item: {item_timestamp} < {timestamp_filter['$gte']}")
+                                    continue
+
+                            # Check $lte (less than or equal)
+                            if '$lte' in timestamp_filter:
+                                if item_timestamp > timestamp_filter['$lte']:
+                                    logger.debug(f"Filtering out item: {item_timestamp} > {timestamp_filter['$lte']}")
+                                    continue
+                        # Handle simple string comparison
+                        elif isinstance(timestamp_filter, str):
+                            if item_timestamp != timestamp_filter:
+                                continue
+                    else:
+                        # If no timestamp, filter it out when date filter is applied
+                        logger.debug(f"Filtering out item with no timestamp when date filter is active")
+                        continue
 
                 filtered_latest.append(item)
 
@@ -981,7 +1019,7 @@ def export_video_processing_data():
             # Summary header
             csv_data.append([
                 'Video ID', 'Username', 'Role', 'Timestamp', 'Models Run',
-                'Potholes', 'Cracks', 'Kerbs', 'Total Detections', 'Status',
+                'Unique Potholes', 'Unique Cracks', 'Unique Kerbs', 'Total Unique Detections', 'Status',
                 'Original Video URL', 'Processed Video URL'
             ])
 
@@ -1009,67 +1047,74 @@ def export_video_processing_data():
 
             # Add detailed detection tables
             csv_data.append([])  # Empty row separator
-            csv_data.append(['DETAILED DETECTION INFORMATION'])
+            csv_data.append(['DETAILED UNIQUE DETECTION INFORMATION'])
+            csv_data.append(['Note: These are unique detections after removing duplicates across video frames'])
             csv_data.append([])
 
             for video_doc in video_docs:
                 video_id = video_doc.get('video_id', '')
                 username = video_doc.get('username', '')
+                role = video_doc.get('role', '')
+                timestamp = video_doc.get('timestamp', '')
+                models_run = video_doc.get('models_run', [])
 
-                csv_data.append([f'Video: {video_id} (User: {username})'])
+                csv_data.append([f'Video: {video_id} (User: {username}, Role: {role})'])
+                csv_data.append([f'Processed: {timestamp}'])
+                csv_data.append([f'Models: {"; ".join(models_run)}'])
                 csv_data.append([])
 
                 model_outputs = video_doc.get('model_outputs', {})
 
-                # Potholes table
+                # Unique Potholes table
                 potholes = model_outputs.get('potholes', [])
                 if potholes:
-                    csv_data.append(['POTHOLES'])
+                    csv_data.append(['UNIQUE POTHOLES (Duplicates Removed)'])
                     csv_data.append([
-                        'Detection ID', 'Frame', 'Timestamp', 'Confidence',
-                        'Area (cm²)', 'Depth (cm)', 'Volume', 'Volume Range'
+                        'Track ID', 'First Detected Frame', 'Timestamp', 'Confidence',
+                        'Area (cm²)', 'Depth (cm)', 'Volume', 'Volume Range', 'Type'
                     ])
                     for pothole in potholes:
                         csv_data.append([
-                            pothole.get('detection_id', ''),
-                            pothole.get('frame', ''),
+                            pothole.get('track_id', pothole.get('detection_id', '')),
+                            pothole.get('first_detected_frame', pothole.get('frame', '')),
                             f"{pothole.get('timestamp', 0):.2f}s",
                             f"{pothole.get('confidence', 0):.3f}",
                             pothole.get('area_cm2', ''),
                             pothole.get('depth_cm', ''),
                             pothole.get('volume', ''),
-                            pothole.get('volume_range', '')
+                            pothole.get('volume_range', ''),
+                            pothole.get('type', 'Pothole')
                         ])
                     csv_data.append([])
 
-                # Cracks table
+                # Unique Cracks table
                 cracks = model_outputs.get('cracks', [])
                 if cracks:
-                    csv_data.append(['CRACKS'])
+                    csv_data.append(['UNIQUE CRACKS (Duplicates Removed)'])
                     csv_data.append([
-                        'Detection ID', 'Frame', 'Timestamp', 'Confidence', 'Type'
+                        'Track ID', 'First Detected Frame', 'Timestamp', 'Confidence', 'Type'
                     ])
                     for crack in cracks:
                         csv_data.append([
-                            crack.get('detection_id', ''),
-                            crack.get('frame', ''),
+                            crack.get('track_id', crack.get('detection_id', '')),
+                            crack.get('first_detected_frame', crack.get('frame', '')),
                             f"{crack.get('timestamp', 0):.2f}s",
                             f"{crack.get('confidence', 0):.3f}",
                             crack.get('type', '')
                         ])
                     csv_data.append([])
 
-                # Kerbs table
+                # Unique Kerbs table
                 kerbs = model_outputs.get('kerbs', [])
                 if kerbs:
-                    csv_data.append(['KERBS'])
+                    csv_data.append(['UNIQUE KERBS (Duplicates Removed)'])
                     csv_data.append([
-                        'Detection ID', 'Frame', 'Timestamp', 'Confidence', 'Type'
+                        'Track ID', 'First Detected Frame', 'Timestamp', 'Confidence', 'Type'
                     ])
                     for kerb in kerbs:
                         csv_data.append([
-                            kerb.get('detection_id', ''),
-                            kerb.get('frame', ''),
+                            kerb.get('track_id', kerb.get('detection_id', '')),
+                            kerb.get('first_detected_frame', kerb.get('frame', '')),
                             f"{kerb.get('timestamp', 0):.2f}s",
                             f"{kerb.get('confidence', 0):.3f}",
                             kerb.get('type', '')
@@ -1087,13 +1132,20 @@ def export_video_processing_data():
 
         elif export_format == 'pdf':
             # Generate PDF with detection tables
-            from reportlab.lib.pagesizes import letter, A4
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib import colors
-            from reportlab.lib.units import inch
-            from io import BytesIO
-            import base64
+            try:
+                from reportlab.lib.pagesizes import letter, A4
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib import colors
+                from reportlab.lib.units import inch
+                from io import BytesIO
+                import base64
+            except ImportError as e:
+                logger.error(f"ReportLab not available for PDF generation: {e}")
+                return jsonify({
+                    "success": False,
+                    "message": "PDF generation not available. Please install reportlab."
+                }), 500
 
             # Create PDF buffer
             buffer = BytesIO()
@@ -1109,11 +1161,12 @@ def export_video_processing_data():
                 spaceAfter=30,
                 alignment=1  # Center alignment
             )
-            story.append(Paragraph("Video Processing Detection Report", title_style))
+            story.append(Paragraph("Video Processing Unique Detection Report", title_style))
+            story.append(Paragraph("Note: This report shows unique detections after removing duplicates across video frames", styles['Normal']))
             story.append(Spacer(1, 20))
 
             # Summary table
-            summary_data = [['Video ID', 'User', 'Role', 'Timestamp', 'Potholes', 'Cracks', 'Kerbs', 'Total']]
+            summary_data = [['Video ID', 'User', 'Role', 'Timestamp', 'Unique Potholes', 'Unique Cracks', 'Unique Kerbs', 'Total Unique']]
 
             for video_doc in video_docs:
                 model_outputs = video_doc.get('model_outputs', {})
@@ -1155,21 +1208,27 @@ def export_video_processing_data():
                 video_id = video_doc.get('video_id', '')
                 username = video_doc.get('username', '')
 
-                story.append(Paragraph(f"Video: {video_id} (User: {username})", styles['Heading2']))
+                role = video_doc.get('role', '')
+                timestamp = video_doc.get('timestamp', '')
+                models_run = video_doc.get('models_run', [])
+
+                story.append(Paragraph(f"Video: {video_id} (User: {username}, Role: {role})", styles['Heading2']))
+                story.append(Paragraph(f"Processed: {timestamp}", styles['Normal']))
+                story.append(Paragraph(f"Models: {'; '.join(models_run)}", styles['Normal']))
                 story.append(Spacer(1, 12))
 
                 model_outputs = video_doc.get('model_outputs', {})
 
-                # Potholes table
+                # Unique Potholes table
                 potholes = model_outputs.get('potholes', [])
                 if potholes:
-                    story.append(Paragraph("Potholes Detected", styles['Heading3']))
-                    pothole_data = [['ID', 'Frame', 'Time', 'Confidence', 'Area (cm²)', 'Depth (cm)', 'Volume', 'Range']]
+                    story.append(Paragraph("Unique Potholes Detected (Duplicates Removed)", styles['Heading3']))
+                    pothole_data = [['Track ID', 'First Frame', 'Time', 'Confidence', 'Area (cm²)', 'Depth (cm)', 'Volume', 'Range']]
 
                     for pothole in potholes:
                         pothole_data.append([
-                            str(pothole.get('detection_id', '')),
-                            str(pothole.get('frame', '')),
+                            str(pothole.get('track_id', pothole.get('detection_id', ''))),
+                            str(pothole.get('first_detected_frame', pothole.get('frame', ''))),
                             f"{pothole.get('timestamp', 0):.2f}s",
                             f"{pothole.get('confidence', 0):.3f}",
                             f"{pothole.get('area_cm2', 0):.2f}",
@@ -1193,16 +1252,16 @@ def export_video_processing_data():
                     story.append(pothole_table)
                     story.append(Spacer(1, 12))
 
-                # Cracks table
+                # Unique Cracks table
                 cracks = model_outputs.get('cracks', [])
                 if cracks:
-                    story.append(Paragraph("Cracks Detected", styles['Heading3']))
-                    crack_data = [['ID', 'Frame', 'Time', 'Confidence', 'Type']]
+                    story.append(Paragraph("Unique Cracks Detected (Duplicates Removed)", styles['Heading3']))
+                    crack_data = [['Track ID', 'First Frame', 'Time', 'Confidence', 'Type']]
 
                     for crack in cracks:
                         crack_data.append([
-                            str(crack.get('detection_id', '')),
-                            str(crack.get('frame', '')),
+                            str(crack.get('track_id', crack.get('detection_id', ''))),
+                            str(crack.get('first_detected_frame', crack.get('frame', ''))),
                             f"{crack.get('timestamp', 0):.2f}s",
                             f"{crack.get('confidence', 0):.3f}",
                             crack.get('type', '')
@@ -1223,16 +1282,16 @@ def export_video_processing_data():
                     story.append(crack_table)
                     story.append(Spacer(1, 12))
 
-                # Kerbs table
+                # Unique Kerbs table
                 kerbs = model_outputs.get('kerbs', [])
                 if kerbs:
-                    story.append(Paragraph("Kerbs Detected", styles['Heading3']))
-                    kerb_data = [['ID', 'Frame', 'Time', 'Confidence', 'Type']]
+                    story.append(Paragraph("Unique Kerbs Detected (Duplicates Removed)", styles['Heading3']))
+                    kerb_data = [['Track ID', 'First Frame', 'Time', 'Confidence', 'Type']]
 
                     for kerb in kerbs:
                         kerb_data.append([
-                            str(kerb.get('detection_id', '')),
-                            str(kerb.get('frame', '')),
+                            str(kerb.get('track_id', kerb.get('detection_id', ''))),
+                            str(kerb.get('first_detected_frame', kerb.get('frame', ''))),
                             f"{kerb.get('timestamp', 0):.2f}s",
                             f"{kerb.get('confidence', 0):.3f}",
                             kerb.get('type', '')
@@ -1257,12 +1316,28 @@ def export_video_processing_data():
                     story.append(PageBreak())
 
             # Build PDF
-            doc.build(story)
+            try:
+                doc.build(story)
+                logger.info("PDF document built successfully")
+            except Exception as pdf_build_error:
+                logger.error(f"Error building PDF document: {pdf_build_error}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Error building PDF document: {str(pdf_build_error)}"
+                }), 500
 
             # Get PDF data and encode as base64
-            pdf_data = buffer.getvalue()
-            buffer.close()
-            pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+            try:
+                pdf_data = buffer.getvalue()
+                buffer.close()
+                pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+                logger.info(f"PDF generated successfully, size: {len(pdf_data)} bytes")
+            except Exception as pdf_encode_error:
+                logger.error(f"Error encoding PDF data: {pdf_encode_error}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Error encoding PDF data: {str(pdf_encode_error)}"
+                }), 500
 
             return jsonify({
                 "success": True,
@@ -1275,12 +1350,6 @@ def export_video_processing_data():
                 "success": False,
                 "message": "Invalid export format. Use 'csv' or 'pdf'"
             }), 400
-
-        return jsonify({
-            "success": True,
-            "csv_data": csv_data,
-            "count": len(video_docs)
-        })
 
     except Exception as e:
         logger.error(f"Error exporting video processing data: {str(e)}")
