@@ -316,6 +316,379 @@ const ImageCard = ({ defect, defectType, defectIdKey }) => {
   );
 };
 
+// VideoCard component for displaying processed videos with representative frames
+const VideoCard = ({ video }) => {
+  // State for download progress - must be declared before any conditional logic
+  const [downloadProgress, setDownloadProgress] = useState({});
+  const [downloadComplete, setDownloadComplete] = useState({});
+
+  // Safety check: return null if video is not provided
+  if (!video) {
+    return null;
+  }
+
+  const handleDownload = async (videoType) => {
+    try {
+      // Reset states
+      setDownloadProgress(prev => ({ ...prev, [videoType]: 0 }));
+      setDownloadComplete(prev => ({ ...prev, [videoType]: false }));
+
+      // Use the MongoDB _id for the download endpoint
+      const videoId = video._id || video.video_id;
+      const downloadUrl = `/api/pavement/get-s3-video/${videoId}/${videoType}`;
+
+      console.log(`🔄 Starting ${videoType} video download for ID: ${videoId}`);
+
+      // Fetch the video data with progress tracking
+      const response = await fetch(downloadUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'video/mp4, video/*, */*'
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      // Get content length for progress calculation
+      const contentLength = response.headers.get('content-length');
+      const total = parseInt(contentLength, 10);
+      let loaded = 0;
+
+      // Create a readable stream to track progress
+      const reader = response.body.getReader();
+      const chunks = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        chunks.push(value);
+        loaded += value.length;
+
+        // Update progress
+        if (total) {
+          const progress = Math.round((loaded / total) * 100);
+          setDownloadProgress(prev => ({ ...prev, [videoType]: progress }));
+        }
+      }
+
+      // Create blob from chunks
+      const videoBlob = new Blob(chunks);
+      console.log(`✅ Downloaded ${videoType} video blob - Size: ${videoBlob.size} bytes`);
+
+      // Force the blob to be treated as video/mp4 if it's not already
+      let finalBlob = videoBlob;
+      if (videoBlob.type !== 'video/mp4') {
+        finalBlob = new Blob([videoBlob], { type: 'video/mp4' });
+        console.log(`🔄 Converted blob type to 'video/mp4'`);
+      }
+
+      // Create a blob URL and trigger download
+      const blobUrl = URL.createObjectURL(finalBlob);
+
+      // Use actual S3 filename if available, otherwise generate one
+      let filename;
+      if (videoType === 'original' && video.original_video_url) {
+        filename = video.original_video_url.split('/').pop();
+      } else if (videoType === 'processed' && video.processed_video_url) {
+        filename = video.processed_video_url.split('/').pop();
+      } else {
+        filename = `${videoType}_video_${(video.video_id || videoId).substring(0, 8)}.mp4`;
+      }
+
+      console.log(`📁 Download filename: ${filename}`);
+      console.log(`🔗 Blob URL created: ${blobUrl.substring(0, 50)}...`);
+
+      // Create and trigger download link
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+
+      console.log(`🖱️ Triggering download click for ${filename}`);
+
+      // Try to trigger the download
+      try {
+        link.click();
+        console.log(`✅ Download triggered successfully`);
+
+        // Mark download as complete
+        setDownloadComplete(prev => ({ ...prev, [videoType]: true }));
+        setDownloadProgress(prev => ({ ...prev, [videoType]: 100 }));
+
+        // Show completion notification and reset progress after delay
+        setTimeout(() => {
+          alert(`✅ ${videoType.charAt(0).toUpperCase() + videoType.slice(1)} video download completed: ${filename}`);
+          // Reset progress after notification
+          setTimeout(() => {
+            setDownloadProgress(prev => ({ ...prev, [videoType]: 0 }));
+            setDownloadComplete(prev => ({ ...prev, [videoType]: false }));
+          }, 3000);
+        }, 500);
+
+      } catch (clickError) {
+        console.warn(`⚠️ Click failed, trying alternative method:`, clickError);
+
+        // Fallback: try using window.open
+        try {
+          const newWindow = window.open(blobUrl, '_blank');
+          if (newWindow) {
+            newWindow.document.title = filename;
+            console.log(`✅ Opened in new window as fallback`);
+
+            // Mark download as complete
+            setDownloadComplete(prev => ({ ...prev, [videoType]: true }));
+            setDownloadProgress(prev => ({ ...prev, [videoType]: 100 }));
+
+            setTimeout(() => {
+              alert(`✅ ${videoType.charAt(0).toUpperCase() + videoType.slice(1)} video download completed: ${filename}`);
+              // Reset progress after notification
+              setTimeout(() => {
+                setDownloadProgress(prev => ({ ...prev, [videoType]: 0 }));
+                setDownloadComplete(prev => ({ ...prev, [videoType]: false }));
+              }, 3000);
+            }, 500);
+          } else {
+            throw new Error('Popup blocked');
+          }
+        } catch (windowError) {
+          console.warn(`⚠️ Window.open failed, trying direct navigation:`, windowError);
+          // Last resort: direct navigation
+          window.location.href = blobUrl;
+
+          // Mark download as complete
+          setDownloadComplete(prev => ({ ...prev, [videoType]: true }));
+          setDownloadProgress(prev => ({ ...prev, [videoType]: 100 }));
+
+          setTimeout(() => {
+            alert(`✅ ${videoType.charAt(0).toUpperCase() + videoType.slice(1)} video download completed: ${filename}`);
+            // Reset progress after notification
+            setTimeout(() => {
+              setDownloadProgress(prev => ({ ...prev, [videoType]: 0 }));
+              setDownloadComplete(prev => ({ ...prev, [videoType]: false }));
+            }, 3000);
+          }, 500);
+        }
+      }
+
+      document.body.removeChild(link);
+
+      // Clean up the blob URL after a short delay to ensure download starts
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+        console.log(`🧹 Cleaned up blob URL for ${videoType} video`);
+      }, 2000); // Increased timeout to 2 seconds
+
+    } catch (error) {
+      console.error(`❌ Error downloading ${videoType} video:`, error);
+      setDownloadProgress(prev => ({ ...prev, [videoType]: 0 }));
+      setDownloadComplete(prev => ({ ...prev, [videoType]: false }));
+      alert(`Error downloading ${videoType} video: ${error.message}`);
+    }
+  };
+
+  const handleExport = async (format) => {
+    try {
+      const exportFormat = format.toLowerCase();
+      const videoId = video._id || video.video_id;
+
+      // Call backend API for export with detailed detection tables
+      const response = await fetch(`/api/dashboard/video-processing-export?format=${exportFormat}&video_id=${videoId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (exportFormat === 'pdf') {
+        // Handle PDF download
+        if (data.pdf_data) {
+          const byteCharacters = atob(data.pdf_data);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: 'application/pdf' });
+
+          const link = document.createElement('a');
+          const url = URL.createObjectURL(blob);
+          link.setAttribute('href', url);
+          link.setAttribute('download', `video_${(video.video_id || videoId).substring(0, 8)}_detailed_report.pdf`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+      } else if (exportFormat === 'csv') {
+        // Handle CSV download
+        if (data.csv_data) {
+          const csvContent = data.csv_data.map(row => row.join(',')).join('\n');
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+          const link = document.createElement('a');
+          const url = URL.createObjectURL(blob);
+          link.setAttribute('href', url);
+          link.setAttribute('download', `video_${(video.video_id || videoId).substring(0, 8)}_detailed_report.csv`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+      }
+    } catch (error) {
+      console.error(`Error exporting to ${format}:`, error);
+      alert(`Error exporting to ${format}: ${error.message}`);
+    }
+  };
+
+  const detectionCounts = video.detection_counts || {};
+  const totalDetections = detectionCounts.total || 0;
+
+  return (
+    <Col md={4} className="mb-4" key={`video-${video.video_id}`}>
+      <Card className="h-100 shadow-sm">
+        <Card.Header className="bg-info bg-opacity-10">
+          <div className="d-flex justify-content-between align-items-center">
+            <h6 className="mb-0">
+              {video.original_video_url ?
+                video.original_video_url.split('/').pop().replace(/\.[^/.]+$/, "") :
+                `Video #${video.video_id.substring(0, 8)}...`
+              }
+            </h6>
+            <small className="text-info fw-bold">
+              📹 Video
+            </small>
+          </div>
+          <div className="mt-1">
+            <small className="text-muted">
+              Models: {video.models_run ? video.models_run.join(', ') : 'N/A'}
+            </small>
+          </div>
+        </Card.Header>
+        <Card.Body>
+          <div className="mb-2 text-center">
+            {video.representative_frame ? (
+              <img
+                src={`data:image/jpeg;base64,${video.representative_frame}`}
+                alt="Video thumbnail"
+                className="img-fluid mb-2 border"
+                style={{ maxHeight: "200px" }}
+                onError={(e) => {
+                  console.warn(`Failed to load representative frame for video ${video.video_id}`);
+                  e.target.style.display = 'none';
+                }}
+              />
+            ) : (
+              <div className="d-flex align-items-center justify-content-center border" style={{ height: "200px", backgroundColor: "#f8f9fa" }}>
+                <span className="text-muted">No thumbnail available</span>
+              </div>
+            )}
+          </div>
+          <div className="small">
+            <p className="mb-1"><strong>Detections:</strong></p>
+            <ul className="mb-2" style={{ paddingLeft: '20px' }}>
+              <li>Potholes: {detectionCounts.potholes || 0}</li>
+              <li>Cracks: {detectionCounts.cracks || 0}</li>
+              <li>Kerbs: {detectionCounts.kerbs || 0}</li>
+            </ul>
+            <p className="mb-1"><strong>Total Detections:</strong> {totalDetections}</p>
+            <p className="mb-1"><strong>Uploaded by:</strong> {video.username || 'Unknown'}</p>
+            <p className="mb-1"><strong>Timestamp:</strong> {video.timestamp ? new Date(video.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A'}</p>
+
+            {/* Video File Names */}
+            {video.original_video_url && (
+              <p className="mb-1"><strong>Original File:</strong> <small className="text-muted">{video.original_video_url.split('/').pop() || 'N/A'}</small></p>
+            )}
+            {video.processed_video_url && (
+              <p className="mb-1"><strong>Processed File:</strong> <small className="text-muted">{video.processed_video_url.split('/').pop() || 'N/A'}</small></p>
+            )}
+
+            {/* Download Buttons with Progress */}
+            <div className="mt-2 mb-2">
+              <div className="mb-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="me-2 mb-1"
+                  onClick={() => handleDownload('original')}
+                  disabled={!video.original_video_url || downloadProgress.original > 0}
+                >
+                  {downloadProgress.original > 0 ? `📥 Downloading... ${downloadProgress.original}%` : '📥 Original Video'}
+                  {downloadComplete.original && ' ✅'}
+                </Button>
+                {downloadProgress.original > 0 && downloadProgress.original < 100 && (
+                  <div className="progress mb-1" style={{ height: '4px' }}>
+                    <div
+                      className="progress-bar bg-primary"
+                      role="progressbar"
+                      style={{ width: `${downloadProgress.original}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mb-2">
+                <Button
+                  variant="success"
+                  size="sm"
+                  className="me-2 mb-1"
+                  onClick={() => handleDownload('processed')}
+                  disabled={!video.processed_video_url || downloadProgress.processed > 0}
+                >
+                  {downloadProgress.processed > 0 ? `📥 Downloading... ${downloadProgress.processed}%` : '📥 Processed Video'}
+                  {downloadComplete.processed && ' ✅'}
+                </Button>
+                {downloadProgress.processed > 0 && downloadProgress.processed < 100 && (
+                  <div className="progress mb-1" style={{ height: '4px' }}>
+                    <div
+                      className="progress-bar bg-success"
+                      role="progressbar"
+                      style={{ width: `${downloadProgress.processed}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Export Buttons */}
+            <div className="mt-2">
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                className="me-2"
+                onClick={() => handleExport('PDF')}
+              >
+                📄 Export PDF
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => handleExport('CSV')}
+              >
+                📊 Export CSV
+              </Button>
+            </div>
+          </div>
+        </Card.Body>
+      </Card>
+    </Col>
+  );
+};
+
 function Dashboard({ user }) {
   const [statistics, setStatistics] = useState({
     potholesDetected: 0,
@@ -352,6 +725,10 @@ function Dashboard({ user }) {
     users: {
       count: 0,
       by_role: {},
+      latest: []
+    },
+    videos: {
+      count: 0,
       latest: []
     }
   });
@@ -1178,6 +1555,35 @@ function Dashboard({ user }) {
                                 </div>
                               </Tab>
                             </Tabs>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    {/* All Videos Processed Section */}
+                    <Row className="mb-3">
+                      <Col md={12}>
+                        <Card className="shadow-sm dashboard-card">
+                          <Card.Header className="bg-info text-white py-2">
+                            <h6 className="mb-0">All Videos Processed ({dashboardData.videos?.latest?.length || 0})</h6>
+                          </Card.Header>
+                          <Card.Body className="py-3">
+                            {dashboardData.videos?.latest && dashboardData.videos.latest.length > 0 ? (
+                              <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
+                                <Row>
+                                  {dashboardData.videos.latest.map((video, index) => (
+                                    <VideoCard
+                                      key={`video-${video.video_id || index}`}
+                                      video={video}
+                                    />
+                                  ))}
+                                </Row>
+                              </div>
+                            ) : (
+                              <div className="alert alert-info p-3">
+                                No processed videos available yet. Upload and process some videos using the Video Defect Detection tool.
+                              </div>
+                            )}
                           </Card.Body>
                         </Card>
                       </Col>

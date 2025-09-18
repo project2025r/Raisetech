@@ -1367,6 +1367,7 @@ def get_image_stats():
     try:
         db = connect_to_db()
         if db is None:
+            logger.error("Database connection failed in get_image_stats")
             return jsonify({
                 "success": False,
                 "message": "Database connection failed"
@@ -1374,6 +1375,7 @@ def get_image_stats():
 
         # Get filters
         query_filter = parse_filters()
+        logger.info(f"Query filter for image stats: {query_filter}")
         
         # Get all images from the database
         pothole_images = list(db.pothole_images.find(query_filter, {
@@ -1384,9 +1386,13 @@ def get_image_stats():
             'username': 1,
             'pothole_count': 1,
             'original_image_id': 1,
-            'original_image_s3_url': 1
+            'original_image_s3_url': 1,
+            'exif_data': 1,
+            'metadata': 1,
+            'media_type': 1
         }))
-        
+        logger.info(f"Found {len(pothole_images)} pothole images")
+
         crack_images = list(db.crack_images.find(query_filter, {
             '_id': 1,
             'image_id': 1,
@@ -1396,8 +1402,12 @@ def get_image_stats():
             'crack_count': 1,
             'type_counts': 1,
             'original_image_id': 1,
-            'original_image_s3_url': 1
+            'original_image_s3_url': 1,
+            'exif_data': 1,
+            'metadata': 1,
+            'media_type': 1
         }))
+        logger.info(f"Found {len(crack_images)} crack images")
 
         kerb_images = list(db.kerb_images.find(query_filter, {
             '_id': 1,
@@ -1408,8 +1418,12 @@ def get_image_stats():
             'kerb_count': 1,
             'condition_counts': 1,
             'original_image_id': 1,
-            'original_image_s3_url': 1
+            'original_image_s3_url': 1,
+            'exif_data': 1,
+            'metadata': 1,
+            'media_type': 1
         }))
+        logger.info(f"Found {len(kerb_images)} kerb images")
         
         # Process images for response
         all_images = []
@@ -1426,7 +1440,10 @@ def get_image_stats():
                 "defect_count": img.get('pothole_count', 0),
                 "original_image_id": img.get('original_image_id'),
                 "original_image_s3_url": img.get('original_image_s3_url'),
-                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url')),
+                "exif_data": img.get('exif_data', {}),
+                "metadata": img.get('metadata', {}),
+                "media_type": img.get('media_type', 'image')
             })
         
         # Process crack images
@@ -1442,7 +1459,10 @@ def get_image_stats():
                 "type_counts": img.get('type_counts', {}),
                 "original_image_id": img.get('original_image_id'),
                 "original_image_s3_url": img.get('original_image_s3_url'),
-                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url')),
+                "exif_data": img.get('exif_data', {}),
+                "metadata": img.get('metadata', {}),
+                "media_type": img.get('media_type', 'image')
             })
 
         # Process kerb images
@@ -1458,7 +1478,10 @@ def get_image_stats():
                 "condition_counts": img.get('condition_counts', {}),
                 "original_image_id": img.get('original_image_id'),
                 "original_image_s3_url": img.get('original_image_s3_url'),
-                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url'))
+                "original_image_full_url": generate_s3_url_for_dashboard(img.get('original_image_s3_url')),
+                "exif_data": img.get('exif_data', {}),
+                "metadata": img.get('metadata', {}),
+                "media_type": img.get('media_type', 'image')
             })
         
         # Sort all images by timestamp
@@ -1541,7 +1564,10 @@ def get_image_stats():
             "user_stats": user_stats_list,
             "images": all_images[:100]  # Limit to first 100 to avoid massive responses
         }
-        
+
+        logger.info(f"Returning {len(all_images[:100])} images for map display")
+        logger.info(f"Sample image data: {all_images[0] if all_images else 'No images found'}")
+
         return jsonify(result)
     
     except Exception as e:

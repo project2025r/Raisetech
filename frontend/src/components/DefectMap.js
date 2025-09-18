@@ -39,8 +39,8 @@ function DefectMap({ user }) {
   const [defects, setDefects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [center, setCenter] = useState([20.5937, 78.9629]); // Default center (India)
-  const [zoom, setZoom] = useState(5);
+  const [center] = useState([20.5937, 78.9629]); // India center
+  const [zoom] = useState(6); // Country-wide zoom for India
   
   // Filters for the map
   const [startDate, setStartDate] = useState('');
@@ -57,27 +57,49 @@ function DefectMap({ user }) {
   const fetchDefectData = async () => {
     try {
       setLoading(true);
-      
+      setError(null); // Clear any previous errors
+
       // Prepare query parameters
       let params = {};
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
       if (selectedUser) params.username = selectedUser;
       if (user?.role) params.user_role = user.role;
-      
+
+      console.log('Fetching defect data with params:', params);
       const response = await axios.get('/api/dashboard/image-stats', { params });
-      
+      console.log('API response:', response.data);
+
       if (response.data.success) {
         // Process the data to extract defect locations with type information
         const processedDefects = [];
         
         response.data.images.forEach(image => {
-          // Only process images with valid coordinates
-          if (image.coordinates && image.coordinates !== 'Not Available') {
-            // Parse coordinates (expected format: "lat,lng")
-            const [lat, lng] = image.coordinates.split(',').map(coord => parseFloat(coord.trim()));
-            
+          try {
+            // Only process images with valid coordinates
+            if (image.coordinates && image.coordinates !== 'Not Available') {
+              let lat, lng;
+
+              // Handle different coordinate formats
+              if (typeof image.coordinates === 'string') {
+                // Parse coordinates (expected format: "lat,lng")
+                const coords = image.coordinates.split(',');
+                if (coords.length === 2) {
+                  lat = parseFloat(coords[0].trim());
+                  lng = parseFloat(coords[1].trim());
+                }
+              } else if (Array.isArray(image.coordinates) && image.coordinates.length === 2) {
+                // Handle array format [lat, lng]
+                lat = parseFloat(image.coordinates[0]);
+                lng = parseFloat(image.coordinates[1]);
+              } else if (typeof image.coordinates === 'object' && image.coordinates.lat && image.coordinates.lng) {
+                // Handle object format {lat: x, lng: y}
+                lat = parseFloat(image.coordinates.lat);
+                lng = parseFloat(image.coordinates.lng);
+              }
+
             if (!isNaN(lat) && !isNaN(lng)) {
+              console.log(`✅ Valid coordinates for image ${image.id}: [${lat}, ${lng}]`);
               processedDefects.push({
                 id: image.id,
                 image_id: image.image_id,
@@ -91,20 +113,39 @@ function DefectMap({ user }) {
                 type_counts: image.type_counts,
                 // For kerbs, include condition information if available
                 condition_counts: image.condition_counts,
+                // EXIF and metadata information
+                exif_data: image.exif_data || {},
+                metadata: image.metadata || {},
+                media_type: image.media_type || 'image',
+                original_image_full_url: image.original_image_full_url
               });
+            } else {
+              console.warn(`❌ Invalid coordinates for image ${image.id}:`, image.coordinates, `parsed: lat=${lat}, lng=${lng}`);
             }
+          } else {
+            console.log(`⚠️ Skipping image ${image.id}: coordinates=${image.coordinates}`);
+          }
+          } catch (coordError) {
+            console.error(`❌ Error processing coordinates for image ${image.id}:`, coordError, image.coordinates);
           }
         });
-        
+
+        console.log('Processed defects:', processedDefects.length);
         setDefects(processedDefects);
+
+        // If no defects were processed, show a helpful message
+        if (processedDefects.length === 0) {
+          setError('No defects found with valid coordinates for the selected date range');
+        }
       } else {
-        setError('Error fetching defect data');
+        console.error('API returned success: false', response.data);
+        setError('Error fetching defect data: ' + (response.data.message || 'Unknown error'));
       }
-      
+
       setLoading(false);
     } catch (err) {
       console.error('Error fetching defect data:', err);
-      setError('Failed to load defect data');
+      setError('Failed to load defect data: ' + (err.response?.data?.message || err.message));
       setLoading(false);
     }
   };
@@ -129,9 +170,11 @@ function DefectMap({ user }) {
     const currentDate = new Date();
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
+
     setEndDate(currentDate.toISOString().split('T')[0]);
     setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
+
+    console.log('DefectMap component initialized');
   }, []);
 
   // Fetch data when component mounts and when filters change
@@ -340,41 +383,124 @@ function DefectMap({ user }) {
                   position={defect.position}
                   icon={icons[defect.type]}
                 >
-                  <Popup>
+                  <Popup maxWidth={400}>
                     <div className="defect-popup">
                       <h6>{defect.type.charAt(0).toUpperCase() + defect.type.slice(1)} Defect</h6>
-                      <ul className="list-unstyled">
-                        <li><strong>Count:</strong> {defect.defect_count}</li>
-                        <li><strong>Date:</strong> {defect.timestamp}</li>
-                        <li><strong>Reported by:</strong> {defect.username}</li>
-                        {defect.type === 'crack' && defect.type_counts && (
-                          <li>
-                            <strong>Crack Types:</strong>
-                            <ul>
-                              {Object.entries(defect.type_counts).map(([type, count]) => (
-                                <li key={type}>{type}: {count}</li>
-                              ))}
-                            </ul>
-                          </li>
+
+                      {/* Basic Information */}
+                      <div className="mb-3">
+                        <h6 className="text-primary">Basic Information</h6>
+                        <ul className="list-unstyled small">
+                          <li><strong>Count:</strong> {defect.defect_count}</li>
+                          <li><strong>Date:</strong> {defect.timestamp}</li>
+                          <li><strong>Reported by:</strong> {defect.username}</li>
+                          <li><strong>Media Type:</strong> {defect.media_type}</li>
+                          <li><strong>GPS:</strong> {defect.position[0].toFixed(6)}, {defect.position[1].toFixed(6)}</li>
+                        </ul>
+                      </div>
+
+                      {/* Defect-specific Information */}
+                      {defect.type === 'crack' && defect.type_counts && (
+                        <div className="mb-3">
+                          <h6 className="text-primary">Crack Types</h6>
+                          <ul className="list-unstyled small">
+                            {Object.entries(defect.type_counts).map(([type, count]) => (
+                              <li key={type}><strong>{type}:</strong> {count}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {defect.type === 'kerb' && defect.condition_counts && (
+                        <div className="mb-3">
+                          <h6 className="text-primary">Kerb Conditions</h6>
+                          <ul className="list-unstyled small">
+                            {Object.entries(defect.condition_counts).map(([condition, count]) => (
+                              <li key={condition}><strong>{condition}:</strong> {count}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* EXIF/Metadata Information */}
+                      {(defect.exif_data || defect.metadata) && (
+                        <div className="mb-3">
+                          <h6 className="text-primary">Media Information</h6>
+                          <div className="small">
+                            {/* Camera Information */}
+                            {defect.exif_data?.camera_info && Object.keys(defect.exif_data.camera_info).length > 0 && (
+                              <div className="mb-2">
+                                <strong>Camera:</strong>
+                                <ul className="list-unstyled ms-2">
+                                  {defect.exif_data.camera_info.camera_make && (
+                                    <li>Make: {defect.exif_data.camera_info.camera_make}</li>
+                                  )}
+                                  {defect.exif_data.camera_info.camera_model && (
+                                    <li>Model: {defect.exif_data.camera_info.camera_model}</li>
+                                  )}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Technical Information */}
+                            {defect.exif_data?.technical_info && Object.keys(defect.exif_data.technical_info).length > 0 && (
+                              <div className="mb-2">
+                                <strong>Technical:</strong>
+                                <ul className="list-unstyled ms-2">
+                                  {defect.exif_data.technical_info.iso && (
+                                    <li>ISO: {defect.exif_data.technical_info.iso}</li>
+                                  )}
+                                  {defect.exif_data.technical_info.exposure_time && (
+                                    <li>Exposure: {defect.exif_data.technical_info.exposure_time}</li>
+                                  )}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Basic Media Info */}
+                            {defect.exif_data?.basic_info && (
+                              <div className="mb-2">
+                                <strong>Dimensions:</strong> {defect.exif_data.basic_info.width} × {defect.exif_data.basic_info.height}
+                                {defect.exif_data.basic_info.format && (
+                                  <span> ({defect.exif_data.basic_info.format})</span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Video-specific metadata */}
+                            {defect.metadata?.format_info && (
+                              <div className="mb-2">
+                                <strong>Duration:</strong> {Math.round(defect.metadata.format_info.duration)}s
+                                {defect.metadata.format_info.format_name && (
+                                  <span> ({defect.metadata.format_info.format_name})</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="d-flex gap-2">
+                        <Link
+                          to={`/view/${defect.image_id}`}
+                          className="btn btn-sm btn-primary"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          View Details
+                        </Link>
+                        {defect.original_image_full_url && (
+                          <a
+                            href={defect.original_image_full_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-outline-secondary"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            View Original
+                          </a>
                         )}
-                        {defect.type === 'kerb' && defect.condition_counts && (
-                          <li>
-                            <strong>Conditions:</strong>
-                            <ul>
-                              {Object.entries(defect.condition_counts).map(([condition, count]) => (
-                                <li key={condition}>{condition}: {count}</li>
-                              ))}
-                            </ul>
-                          </li>
-                        )}
-                      </ul>
-                      <Link 
-                        to={`/view/${defect.image_id}`} 
-                        className="btn btn-sm btn-primary"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        View Details
-                      </Link>
+                      </div>
                     </div>
                   </Popup>
                 </Marker>

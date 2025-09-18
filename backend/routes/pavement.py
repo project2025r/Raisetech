@@ -7,7 +7,8 @@ import json
 import traceback
 from config.db import connect_to_db, get_gridfs
 from utils.models import load_yolo_models, load_midas, estimate_depth, calculate_real_depth, calculate_pothole_dimensions, calculate_area, get_device, classify_road_image
-from utils.exif_utils import get_gps_coordinates, format_coordinates
+from utils.exif_utils import get_gps_coordinates, format_coordinates, get_comprehensive_exif_data
+from utils.video_metadata_utils import extract_video_metadata, get_video_gps_coordinates
 import pandas as pd
 import io
 from bson import ObjectId
@@ -27,6 +28,29 @@ from s3_mongodb_integration import ImageProcessingWorkflow, S3ImageManager, Mong
 from utils.file_validation import validate_upload_file, validate_base64_image, get_context_specific_error_message
 
 pavement_bp = Blueprint('pavement', __name__)
+
+def extract_media_metadata(media_data, media_type='image'):
+    """
+    Extract comprehensive metadata from uploaded media (image or video).
+
+    Args:
+        media_data: Base64 encoded media data
+        media_type: 'image' or 'video'
+
+    Returns:
+        dict: Comprehensive metadata including EXIF, GPS, timestamp, etc.
+    """
+    try:
+        if media_type == 'image':
+            return get_comprehensive_exif_data(media_data)
+        elif media_type == 'video':
+            return extract_video_metadata(media_data)
+        else:
+            logger.warning(f"Unknown media type: {media_type}")
+            return {}
+    except Exception as e:
+        logger.error(f"Error extracting metadata for {media_type}: {e}")
+        return {}
 
 # Global variables for models - lazy loaded or preloaded
 models = None
@@ -1257,6 +1281,10 @@ def detect_potholes():
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+
+        # Extract comprehensive EXIF metadata
+        exif_metadata = extract_media_metadata(image_data, 'image')
+        print(f"📊 Extracted EXIF metadata: {bool(exif_metadata)}")
         
         # Process the image
         processed_image = image.copy()
@@ -1701,7 +1729,10 @@ def detect_cracks():
                     "processed_image_s3_url": processed_s3_url,
                     "crack_count": len(crack_results),
                     "cracks": crack_results,
-                    "type_counts": condition_counts
+                    "type_counts": condition_counts,
+                    "exif_data": exif_metadata,
+                    "metadata": exif_metadata,
+                    "media_type": "image"
                 })
             except Exception as e:
                 print(f"Error saving image data: {e}")
@@ -1782,6 +1813,9 @@ def detect_kerbs():
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+
+        # Extract comprehensive EXIF metadata
+        exif_metadata = extract_media_metadata(image_data, 'image')
             
         # Process the image
         processed_image = image.copy()
@@ -1956,7 +1990,10 @@ def detect_kerbs():
                     "processed_image_s3_url": processed_s3_url,
                     "kerb_count": len(kerb_results),
                     "kerbs": kerb_results,
-                    "condition_counts": condition_counts
+                    "condition_counts": condition_counts,
+                    "exif_data": exif_metadata,
+                    "metadata": exif_metadata,
+                    "media_type": "image"
                 })
             except Exception as e:
                 print(f"Error saving image data: {e}")
@@ -2852,6 +2889,9 @@ def detect_all():
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
         coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+
+        # Extract comprehensive EXIF metadata
+        exif_metadata = extract_media_metadata(image_data, 'image')
         
         # CRITICAL FIX: Create separate copies for each model to prevent interference
         # Keep original image unchanged for model processing
@@ -3442,7 +3482,10 @@ def detect_all():
                 "role": role,
                 "original_image_s3_url": original_s3_url,
                 "processed_image_s3_url": processed_s3_url,
-                "detection_type": "all"
+                "detection_type": "all",
+                "exif_data": exif_metadata,
+                "metadata": exif_metadata,  # For backward compatibility
+                "media_type": "image"
             }
             
             # Determine which defects were actually detected (non-zero counts)

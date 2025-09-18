@@ -3,6 +3,10 @@ from PIL.ExifTags import TAGS, GPSTAGS
 import numpy as np
 import io
 import base64
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 def get_exif_data(image_data):
     """Extract EXIF data from an image.
@@ -75,6 +79,120 @@ def get_gps_coordinates(image_data):
             lon = -lon if lon is not None else None
     
     return lat, lon
+
+def get_comprehensive_exif_data(image_data):
+    """Extract comprehensive EXIF data including GPS, camera info, and timestamp."""
+    try:
+        # Handle base64 encoded images
+        if isinstance(image_data, str) and "base64," in image_data:
+            # Extract the base64 part
+            base64_data = image_data.split("base64,")[1]
+            # Convert to image
+            img_data = base64.b64decode(base64_data)
+            img = PIL.Image.open(io.BytesIO(img_data))
+        else:
+            # Handle regular file paths or file objects
+            img = PIL.Image.open(image_data)
+
+        # Get basic image info
+        basic_info = {
+            'width': img.width,
+            'height': img.height,
+            'format': img.format,
+            'mode': img.mode
+        }
+
+        # Get EXIF data
+        exif_data = {}
+        try:
+            exif_dict = img._getexif()
+            if exif_dict:
+                for tag, value in exif_dict.items():
+                    decoded = TAGS.get(tag, tag)
+                    if decoded == "GPSInfo":
+                        gps_data = {}
+                        for gps_tag in value:
+                            sub_decoded = GPSTAGS.get(gps_tag, gps_tag)
+                            gps_data[sub_decoded] = value[gps_tag]
+                        exif_data[decoded] = gps_data
+                    else:
+                        exif_data[decoded] = value
+        except Exception as e:
+            logger.warning(f"Error extracting EXIF data: {e}")
+
+        # Extract specific metadata
+        metadata = {
+            'basic_info': basic_info,
+            'exif_data': exif_data,
+            'gps_coordinates': None,
+            'timestamp': None,
+            'camera_info': {},
+            'technical_info': {}
+        }
+
+        # Extract GPS coordinates
+        if 'GPSInfo' in exif_data:
+            lat, lon = get_gps_coordinates(image_data)
+            if lat is not None and lon is not None:
+                metadata['gps_coordinates'] = {
+                    'latitude': lat,
+                    'longitude': lon,
+                    'coordinates_string': f"{lat},{lon}"
+                }
+
+        # Extract timestamp
+        timestamp_fields = ['DateTime', 'DateTimeOriginal', 'DateTimeDigitized']
+        for field in timestamp_fields:
+            if field in exif_data:
+                try:
+                    timestamp = datetime.strptime(exif_data[field], '%Y:%m:%d %H:%M:%S')
+                    metadata['timestamp'] = timestamp.isoformat()
+                    break
+                except ValueError:
+                    continue
+
+        # Extract camera information
+        camera_fields = {
+            'Make': 'camera_make',
+            'Model': 'camera_model',
+            'Software': 'software',
+            'LensModel': 'lens_model',
+            'LensMake': 'lens_make'
+        }
+
+        for exif_field, meta_field in camera_fields.items():
+            if exif_field in exif_data:
+                metadata['camera_info'][meta_field] = str(exif_data[exif_field])
+
+        # Extract technical information
+        technical_fields = {
+            'ExposureTime': 'exposure_time',
+            'FNumber': 'f_number',
+            'ISO': 'iso',
+            'ISOSpeedRatings': 'iso_speed',
+            'FocalLength': 'focal_length',
+            'Flash': 'flash',
+            'WhiteBalance': 'white_balance',
+            'ExposureMode': 'exposure_mode',
+            'SceneCaptureType': 'scene_type'
+        }
+
+        for exif_field, meta_field in technical_fields.items():
+            if exif_field in exif_data:
+                metadata['technical_info'][meta_field] = str(exif_data[exif_field])
+
+        return metadata
+
+    except Exception as e:
+        logger.error(f"Error extracting comprehensive EXIF data: {e}")
+        return {
+            'basic_info': {},
+            'exif_data': {},
+            'gps_coordinates': None,
+            'timestamp': None,
+            'camera_info': {},
+            'technical_info': {}
+        }
 
 def format_coordinates(lat, lon):
     """Format coordinates as a string."""
