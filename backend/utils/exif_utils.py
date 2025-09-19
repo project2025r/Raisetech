@@ -48,37 +48,61 @@ def convert_to_degrees(value):
     """Convert GPS coordinates from DMS (degree, minutes, seconds) to DD (decimal degrees)."""
     if not value:
         return None
-    
+
     try:
-        d = float(value[0])
-        m = float(value[1])
-        s = float(value[2])
+        def safe_float_conversion(val):
+            """Safely convert a value to float, handling rational numbers and zero denominators."""
+            if hasattr(val, 'numerator') and hasattr(val, 'denominator'):
+                # Handle rational numbers (fractions)
+                if val.denominator == 0:
+                    logger.warning(f"GPS coordinate has zero denominator: {val}")
+                    return 0.0
+                return float(val.numerator) / float(val.denominator)
+            else:
+                return float(val)
+
+        d = safe_float_conversion(value[0])
+        m = safe_float_conversion(value[1])
+        s = safe_float_conversion(value[2])
+
         return d + (m / 60.0) + (s / 3600.0)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, ZeroDivisionError, IndexError) as e:
+        logger.warning(f"Error converting GPS coordinates to degrees: {e}")
         return None
 
 def get_gps_coordinates(image_data):
     """Extract GPS coordinates from image EXIF data and return them as decimal degrees."""
-    exif_data = get_exif_data(image_data)
-    if not exif_data or "GPSInfo" not in exif_data:
+    try:
+        exif_data = get_exif_data(image_data)
+        if not exif_data or "GPSInfo" not in exif_data:
+            logger.debug("No EXIF data or GPS info found in image")
+            return None, None
+
+        gps_info = exif_data["GPSInfo"]
+        logger.debug(f"GPS info found: {list(gps_info.keys())}")
+
+        lat = None
+        lon = None
+
+        if "GPSLatitude" in gps_info and "GPSLatitudeRef" in gps_info:
+            logger.debug(f"GPS Latitude data: {gps_info['GPSLatitude']}")
+            lat = convert_to_degrees(gps_info["GPSLatitude"])
+            if lat is not None and gps_info["GPSLatitudeRef"] == "S":
+                lat = -lat
+            logger.debug(f"Converted latitude: {lat}")
+
+        if "GPSLongitude" in gps_info and "GPSLongitudeRef" in gps_info:
+            logger.debug(f"GPS Longitude data: {gps_info['GPSLongitude']}")
+            lon = convert_to_degrees(gps_info["GPSLongitude"])
+            if lon is not None and gps_info["GPSLongitudeRef"] == "W":
+                lon = -lon
+            logger.debug(f"Converted longitude: {lon}")
+
+        return lat, lon
+
+    except Exception as e:
+        logger.error(f"Error extracting GPS coordinates: {e}")
         return None, None
-    
-    gps_info = exif_data["GPSInfo"]
-    
-    lat = None
-    lon = None
-    
-    if "GPSLatitude" in gps_info and "GPSLatitudeRef" in gps_info:
-        lat = convert_to_degrees(gps_info["GPSLatitude"])
-        if gps_info["GPSLatitudeRef"] == "S":
-            lat = -lat if lat is not None else None
-    
-    if "GPSLongitude" in gps_info and "GPSLongitudeRef" in gps_info:
-        lon = convert_to_degrees(gps_info["GPSLongitude"])
-        if gps_info["GPSLongitudeRef"] == "W":
-            lon = -lon if lon is not None else None
-    
-    return lat, lon
 
 def get_comprehensive_exif_data(image_data):
     """Extract comprehensive EXIF data including GPS, camera info, and timestamp."""
