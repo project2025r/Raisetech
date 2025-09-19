@@ -15,17 +15,30 @@ L.Icon.Default.mergeOptions({
 });
 
 // Custom marker icons for different defect types using location icons
-const createCustomIcon = (color) => {
+const createCustomIcon = (color, isVideo = false) => {
+  const iconSize = isVideo ? [36, 36] : [32, 32];
+
+  // Create different SVG content for video vs image markers
+  const svgContent = isVideo ?
+    // Video marker with camera icon made from SVG shapes (no Unicode)
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="${iconSize[0]}px" height="${iconSize[1]}px">
+      <path d="M0 0h24v24H0z" fill="none"/>
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+      <rect x="8" y="6" width="8" height="6" rx="1" fill="white"/>
+      <circle cx="9.5" cy="7.5" r="1" fill="${color}"/>
+      <rect x="11" y="7" width="4" height="2" fill="${color}"/>
+    </svg>` :
+    // Image marker with standard location pin (no Unicode)
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="${iconSize[0]}px" height="${iconSize[1]}px">
+      <path d="M0 0h24v24H0z" fill="none"/>
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+    </svg>`;
+
   return L.icon({
-    iconUrl: `data:image/svg+xml;base64,${btoa(`
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="32px" height="32px">
-        <path d="M0 0h24v24H0z" fill="none"/>
-        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-      </svg>
-    `)}`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 32],
-    popupAnchor: [0, -32],
+    iconUrl: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svgContent)}`,
+    iconSize: iconSize,
+    iconAnchor: [iconSize[0]/2, iconSize[1]],
+    popupAnchor: [0, -iconSize[1]],
   });
 };
 
@@ -33,6 +46,10 @@ const icons = {
   pothole: createCustomIcon('#FF0000'), // Red for potholes
   crack: createCustomIcon('#FFCC00'),   // Yellow for cracks (alligator cracks)
   kerb: createCustomIcon('#0066FF'),    // Blue for kerb defects
+  // Video variants
+  'pothole-video': createCustomIcon('#FF0000', true), // Red for pothole videos
+  'crack-video': createCustomIcon('#FFCC00', true),   // Yellow for crack videos
+  'kerb-video': createCustomIcon('#0066FF', true),    // Blue for kerb videos
 };
 
 function DefectMap({ user }) {
@@ -340,17 +357,35 @@ function DefectMap({ user }) {
         <Row>
           <Col>
             <div className="map-legend mb-3">
-              <div className="legend-item">
-                <div className="legend-marker" style={{ backgroundColor: '#FF0000' }}></div>
-                <span>Potholes</span>
+              <div className="legend-section">
+                <h6 className="legend-title">📷 Images</h6>
+                <div className="legend-item">
+                  <div className="legend-marker" style={{ backgroundColor: '#FF0000' }}></div>
+                  <span>Potholes</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-marker" style={{ backgroundColor: '#FFCC00' }}></div>
+                  <span>Cracks</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-marker" style={{ backgroundColor: '#0066FF' }}></div>
+                  <span>Kerb Defects</span>
+                </div>
               </div>
-              <div className="legend-item">
-                <div className="legend-marker" style={{ backgroundColor: '#FFCC00' }}></div>
-                <span>Cracks</span>
-              </div>
-              <div className="legend-item">
-                <div className="legend-marker" style={{ backgroundColor: '#0066FF' }}></div>
-                <span>Kerb Defects</span>
+              <div className="legend-section">
+                <h6 className="legend-title">📹 Videos</h6>
+                <div className="legend-item">
+                  <div className="legend-marker video-marker" style={{ backgroundColor: '#FF0000' }}>📹</div>
+                  <span>Pothole Videos</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-marker video-marker" style={{ backgroundColor: '#FFCC00' }}>📹</div>
+                  <span>Crack Videos</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-marker video-marker" style={{ backgroundColor: '#0066FF' }}>📹</div>
+                  <span>Kerb Videos</span>
+                </div>
               </div>
             </div>
           </Col>
@@ -377,15 +412,39 @@ function DefectMap({ user }) {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
               
-              {filteredDefects.map((defect) => (
+              {filteredDefects.map((defect) => {
+                // Determine icon based on media type and defect type
+                const iconKey = defect.media_type === 'video' ? `${defect.type}-video` : defect.type;
+                const selectedIcon = icons[iconKey] || icons[defect.type];
+
+                return (
                 <Marker
                   key={defect.id}
                   position={defect.position}
-                  icon={icons[defect.type]}
+                  icon={selectedIcon}
                 >
                   <Popup maxWidth={400}>
                     <div className="defect-popup">
                       <h6>{defect.type.charAt(0).toUpperCase() + defect.type.slice(1)} Defect</h6>
+
+                      {/* Video Thumbnail */}
+                      {defect.media_type === 'video' && defect.representative_frame && (
+                        <div className="mb-3 text-center">
+                          <img
+                            src={`data:image/jpeg;base64,${defect.representative_frame}`}
+                            alt="Video thumbnail"
+                            className="img-fluid border rounded"
+                            style={{ maxHeight: '150px', maxWidth: '100%' }}
+                            onError={(e) => {
+                              console.warn(`Failed to load representative frame for video ${defect.image_id}`);
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                          <div className="mt-1">
+                            <small className="text-info fw-bold">📹 Video Thumbnail</small>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Basic Information */}
                       <div className="mb-3">
@@ -468,12 +527,29 @@ function DefectMap({ user }) {
                             )}
 
                             {/* Video-specific metadata */}
-                            {defect.metadata?.format_info && (
-                              <div className="mb-2">
-                                <strong>Duration:</strong> {Math.round(defect.metadata.format_info.duration)}s
-                                {defect.metadata.format_info.format_name && (
-                                  <span> ({defect.metadata.format_info.format_name})</span>
-                                )}
+                            {defect.media_type === 'video' && (
+                              <div className="mb-3">
+                                <h6 className="text-info">📹 Video Information</h6>
+                                <ul className="list-unstyled small">
+                                  {defect.metadata?.format_info?.duration && (
+                                    <li><strong>Duration:</strong> {Math.round(defect.metadata.format_info.duration)}s</li>
+                                  )}
+                                  {defect.metadata?.basic_info?.width && defect.metadata?.basic_info?.height && (
+                                    <li><strong>Resolution:</strong> {defect.metadata.basic_info.width}x{defect.metadata.basic_info.height}</li>
+                                  )}
+                                  {defect.metadata?.format_info?.format_name && (
+                                    <li><strong>Format:</strong> {defect.metadata.format_info.format_name.toUpperCase()}</li>
+                                  )}
+                                  {defect.video_id && (
+                                    <li><strong>Video ID:</strong> {defect.video_id}</li>
+                                  )}
+                                  {defect.original_video_url && (
+                                    <li><strong>Original Video:</strong> Available</li>
+                                  )}
+                                  {defect.processed_video_url && (
+                                    <li><strong>Processed Video:</strong> Available</li>
+                                  )}
+                                </ul>
                               </div>
                             )}
                           </div>
@@ -504,7 +580,8 @@ function DefectMap({ user }) {
                     </div>
                   </Popup>
                 </Marker>
-              ))}
+                );
+              })}
             </MapContainer>
           </div>
         )}

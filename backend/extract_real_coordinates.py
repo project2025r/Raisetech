@@ -17,8 +17,13 @@ import io
 from datetime import datetime
 
 # Import existing utilities
-from utils.exif_utils import get_gps_coordinates, format_coordinates
-from utils.video_metadata_utils import get_video_gps_coordinates, extract_video_metadata
+try:
+    from utils.exif_utils import get_gps_coordinates, format_coordinates
+    from utils.video_metadata_utils import get_video_gps_coordinates, extract_video_metadata
+except ModuleNotFoundError as e:
+    import sys
+    print(f"Error: {e}. Please ensure 'utils/exif_utils.py' and 'utils/video_metadata_utils.py' exist and are in the correct path.")
+    sys.exit(1)
 
 logger = logging.getLogger(__name__)
 

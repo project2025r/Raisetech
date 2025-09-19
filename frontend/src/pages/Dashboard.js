@@ -28,6 +28,12 @@ const getImageUrlForDisplay = (imageData, imageType = 'original') => {
     return null;
   }
 
+  // Check if this is video data with representative frame
+  if (imageData.media_type === 'video' && imageData.representative_frame) {
+    console.log('Using representative frame for video data');
+    return `data:image/jpeg;base64,${imageData.representative_frame}`;
+  }
+
   // Try S3 full URL first (new images with pre-generated URLs) - proxy through backend
   const fullUrlField = `${imageType}_image_full_url`;
   if (imageData[fullUrlField]) {

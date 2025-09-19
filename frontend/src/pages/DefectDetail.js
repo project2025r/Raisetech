@@ -105,6 +105,30 @@ function DefectDetail() {
               <Row>
                 <Col md={6} className="text-center mb-4">
                   {defectData.image && (() => {
+                    // Check if this is video data with representative frame
+                    if (defectData.image.media_type === 'video' && defectData.image.representative_frame) {
+                      return (
+                        <div className="defect-image-container">
+                          <img
+                            src={`data:image/jpeg;base64,${defectData.image.representative_frame}`}
+                            alt={`${defectData.type} video thumbnail`}
+                            className="img-fluid border rounded shadow-sm"
+                            style={{ maxHeight: '400px' }}
+                            onError={(e) => {
+                              console.warn(`Failed to load representative frame for video ${defectData.image.image_id}`);
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                          <div className="mt-2">
+                            <small className="text-info fw-bold">
+                              📹 Video Thumbnail
+                            </small>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Handle regular image data
                     // Check if S3 URLs are available (new format)
                     const s3Url = imageType === 'original'
                       ? (defectData.image.original_image_full_url || defectData.image.original_image_s3_url)
