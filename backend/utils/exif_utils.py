@@ -55,17 +55,32 @@ def convert_to_degrees(value):
             if hasattr(val, 'numerator') and hasattr(val, 'denominator'):
                 # Handle rational numbers (fractions)
                 if val.denominator == 0:
-                    logger.warning(f"GPS coordinate has zero denominator: {val}")
-                    return 0.0
+                    logger.warning(f"GPS coordinate has zero denominator: {val}, skipping this coordinate")
+                    return None  # Return None instead of 0.0 to indicate invalid data
                 return float(val.numerator) / float(val.denominator)
             else:
                 return float(val)
 
+        # Convert each component safely
         d = safe_float_conversion(value[0])
         m = safe_float_conversion(value[1])
         s = safe_float_conversion(value[2])
 
-        return d + (m / 60.0) + (s / 3600.0)
+        # If any component is None (due to zero denominator), return None
+        if d is None or m is None or s is None:
+            logger.warning(f"One or more GPS coordinate components are invalid: d={d}, m={m}, s={s}")
+            return None
+
+        # Calculate decimal degrees
+        decimal_degrees = d + (m / 60.0) + (s / 3600.0)
+
+        # Validate the result is within reasonable GPS bounds
+        if not (-180 <= decimal_degrees <= 180):
+            logger.warning(f"GPS coordinate out of valid range: {decimal_degrees}")
+            return None
+
+        return decimal_degrees
+
     except (ValueError, TypeError, ZeroDivisionError, IndexError) as e:
         logger.warning(f"Error converting GPS coordinates to degrees: {e}")
         return None
@@ -84,19 +99,50 @@ def get_gps_coordinates(image_data):
         lat = None
         lon = None
 
+        # Extract latitude
         if "GPSLatitude" in gps_info and "GPSLatitudeRef" in gps_info:
             logger.debug(f"GPS Latitude data: {gps_info['GPSLatitude']}")
-            lat = convert_to_degrees(gps_info["GPSLatitude"])
-            if lat is not None and gps_info["GPSLatitudeRef"] == "S":
-                lat = -lat
-            logger.debug(f"Converted latitude: {lat}")
+            logger.debug(f"GPS Latitude reference: {gps_info['GPSLatitudeRef']}")
 
+            lat = convert_to_degrees(gps_info["GPSLatitude"])
+            if lat is not None:
+                # Apply hemisphere correction
+                if gps_info["GPSLatitudeRef"] == "S":
+                    lat = -lat
+                logger.info(f"✅ Successfully extracted latitude: {lat}")
+            else:
+                logger.warning("❌ Failed to convert latitude to degrees")
+        else:
+            logger.debug("No GPS latitude data found in EXIF")
+
+        # Extract longitude
         if "GPSLongitude" in gps_info and "GPSLongitudeRef" in gps_info:
             logger.debug(f"GPS Longitude data: {gps_info['GPSLongitude']}")
+            logger.debug(f"GPS Longitude reference: {gps_info['GPSLongitudeRef']}")
+
             lon = convert_to_degrees(gps_info["GPSLongitude"])
-            if lon is not None and gps_info["GPSLongitudeRef"] == "W":
-                lon = -lon
-            logger.debug(f"Converted longitude: {lon}")
+            if lon is not None:
+                # Apply hemisphere correction
+                if gps_info["GPSLongitudeRef"] == "W":
+                    lon = -lon
+                logger.info(f"✅ Successfully extracted longitude: {lon}")
+            else:
+                logger.warning("❌ Failed to convert longitude to degrees")
+        else:
+            logger.debug("No GPS longitude data found in EXIF")
+
+        # Final validation
+        if lat is not None and lon is not None:
+            # Validate coordinate ranges
+            if not (-90 <= lat <= 90):
+                logger.error(f"Invalid latitude value: {lat} (must be between -90 and 90)")
+                lat = None
+            if not (-180 <= lon <= 180):
+                logger.error(f"Invalid longitude value: {lon} (must be between -180 and 180)")
+                lon = None
+
+            if lat is not None and lon is not None:
+                logger.info(f"🎯 Final GPS coordinates: ({lat:.6f}, {lon:.6f})")
 
         return lat, lon
 

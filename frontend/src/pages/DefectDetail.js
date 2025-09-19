@@ -198,6 +198,146 @@ function DefectDetail() {
                 </Col>
               </Row>
 
+              {/* EXIF/Metadata Information */}
+              {(defectData.image.exif_data || defectData.image.metadata) && (
+                <Row className="mt-4">
+                  <Col md={12}>
+                    <h5>Media Information</h5>
+                    <div className="row">
+                      {/* Camera Information */}
+                      {defectData.image.exif_data?.camera_info && Object.keys(defectData.image.exif_data.camera_info).length > 0 && (
+                        <div className="col-md-6 mb-3">
+                          <h6 className="text-primary">Camera Information</h6>
+                          <table className="table table-sm table-bordered">
+                            <tbody>
+                              {defectData.image.exif_data.camera_info.camera_make && (
+                                <tr>
+                                  <th width="40%">Make</th>
+                                  <td>{defectData.image.exif_data.camera_info.camera_make}</td>
+                                </tr>
+                              )}
+                              {defectData.image.exif_data.camera_info.camera_model && (
+                                <tr>
+                                  <th>Model</th>
+                                  <td>{defectData.image.exif_data.camera_info.camera_model}</td>
+                                </tr>
+                              )}
+                              {defectData.image.exif_data.camera_info.software && (
+                                <tr>
+                                  <th>Software</th>
+                                  <td>{defectData.image.exif_data.camera_info.software}</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* GPS Information */}
+                      {(defectData.image.exif_data?.GPSInfo || defectData.image.metadata?.gps_coordinates) && (
+                        <div className="col-md-6 mb-3">
+                          <h6 className="text-primary">GPS Information</h6>
+                          <table className="table table-sm table-bordered">
+                            <tbody>
+                              {defectData.image.metadata?.gps_coordinates?.latitude && (
+                                <tr>
+                                  <th width="40%">Latitude</th>
+                                  <td>{defectData.image.metadata.gps_coordinates.latitude.toFixed(6)}</td>
+                                </tr>
+                              )}
+                              {defectData.image.metadata?.gps_coordinates?.longitude && (
+                                <tr>
+                                  <th>Longitude</th>
+                                  <td>{defectData.image.metadata.gps_coordinates.longitude.toFixed(6)}</td>
+                                </tr>
+                              )}
+                              {defectData.image.metadata?.location_info?.location_name && (
+                                <tr>
+                                  <th>Location</th>
+                                  <td>{defectData.image.metadata.location_info.location_name}</td>
+                                </tr>
+                              )}
+                              {defectData.image.metadata?.location_info?.country && (
+                                <tr>
+                                  <th>Country</th>
+                                  <td>{defectData.image.metadata.location_info.country}</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Technical Information */}
+                      {defectData.image.exif_data?.technical_info && Object.keys(defectData.image.exif_data.technical_info).length > 0 && (
+                        <div className="col-md-6 mb-3">
+                          <h6 className="text-primary">Technical Information</h6>
+                          <table className="table table-sm table-bordered">
+                            <tbody>
+                              {defectData.image.exif_data.technical_info.iso && (
+                                <tr>
+                                  <th width="40%">ISO</th>
+                                  <td>{defectData.image.exif_data.technical_info.iso}</td>
+                                </tr>
+                              )}
+                              {defectData.image.exif_data.technical_info.exposure_time && (
+                                <tr>
+                                  <th>Exposure Time</th>
+                                  <td>{defectData.image.exif_data.technical_info.exposure_time}</td>
+                                </tr>
+                              )}
+                              {defectData.image.exif_data.technical_info.f_number && (
+                                <tr>
+                                  <th>F-Number</th>
+                                  <td>{defectData.image.exif_data.technical_info.f_number}</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Media Format Information */}
+                      {(defectData.image.exif_data?.basic_info || defectData.image.metadata?.basic_info) && (
+                        <div className="col-md-6 mb-3">
+                          <h6 className="text-primary">Format Information</h6>
+                          <table className="table table-sm table-bordered">
+                            <tbody>
+                              {(defectData.image.exif_data?.basic_info?.width || defectData.image.metadata?.basic_info?.width) && (
+                                <tr>
+                                  <th width="40%">Dimensions</th>
+                                  <td>
+                                    {(defectData.image.exif_data?.basic_info?.width || defectData.image.metadata?.basic_info?.width)} × {(defectData.image.exif_data?.basic_info?.height || defectData.image.metadata?.basic_info?.height)}
+                                  </td>
+                                </tr>
+                              )}
+                              {(defectData.image.exif_data?.basic_info?.format || defectData.image.metadata?.basic_info?.format) && (
+                                <tr>
+                                  <th>Format</th>
+                                  <td>{defectData.image.exif_data?.basic_info?.format || defectData.image.metadata?.basic_info?.format}</td>
+                                </tr>
+                              )}
+                              {defectData.image.metadata?.basic_info?.duration && (
+                                <tr>
+                                  <th>Duration</th>
+                                  <td>{defectData.image.metadata.basic_info.duration}s</td>
+                                </tr>
+                              )}
+                              {defectData.image.metadata?.format_info?.bit_rate && (
+                                <tr>
+                                  <th>Bit Rate</th>
+                                  <td>{(defectData.image.metadata.format_info.bit_rate / 1000000).toFixed(1)} Mbps</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </Col>
+                </Row>
+              )}
+
               {defectData.type === 'pothole' && defectData.image.potholes && (
                 <div className="mt-4">
                   <h5>Pothole Details</h5>

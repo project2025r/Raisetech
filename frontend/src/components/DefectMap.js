@@ -200,6 +200,16 @@ function DefectMap({ user }) {
     fetchUsers();
   }, [user]);
 
+  // Set up real-time updates with polling
+  useEffect(() => {
+    const interval = setInterval(() => {
+      console.log('🔄 Auto-refreshing defect map data...');
+      fetchDefectData();
+    }, 30000); // Refresh every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [startDate, endDate, selectedUser]);
+
   // Handle filter application
   const handleApplyFilters = () => {
     fetchDefectData();

@@ -1280,7 +1280,13 @@ def detect_potholes():
         
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
+
+        # Log coordinate extraction results
+        if lat is not None and lon is not None:
+            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+        else:
+            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
@@ -1553,7 +1559,13 @@ def detect_cracks():
             }), 400
 
         lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
+
+        # Log coordinate extraction results
+        if lat is not None and lon is not None:
+            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+        else:
+            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
         processed_image = image.copy()
 
         # Classify the image to check if it contains a road (unless skipped)
@@ -1812,7 +1824,13 @@ def detect_kerbs():
             
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
+
+        # Log coordinate extraction results
+        if lat is not None and lon is not None:
+            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+        else:
+            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
@@ -2888,7 +2906,13 @@ def detect_all():
             
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat and lon else client_coordinates
+        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
+
+        # Log coordinate extraction results
+        if lat is not None and lon is not None:
+            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+        else:
+            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
@@ -3832,7 +3856,7 @@ def detect_video():
     """
     logger.info("Received video detection request")
     # Get parameters from request
-    coordinates = request.form.get('coordinates', 'Not Available')
+    client_coordinates = request.form.get('coordinates', 'Not Available')
     selected_model = request.form.get('selectedModel', 'All')
     # Extract user/role/id from session or request (like image endpoints)
     username = (
@@ -3851,7 +3875,10 @@ def detect_video():
     s3_role = role.capitalize() if role else 'UnknownRole'
     s3_id = username
     logger.info(f"Processing video with model: {selected_model}")
-    logger.info(f"Coordinates: {coordinates}")
+    logger.info(f"Client coordinates: {client_coordinates}")
+
+    # Extract GPS coordinates from video metadata
+    coordinates = client_coordinates  # Default to client coordinates
     try:
         # Check if we have video data
         if 'video' not in request.files or not request.files['video']:
@@ -3883,6 +3910,18 @@ def detect_video():
         temp_video_path = os.path.join(os.path.dirname(__file__), original_video_name)
         logger.info(f"Saving video to temporary path: {temp_video_path} (original: {original_filename})")
         video_file.save(temp_video_path)
+
+        # Try to extract GPS coordinates from video metadata
+        try:
+            lat, lon = get_video_gps_coordinates(temp_video_path)
+            if lat is not None and lon is not None:
+                coordinates = format_coordinates(lat, lon)
+                logger.info(f"🎯 Using video GPS coordinates: {coordinates}")
+            else:
+                logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
+        except Exception as e:
+            logger.warning(f"Failed to extract GPS from video: {e}")
+            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
         
         # Get AWS configuration
         aws_folder = os.environ.get('AWS_FOLDER', 'LTA')
@@ -3912,6 +3951,10 @@ def detect_video():
         except Exception as e:
             logger.error(f"Error uploading original video: {e}")
         
+        # Extract comprehensive video metadata
+        video_metadata = extract_media_metadata(temp_video_path, 'video')
+        logger.info(f"📊 Extracted video metadata: {bool(video_metadata)}")
+
         # Create initial video_processing document here
         timestamp = datetime.now().isoformat()
         models_to_run = []
@@ -3932,8 +3975,11 @@ def detect_video():
                 "role": role,
                 "username": username,
                 "timestamp": timestamp,
+                "coordinates": coordinates,
                 "models_run": models_to_run,
                 "status": "processing",
+                "metadata": video_metadata,
+                "uploaded_video_name": original_filename,
                 "model_outputs": {
                     "potholes": [],
                     "cracks": [],
