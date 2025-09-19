@@ -123,7 +123,9 @@ def get_dashboard_summary_v2():
                 }), 500
 
             # Apply RBAC filters to the dashboard data
+            logger.info(f"Applying RBAC filters to dashboard data with filters: {query_filter}")
             filtered_dashboard_data = apply_rbac_filters_to_dashboard_data(dashboard_result, query_filter)
+            logger.info(f"RBAC filtering completed successfully")
 
             # Add video processing data to dashboard
             try:
@@ -263,62 +265,146 @@ def apply_rbac_filters_to_dashboard_data(dashboard_data, filters):
     Returns:
         dict: Filtered dashboard data
     """
+    logger.info(f"Starting RBAC filtering with filters: {filters}")
     filtered_data = {}
 
     for defect_type, data in dashboard_data.items():
+        logger.info(f"Processing defect type: {defect_type}")
+
         if 'latest' in data:
             # Apply filters to the latest data
             filtered_latest = []
+            logger.info(f"Filtering {len(data['latest'])} items for {defect_type}")
 
-            for item in data['latest']:
-                # Apply username filter
-                if 'username' in filters and item.get('username') != filters['username']:
-                    continue
+            for i, item in enumerate(data['latest']):
+                logger.debug(f"Processing item {i} for {defect_type}: timestamp={item.get('timestamp')} (type: {type(item.get('timestamp'))}), role={item.get('role')}")
 
-                # Apply role filter (handle both simple string and MongoDB-style $in queries)
-                if 'role' in filters:
-                    role_filter = filters['role']
-                    item_role = item.get('role')
+                try:
+                    # Apply username filter
+                    if 'username' in filters and item.get('username') != filters['username']:
+                        continue
 
-                    # Handle MongoDB-style $in query
-                    if isinstance(role_filter, dict) and '$in' in role_filter:
-                        allowed_roles = role_filter['$in']
-                        if item_role not in allowed_roles:
-                            continue
-                    # Handle simple string comparison
-                    elif isinstance(role_filter, str):
-                        if item_role != role_filter:
-                            continue
+                    # Apply role filter (handle both simple string and MongoDB-style $in queries)
+                    if 'role' in filters:
+                        role_filter = filters['role']
+                        item_role = item.get('role')
 
-                # Apply timestamp filter
-                if 'timestamp' in filters:
-                    timestamp_filter = filters['timestamp']
-                    item_timestamp = item.get('timestamp')
+                        # Handle MongoDB-style $in query
+                        if isinstance(role_filter, dict) and '$in' in role_filter:
+                            allowed_roles = role_filter['$in']
+                            if item_role not in allowed_roles:
+                                continue
+                        # Handle simple string comparison
+                        elif isinstance(role_filter, str):
+                            if item_role != role_filter:
+                                continue
+
+                    # Apply timestamp filter
+                    if 'timestamp' in filters:
+                        timestamp_filter = filters['timestamp']
+                        item_timestamp = item.get('timestamp')
+                        logger.debug(f"Timestamp filter check: item_timestamp={item_timestamp} (type: {type(item_timestamp)}), filter={timestamp_filter}")
 
                     if item_timestamp:
+                        # Convert item_timestamp to datetime if it's not already
+                        if isinstance(item_timestamp, str):
+                            try:
+                                from datetime import datetime
+                                # Try parsing common timestamp formats
+                                if 'T' in item_timestamp:
+                                    # ISO format: 2025-09-18T22:20:01.141160
+                                    item_timestamp = datetime.fromisoformat(item_timestamp.replace('Z', '+00:00'))
+                                else:
+                                    # Try other common formats
+                                    item_timestamp = datetime.strptime(item_timestamp, '%Y-%m-%d %H:%M:%S')
+                            except (ValueError, TypeError) as e:
+                                logger.debug(f"Could not parse timestamp string {item_timestamp}: {e}")
+                                # If we can't parse the timestamp, skip filtering for this item
+                                continue
+                        elif isinstance(item_timestamp, (int, float)):
+                            try:
+                                from datetime import datetime
+                                # Convert Unix timestamp to datetime
+                                item_timestamp = datetime.fromtimestamp(item_timestamp)
+                            except (ValueError, TypeError, OSError) as e:
+                                logger.debug(f"Could not parse timestamp number {item_timestamp}: {e}")
+                                # If we can't parse the timestamp, skip filtering for this item
+                                continue
+
                         # Handle MongoDB-style date range queries
                         if isinstance(timestamp_filter, dict):
                             # Check $gte (greater than or equal)
                             if '$gte' in timestamp_filter:
-                                if item_timestamp < timestamp_filter['$gte']:
-                                    logger.debug(f"Filtering out item: {item_timestamp} < {timestamp_filter['$gte']}")
+                                filter_date = timestamp_filter['$gte']
+                                # Ensure both are datetime objects for comparison
+                                if isinstance(filter_date, str):
+                                    try:
+                                        filter_date = datetime.fromisoformat(filter_date.replace('Z', '+00:00'))
+                                    except ValueError:
+                                        try:
+                                            filter_date = datetime.strptime(filter_date, '%Y-%m-%d %H:%M:%S')
+                                        except ValueError:
+                                            logger.debug(f"Could not parse filter date {filter_date}")
+                                            continue
+                                elif isinstance(filter_date, (int, float)):
+                                    try:
+                                        filter_date = datetime.fromtimestamp(filter_date)
+                                    except (ValueError, TypeError, OSError):
+                                        logger.debug(f"Could not parse filter timestamp {filter_date}")
+                                        continue
+
+                                try:
+                                    if item_timestamp < filter_date:
+                                        logger.debug(f"Filtering out item: {item_timestamp} < {filter_date}")
+                                        continue
+                                except TypeError as e:
+                                    logger.debug(f"Type error comparing timestamps: {e}")
                                     continue
 
                             # Check $lte (less than or equal)
                             if '$lte' in timestamp_filter:
-                                if item_timestamp > timestamp_filter['$lte']:
-                                    logger.debug(f"Filtering out item: {item_timestamp} > {timestamp_filter['$lte']}")
+                                filter_date = timestamp_filter['$lte']
+                                # Ensure both are datetime objects for comparison
+                                if isinstance(filter_date, str):
+                                    try:
+                                        filter_date = datetime.fromisoformat(filter_date.replace('Z', '+00:00'))
+                                    except ValueError:
+                                        try:
+                                            filter_date = datetime.strptime(filter_date, '%Y-%m-%d %H:%M:%S')
+                                        except ValueError:
+                                            logger.debug(f"Could not parse filter date {filter_date}")
+                                            continue
+                                elif isinstance(filter_date, (int, float)):
+                                    try:
+                                        filter_date = datetime.fromtimestamp(filter_date)
+                                    except (ValueError, TypeError, OSError):
+                                        logger.debug(f"Could not parse filter timestamp {filter_date}")
+                                        continue
+
+                                try:
+                                    if item_timestamp > filter_date:
+                                        logger.debug(f"Filtering out item: {item_timestamp} > {filter_date}")
+                                        continue
+                                except TypeError as e:
+                                    logger.debug(f"Type error comparing timestamps: {e}")
                                     continue
                         # Handle simple string comparison
                         elif isinstance(timestamp_filter, str):
-                            if item_timestamp != timestamp_filter:
+                            if str(item_timestamp) != timestamp_filter:
                                 continue
                     else:
                         # If no timestamp, filter it out when date filter is applied
                         logger.debug(f"Filtering out item with no timestamp when date filter is active")
                         continue
 
-                filtered_latest.append(item)
+                    # If we get here, the item passed all filters
+                    filtered_latest.append(item)
+
+                except Exception as filter_error:
+                    logger.error(f"Error filtering item {i} for {defect_type}: {filter_error}")
+                    logger.error(f"Item data: {item}")
+                    # Skip this item and continue with the next one
+                    continue
 
             filtered_data[defect_type] = {
                 'latest': filtered_latest,
@@ -426,8 +512,8 @@ def get_dashboard_summary():
         # Get data from pothole images
         if pothole_count > 0:
             try:
-                # Get pothole images sorted by timestamp
-                pothole_images = list(db.pothole_images.find(query_filter).sort([("timestamp", -1)]))
+                # Get pothole images sorted by _id (which is chronological)
+                pothole_images = list(db.pothole_images.find(query_filter).sort([("_id", -1)]))
                 
                 # Calculate total volume and count for average
                 total_volume = 0
@@ -495,8 +581,8 @@ def get_dashboard_summary():
         # Get data from crack images
         if crack_count > 0:
             try:
-                # Get crack images sorted by timestamp
-                crack_images = list(db.crack_images.find(query_filter).sort([("timestamp", -1)]))
+                # Get crack images sorted by _id (which is chronological)
+                crack_images = list(db.crack_images.find(query_filter).sort([("_id", -1)]))
                 
                 for image in crack_images:
                     # Add type counts if available
@@ -563,8 +649,8 @@ def get_dashboard_summary():
         # Get data from kerb images
         if kerb_count > 0:
             try:
-                # Get kerb images sorted by timestamp
-                kerb_images = list(db.kerb_images.find(query_filter).sort([("timestamp", -1)]))
+                # Get kerb images sorted by _id (which is chronological)
+                kerb_images = list(db.kerb_images.find(query_filter).sort([("_id", -1)]))
                 
                 for image in kerb_images:
                     # Add condition counts if available
@@ -1389,7 +1475,9 @@ def get_image_stats():
             'original_image_s3_url': 1,
             'exif_data': 1,
             'metadata': 1,
-            'media_type': 1
+            'media_type': 1,
+            'representative_frame': 1,
+            'video_id': 1
         }))
         logger.info(f"Found {len(pothole_images)} pothole images")
 
@@ -1405,7 +1493,9 @@ def get_image_stats():
             'original_image_s3_url': 1,
             'exif_data': 1,
             'metadata': 1,
-            'media_type': 1
+            'media_type': 1,
+            'representative_frame': 1,
+            'video_id': 1
         }))
         logger.info(f"Found {len(crack_images)} crack images")
 
@@ -1421,7 +1511,9 @@ def get_image_stats():
             'original_image_s3_url': 1,
             'exif_data': 1,
             'metadata': 1,
-            'media_type': 1
+            'media_type': 1,
+            'representative_frame': 1,
+            'video_id': 1
         }))
         logger.info(f"Found {len(kerb_images)} kerb images")
         
@@ -1430,7 +1522,7 @@ def get_image_stats():
         
         # Process pothole images
         for img in pothole_images:
-            all_images.append({
+            image_data = {
                 "id": str(img.get('_id')),
                 "image_id": img.get('image_id'),
                 "timestamp": img.get('timestamp'),
@@ -1444,11 +1536,18 @@ def get_image_stats():
                 "exif_data": img.get('exif_data', {}),
                 "metadata": img.get('metadata', {}),
                 "media_type": img.get('media_type', 'image')
-            })
+            }
+
+            # Add representative frame for video data
+            if img.get('media_type') == 'video' and img.get('representative_frame'):
+                image_data['representative_frame'] = img.get('representative_frame')
+                image_data['video_id'] = img.get('video_id')
+
+            all_images.append(image_data)
         
         # Process crack images
         for img in crack_images:
-            all_images.append({
+            image_data = {
                 "id": str(img.get('_id')),
                 "image_id": img.get('image_id'),
                 "timestamp": img.get('timestamp'),
@@ -1463,11 +1562,18 @@ def get_image_stats():
                 "exif_data": img.get('exif_data', {}),
                 "metadata": img.get('metadata', {}),
                 "media_type": img.get('media_type', 'image')
-            })
+            }
+
+            # Add representative frame for video data
+            if img.get('media_type') == 'video' and img.get('representative_frame'):
+                image_data['representative_frame'] = img.get('representative_frame')
+                image_data['video_id'] = img.get('video_id')
+
+            all_images.append(image_data)
 
         # Process kerb images
         for img in kerb_images:
-            all_images.append({
+            image_data = {
                 "id": str(img.get('_id')),
                 "image_id": img.get('image_id'),
                 "timestamp": img.get('timestamp'),
@@ -1482,7 +1588,14 @@ def get_image_stats():
                 "exif_data": img.get('exif_data', {}),
                 "metadata": img.get('metadata', {}),
                 "media_type": img.get('media_type', 'image')
-            })
+            }
+
+            # Add representative frame for video data
+            if img.get('media_type') == 'video' and img.get('representative_frame'):
+                image_data['representative_frame'] = img.get('representative_frame')
+                image_data['video_id'] = img.get('video_id')
+
+            all_images.append(image_data)
         
         # Sort all images by timestamp
         all_images.sort(key=lambda x: x.get("timestamp", ""), reverse=True)

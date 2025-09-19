@@ -1,195 +1,312 @@
-#!/usr/bin/env python3
 """
-Extract real GPS coordinates from EXIF data of images
+Real Coordinate Extraction Utilities
+
+This module provides comprehensive coordinate extraction functionality for the 
+Road AI Safety Enhancement system, consolidating GPS coordinate extraction 
+from various media types and formats.
+
+Author: Road AI Safety Enhancement System
+Date: 2025-09-19
 """
 
-import sys
-import os
-from datetime import datetime
+import logging
+import re
+from typing import Tuple, Optional, Dict, Any, Union
 import base64
 import io
+from datetime import datetime
 
-# Add the backend directory to the path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Import existing utilities
+from utils.exif_utils import get_gps_coordinates, format_coordinates
+from utils.video_metadata_utils import get_video_gps_coordinates, extract_video_metadata
 
-def extract_real_gps_from_images():
-    """Extract real GPS coordinates from image EXIF data"""
+logger = logging.getLogger(__name__)
+
+
+def extract_coordinates_from_media(media_data: Union[str, bytes], media_type: str = 'image') -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract GPS coordinates from media data (image or video).
+    
+    Args:
+        media_data: Base64 encoded media data or file path
+        media_type: Type of media ('image' or 'video')
+        
+    Returns:
+        Tuple of (latitude, longitude) or (None, None) if not found
+    """
     try:
-        from config.db import connect_to_db
-        from utils.exif_utils import get_gps_coordinates, get_comprehensive_exif_data
-        from utils.s3_utils import download_from_s3
-        
-        print("🔄 Connecting to database...")
-        db = connect_to_db()
-        
-        if db is None:
-            print("❌ Database connection failed")
-            return False
-        
-        print("✅ Database connection successful")
-        
-        collections = [
-            ("pothole_images", "pothole"),
-            ("crack_images", "crack"),
-            ("kerb_images", "kerb")
-        ]
-        
-        total_updated = 0
-        india_coordinates = []
-        
-        for collection_name, defect_type in collections:
-            collection = getattr(db, collection_name)
-            
-            # Find images with S3 URLs to extract real EXIF data
-            images = list(collection.find({
-                "original_image_s3_url": {"$exists": True, "$ne": None}
-            }).limit(20))  # Limit to 20 for testing
-            
-            print(f"📊 Found {len(images)} {defect_type} images with S3 URLs")
-            
-            updated_count = 0
-            for image in images:
-                try:
-                    s3_url = image.get("original_image_s3_url")
-                    if not s3_url:
-                        continue
-                    
-                    print(f"🔄 Processing {defect_type} image: {image.get('image_id', 'unknown')}")
-                    
-                    # Try to download and extract EXIF data
-                    try:
-                        # Download image from S3
-                        image_data = download_from_s3(s3_url)
-                        if not image_data:
-                            print(f"⚠️  Could not download image from S3: {s3_url}")
-                            continue
-                        
-                        # Extract GPS coordinates
-                        lat, lng = get_gps_coordinates(image_data)
-                        
-                        if lat is not None and lng is not None:
-                            # Check if coordinates are in India (approximate bounds)
-                            if 6.0 <= lat <= 37.0 and 68.0 <= lng <= 97.0:
-                                coordinates_str = f"{lat},{lng}"
-                                india_coordinates.append((lat, lng, defect_type))
-                                
-                                print(f"✅ Found India coordinates: {coordinates_str}")
-                                
-                                # Extract comprehensive EXIF data
-                                comprehensive_exif = get_comprehensive_exif_data(image_data)
-                                
-                                # Update the database
-                                result = collection.update_one(
-                                    {"_id": image["_id"]},
-                                    {
-                                        "$set": {
-                                            "coordinates": coordinates_str,
-                                            "exif_data": comprehensive_exif.get('exif_data', {}),
-                                            "metadata": comprehensive_exif,
-                                            "gps_source": "real_exif",
-                                            "country": "India"
-                                        }
-                                    }
-                                )
-                                
-                                if result.modified_count > 0:
-                                    updated_count += 1
-                                    print(f"✅ Updated {defect_type} with real coordinates: {coordinates_str}")
-                            else:
-                                print(f"⚠️  Coordinates not in India: {lat}, {lng}")
-                        else:
-                            print(f"⚠️  No GPS coordinates found in EXIF data")
-                            
-                    except Exception as e:
-                        print(f"❌ Error processing image {image.get('image_id')}: {e}")
-                        continue
-                        
-                except Exception as e:
-                    print(f"❌ Error processing {defect_type} image: {e}")
-                    continue
-            
-            print(f"✅ Updated {updated_count} {defect_type} images with real coordinates")
-            total_updated += updated_count
-        
-        print(f"\n📊 SUMMARY:")
-        print(f"✅ Total images updated with real coordinates: {total_updated}")
-        print(f"✅ India coordinates found: {len(india_coordinates)}")
-        
-        if india_coordinates:
-            print(f"\n📍 Sample India coordinates:")
-            for i, (lat, lng, defect_type) in enumerate(india_coordinates[:5]):
-                print(f"   {i+1}. {defect_type}: {lat:.6f}, {lng:.6f}")
-            
-            # Calculate center point for India
-            avg_lat = sum(coord[0] for coord in india_coordinates) / len(india_coordinates)
-            avg_lng = sum(coord[1] for coord in india_coordinates) / len(india_coordinates)
-            print(f"\n🎯 Suggested map center for India: [{avg_lat:.6f}, {avg_lng:.6f}]")
-        
-        return total_updated > 0
-        
-    except Exception as e:
-        print(f"❌ Error extracting real coordinates: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def update_map_center_for_india():
-    """Update the frontend map center to focus on India"""
-    try:
-        # Read the DefectMap.js file
-        defect_map_path = "../frontend/src/components/DefectMap.js"
-        
-        if not os.path.exists(defect_map_path):
-            print(f"❌ DefectMap.js not found at {defect_map_path}")
-            return False
-        
-        with open(defect_map_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Replace Singapore coordinates with India coordinates
-        # India center: approximately [20.5937, 78.9629]
-        old_center = "const [center] = useState([1.3521, 103.8198]); // Singapore center"
-        new_center = "const [center] = useState([20.5937, 78.9629]); // India center"
-        
-        if old_center in content:
-            content = content.replace(old_center, new_center)
-            
-            with open(defect_map_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            print("✅ Updated DefectMap.js to center on India")
-            return True
+        if media_type.lower() == 'video':
+            return get_video_gps_coordinates(media_data)
         else:
-            print("⚠️  Could not find Singapore center coordinates to replace")
-            return False
-            
+            return get_gps_coordinates(media_data)
     except Exception as e:
-        print(f"❌ Error updating map center: {e}")
-        return False
+        logger.error(f"Error extracting coordinates from {media_type}: {e}")
+        return None, None
 
-def main():
-    """Main function"""
-    print("🚀 Starting real GPS coordinate extraction...\n")
+
+def extract_coordinates_from_string(coord_string: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract coordinates from various string formats.
     
-    # Extract real coordinates from EXIF data
-    success = extract_real_gps_from_images()
+    Supported formats:
+    - "lat,lon" (e.g., "18.520601,73.849890")
+    - "lat, lon" (with spaces)
+    - ISO 6709 format (e.g., "+18.520601-073.849890/")
+    - DMS format parsing
     
-    if success:
-        # Update map center to India
-        map_updated = update_map_center_for_india()
+    Args:
+        coord_string: String containing coordinates
         
-        print(f"\n{'='*60}")
-        print("✅ REAL COORDINATE EXTRACTION COMPLETED!")
-        print("✅ Images now have actual GPS coordinates from EXIF data")
-        if map_updated:
-            print("✅ Map center updated to focus on India")
-        print("✅ The DefectMap should now show markers at real locations in India")
-        print(f"{'='*60}")
-    else:
-        print(f"\n{'='*60}")
-        print("❌ COORDINATE EXTRACTION FAILED!")
-        print("❌ Could not extract real GPS coordinates from images")
-        print(f"{'='*60}")
+    Returns:
+        Tuple of (latitude, longitude) or (None, None) if parsing fails
+    """
+    if not coord_string or not isinstance(coord_string, str):
+        return None, None
+    
+    try:
+        # Clean the string
+        coord_string = coord_string.strip()
+        
+        # Format 1: Simple "lat,lon" format
+        if ',' in coord_string and not coord_string.startswith(('+', '-')):
+            parts = coord_string.split(',')
+            if len(parts) == 2:
+                lat = float(parts[0].strip())
+                lon = float(parts[1].strip())
+                return lat, lon
+        
+        # Format 2: ISO 6709 format (+lat-lon or +lat+lon)
+        if coord_string.startswith(('+', '-')):
+            # Match pattern like +18.520601-073.849890/ or +18.520601+073.849890/
+            match = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', coord_string)
+            if match:
+                lat = float(match.group(1))
+                lon = float(match.group(2))
+                return lat, lon
+        
+        # Format 3: Space-separated coordinates
+        if ' ' in coord_string:
+            parts = coord_string.split()
+            if len(parts) >= 2:
+                try:
+                    lat = float(parts[0])
+                    lon = float(parts[1])
+                    return lat, lon
+                except ValueError:
+                    pass
+        
+        logger.warning(f"Could not parse coordinate string: {coord_string}")
+        return None, None
+        
+    except Exception as e:
+        logger.error(f"Error parsing coordinate string '{coord_string}': {e}")
+        return None, None
+
+
+def validate_coordinates(lat: Optional[float], lon: Optional[float]) -> bool:
+    """
+    Validate that coordinates are within valid ranges.
+    
+    Args:
+        lat: Latitude value
+        lon: Longitude value
+        
+    Returns:
+        True if coordinates are valid, False otherwise
+    """
+    if lat is None or lon is None:
+        return False
+    
+    # Check latitude range (-90 to 90)
+    if not (-90 <= lat <= 90):
+        return False
+    
+    # Check longitude range (-180 to 180)
+    if not (-180 <= lon <= 180):
+        return False
+    
+    return True
+
+
+def format_coordinates_comprehensive(lat: Optional[float], lon: Optional[float]) -> Dict[str, Any]:
+    """
+    Format coordinates in multiple formats for comprehensive display.
+    
+    Args:
+        lat: Latitude value
+        lon: Longitude value
+        
+    Returns:
+        Dictionary containing various coordinate formats
+    """
+    if not validate_coordinates(lat, lon):
+        return {
+            'decimal': 'Not Available',
+            'string': 'Not Available',
+            'dms': 'Not Available',
+            'valid': False,
+            'latitude': None,
+            'longitude': None
+        }
+    
+    try:
+        # Decimal format
+        decimal_format = f"{lat:.6f}, {lon:.6f}"
+        
+        # String format (for database storage)
+        string_format = f"{lat:.6f},{lon:.6f}"
+        
+        # DMS (Degrees, Minutes, Seconds) format
+        def decimal_to_dms(decimal_deg: float, is_latitude: bool = True) -> str:
+            """Convert decimal degrees to DMS format."""
+            abs_deg = abs(decimal_deg)
+            degrees = int(abs_deg)
+            minutes_float = (abs_deg - degrees) * 60
+            minutes = int(minutes_float)
+            seconds = (minutes_float - minutes) * 60
+            
+            if is_latitude:
+                direction = 'N' if decimal_deg >= 0 else 'S'
+            else:
+                direction = 'E' if decimal_deg >= 0 else 'W'
+            
+            return f"{degrees}°{minutes}'{seconds:.2f}\"{direction}"
+        
+        lat_dms = decimal_to_dms(lat, True)
+        lon_dms = decimal_to_dms(lon, False)
+        dms_format = f"{lat_dms}, {lon_dms}"
+        
+        return {
+            'decimal': decimal_format,
+            'string': string_format,
+            'dms': dms_format,
+            'valid': True,
+            'latitude': lat,
+            'longitude': lon
+        }
+        
+    except Exception as e:
+        logger.error(f"Error formatting coordinates {lat}, {lon}: {e}")
+        return {
+            'decimal': 'Error',
+            'string': 'Error',
+            'dms': 'Error',
+            'valid': False,
+            'latitude': lat,
+            'longitude': lon
+        }
+
+
+def extract_real_coordinates(data: Union[str, bytes, Dict[str, Any]], 
+                           data_type: str = 'auto',
+                           fallback_coords: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Main function to extract real coordinates from various data sources.
+    
+    Args:
+        data: Input data (media data, coordinate string, or metadata dict)
+        data_type: Type of data ('image', 'video', 'string', 'metadata', 'auto')
+        fallback_coords: Fallback coordinate string if extraction fails
+        
+    Returns:
+        Dictionary containing extracted and formatted coordinates
+    """
+    lat, lon = None, None
+    extraction_source = 'none'
+    
+    try:
+        # Auto-detect data type if not specified
+        if data_type == 'auto':
+            if isinstance(data, dict):
+                data_type = 'metadata'
+            elif isinstance(data, str):
+                if data.startswith('data:') or 'base64' in data:
+                    data_type = 'image'  # Assume image for base64 data
+                else:
+                    data_type = 'string'
+            else:
+                data_type = 'image'  # Default fallback
+        
+        # Extract coordinates based on data type
+        if data_type == 'metadata' and isinstance(data, dict):
+            # Extract from metadata dictionary
+            if 'gps_coordinates' in data and data['gps_coordinates']:
+                gps_data = data['gps_coordinates']
+                if isinstance(gps_data, dict):
+                    lat = gps_data.get('latitude')
+                    lon = gps_data.get('longitude')
+                    extraction_source = 'metadata_gps'
+            elif 'coordinates' in data:
+                coord_str = data['coordinates']
+                lat, lon = extract_coordinates_from_string(coord_str)
+                extraction_source = 'metadata_coordinates'
+                
+        elif data_type == 'string':
+            # Extract from coordinate string
+            lat, lon = extract_coordinates_from_string(data)
+            extraction_source = 'string_parsing'
+            
+        elif data_type in ['image', 'video']:
+            # Extract from media data
+            lat, lon = extract_coordinates_from_media(data, data_type)
+            extraction_source = f'{data_type}_exif'
+        
+        # Use fallback coordinates if extraction failed
+        if not validate_coordinates(lat, lon) and fallback_coords:
+            lat, lon = extract_coordinates_from_string(fallback_coords)
+            extraction_source = 'fallback'
+        
+        # Format the results
+        formatted_coords = format_coordinates_comprehensive(lat, lon)
+        formatted_coords['extraction_source'] = extraction_source
+        formatted_coords['timestamp'] = datetime.now().isoformat()
+        
+        return formatted_coords
+        
+    except Exception as e:
+        logger.error(f"Error in extract_real_coordinates: {e}")
+        return {
+            'decimal': 'Error',
+            'string': 'Error',
+            'dms': 'Error',
+            'valid': False,
+            'latitude': None,
+            'longitude': None,
+            'extraction_source': 'error',
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e)
+        }
+
+
+# Convenience functions for backward compatibility
+def get_coordinates_from_image(image_data: Union[str, bytes]) -> Tuple[Optional[float], Optional[float]]:
+    """Extract coordinates from image data."""
+    return extract_coordinates_from_media(image_data, 'image')
+
+
+def get_coordinates_from_video(video_data: Union[str, bytes]) -> Tuple[Optional[float], Optional[float]]:
+    """Extract coordinates from video data."""
+    return extract_coordinates_from_media(video_data, 'video')
+
+
+def parse_coordinate_string(coord_string: str) -> Tuple[Optional[float], Optional[float]]:
+    """Parse coordinates from string format."""
+    return extract_coordinates_from_string(coord_string)
+
 
 if __name__ == "__main__":
-    main()
+    # Test the coordinate extraction functionality
+    test_coords = [
+        "18.520601,73.849890",
+        "+18.520601-073.849890/",
+        "18.520601 73.849890",
+        "invalid coordinates",
+        None
+    ]
+    
+    print("Testing coordinate extraction:")
+    for coord in test_coords:
+        result = extract_real_coordinates(coord, 'string')
+        print(f"Input: {coord}")
+        print(f"Result: {result}")
+        print("-" * 50)
