@@ -19,6 +19,9 @@ import torch
 from datetime import datetime
 from collections import defaultdict
 import boto3
+
+# Import S3 URL generation function from dashboard
+from routes.dashboard import generate_s3_url_for_dashboard
 from botocore.exceptions import ClientError
 
 # Import our comprehensive S3-MongoDB integration
@@ -1460,12 +1463,15 @@ def detect_potholes():
             # Initialize the workflow manager
             workflow = ImageProcessingWorkflow()
 
-            # Prepare metadata
+            # Prepare metadata including EXIF data
             metadata = {
                 'username': username,
                 'role': role,
                 'coordinates': coordinates,
-                'timestamp': timestamp
+                'timestamp': timestamp,
+                'exif_data': exif_metadata,
+                'metadata': exif_metadata,
+                'media_type': 'image'
             }
 
             # Execute complete workflow: S3 upload + MongoDB storage
@@ -2776,6 +2782,20 @@ def get_image_details(image_id):
             "original_image_id": base_image.get("original_image_id"),
             "processed_image_id": base_image.get("processed_image_id"),
             "detection_type": base_image.get("detection_type", "unknown"),
+            # Add S3 URLs for image display
+            "original_image_s3_url": base_image.get("original_image_s3_url"),
+            "processed_image_s3_url": base_image.get("processed_image_s3_url"),
+            "original_image_full_url": generate_s3_url_for_dashboard(base_image.get("original_image_s3_url")),
+            "processed_image_full_url": generate_s3_url_for_dashboard(base_image.get("processed_image_s3_url")),
+            # Add EXIF and metadata information
+            "exif_data": base_image.get("exif_data", {}),
+            "metadata": base_image.get("metadata", {}),
+            "media_type": base_image.get("media_type", "image"),
+            # Add video-specific fields
+            "representative_frame": base_image.get("representative_frame"),
+            "video_id": base_image.get("video_id"),
+            "original_video_url": base_image.get("original_video_url"),
+            "processed_video_url": base_image.get("processed_video_url"),
             # Initialize all defect arrays
             "potholes": [],
             "cracks": [],
@@ -3856,7 +3876,7 @@ def detect_video():
     """
     logger.info("Received video detection request")
     # Get parameters from request
-    client_coordinates = request.form.get('coordinates', 'Not Available')
+    coordinates = request.form.get('coordinates', 'Not Available')
     selected_model = request.form.get('selectedModel', 'All')
     # Extract user/role/id from session or request (like image endpoints)
     username = (
@@ -3875,10 +3895,7 @@ def detect_video():
     s3_role = role.capitalize() if role else 'UnknownRole'
     s3_id = username
     logger.info(f"Processing video with model: {selected_model}")
-    logger.info(f"Client coordinates: {client_coordinates}")
-
-    # Extract GPS coordinates from video metadata
-    coordinates = client_coordinates  # Default to client coordinates
+    logger.info(f"Coordinates: {coordinates}")
     try:
         # Check if we have video data
         if 'video' not in request.files or not request.files['video']:
@@ -3910,18 +3927,6 @@ def detect_video():
         temp_video_path = os.path.join(os.path.dirname(__file__), original_video_name)
         logger.info(f"Saving video to temporary path: {temp_video_path} (original: {original_filename})")
         video_file.save(temp_video_path)
-
-        # Try to extract GPS coordinates from video metadata
-        try:
-            lat, lon = get_video_gps_coordinates(temp_video_path)
-            if lat is not None and lon is not None:
-                coordinates = format_coordinates(lat, lon)
-                logger.info(f"🎯 Using video GPS coordinates: {coordinates}")
-            else:
-                logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
-        except Exception as e:
-            logger.warning(f"Failed to extract GPS from video: {e}")
-            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
         
         # Get AWS configuration
         aws_folder = os.environ.get('AWS_FOLDER', 'LTA')
@@ -3951,10 +3956,6 @@ def detect_video():
         except Exception as e:
             logger.error(f"Error uploading original video: {e}")
         
-        # Extract comprehensive video metadata
-        video_metadata = extract_media_metadata(temp_video_path, 'video')
-        logger.info(f"📊 Extracted video metadata: {bool(video_metadata)}")
-
         # Create initial video_processing document here
         timestamp = datetime.now().isoformat()
         models_to_run = []
@@ -3975,11 +3976,8 @@ def detect_video():
                 "role": role,
                 "username": username,
                 "timestamp": timestamp,
-                "coordinates": coordinates,
                 "models_run": models_to_run,
                 "status": "processing",
-                "metadata": video_metadata,
-                "uploaded_video_name": original_filename,
                 "model_outputs": {
                     "potholes": [],
                     "cracks": [],

@@ -1,12 +1,79 @@
 import PIL.Image
 from PIL.ExifTags import TAGS, GPSTAGS
+from PIL.TiffImagePlugin import IFDRational
 import numpy as np
 import io
 import base64
 import logging
 from datetime import datetime
+import math
 
 logger = logging.getLogger(__name__)
+
+def serialize_exif_value(value):
+    """
+    Convert EXIF values to MongoDB-serializable format.
+    Handles IFDRational, bytes, and other non-serializable types.
+    """
+    try:
+        if isinstance(value, IFDRational):
+            # Convert IFDRational to float
+            if value.denominator == 0:
+                return float('inf') if value.numerator > 0 else float('-inf')
+            return float(value.numerator) / float(value.denominator)
+        elif isinstance(value, bytes):
+            # Convert bytes to string (for text fields) or skip binary data
+            try:
+                return value.decode('utf-8', errors='ignore')
+            except:
+                return f"<binary data: {len(value)} bytes>"
+        elif isinstance(value, (list, tuple)):
+            # Recursively serialize lists/tuples
+            return [serialize_exif_value(item) for item in value]
+        elif isinstance(value, dict):
+            # Recursively serialize dictionaries
+            return {k: serialize_exif_value(v) for k, v in value.items()}
+        elif isinstance(value, (int, float, str, bool)) or value is None:
+            # Handle NaN and infinity values
+            if isinstance(value, float):
+                if math.isnan(value):
+                    return None  # Convert NaN to None for MongoDB
+                elif math.isinf(value):
+                    return "infinity" if value > 0 else "-infinity"
+            # Already serializable
+            return value
+        elif hasattr(value, '__float__'):
+            # Try to convert to float
+            return float(value)
+        elif hasattr(value, '__int__'):
+            # Try to convert to int
+            return int(value)
+        elif hasattr(value, '__str__'):
+            # Convert to string as fallback
+            return str(value)
+        else:
+            # Last resort: convert to string
+            return str(value)
+    except Exception as e:
+        logger.warning(f"Could not serialize EXIF value {value}: {e}")
+        return str(value)
+
+def serialize_exif_data(exif_data):
+    """
+    Serialize entire EXIF data dictionary for MongoDB storage.
+    """
+    if not isinstance(exif_data, dict):
+        return exif_data
+
+    serialized = {}
+    for key, value in exif_data.items():
+        try:
+            serialized[str(key)] = serialize_exif_value(value)
+        except Exception as e:
+            logger.warning(f"Could not serialize EXIF key {key}: {e}")
+            serialized[str(key)] = str(value)
+
+    return serialized
 
 def get_exif_data(image_data):
     """Extract EXIF data from an image.
@@ -36,13 +103,13 @@ def get_exif_data(image_data):
                     gps_data = {}
                     for gps_tag in value:
                         sub_decoded = GPSTAGS.get(gps_tag, gps_tag)
-                        gps_data[sub_decoded] = value[gps_tag]
+                        gps_data[sub_decoded] = serialize_exif_value(value[gps_tag])
                     exif_data[decoded] = gps_data
                 else:
-                    exif_data[decoded] = value
+                    exif_data[decoded] = serialize_exif_value(value)
     except Exception as e:
         print(f"Error extracting EXIF data: {e}")
-    return exif_data
+    return serialize_exif_data(exif_data)
 
 def convert_to_degrees(value):
     """Convert GPS coordinates from DMS (degree, minutes, seconds) to DD (decimal degrees)."""
@@ -183,10 +250,10 @@ def get_comprehensive_exif_data(image_data):
                         gps_data = {}
                         for gps_tag in value:
                             sub_decoded = GPSTAGS.get(gps_tag, gps_tag)
-                            gps_data[sub_decoded] = value[gps_tag]
+                            gps_data[sub_decoded] = serialize_exif_value(value[gps_tag])
                         exif_data[decoded] = gps_data
                     else:
-                        exif_data[decoded] = value
+                        exif_data[decoded] = serialize_exif_value(value)
         except Exception as e:
             logger.warning(f"Error extracting EXIF data: {e}")
 
@@ -250,6 +317,9 @@ def get_comprehensive_exif_data(image_data):
         for exif_field, meta_field in technical_fields.items():
             if exif_field in exif_data:
                 metadata['technical_info'][meta_field] = str(exif_data[exif_field])
+
+        # Serialize EXIF data for MongoDB compatibility
+        metadata['exif_data'] = serialize_exif_data(exif_data)
 
         return metadata
 

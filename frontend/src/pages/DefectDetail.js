@@ -193,147 +193,160 @@ function DefectDetail() {
                         <th>Coordinates</th>
                         <td>{defectData.image.coordinates || 'Not Available'}</td>
                       </tr>
+                      <tr>
+                        <th>Media Type</th>
+                        <td>
+                          {defectData.image.media_type === 'video' ? (
+                            <span className="text-info">📹 Video</span>
+                          ) : (
+                            <span className="text-primary">📷 Image</span>
+                          )}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </Col>
               </Row>
 
-              {/* EXIF/Metadata Information */}
+              {/* EXIF and Metadata Information */}
               {(defectData.image.exif_data || defectData.image.metadata) && (
                 <Row className="mt-4">
-                  <Col md={12}>
-                    <h5>Media Information</h5>
-                    <div className="row">
-                      {/* Camera Information */}
-                      {defectData.image.exif_data?.camera_info && Object.keys(defectData.image.exif_data.camera_info).length > 0 && (
-                        <div className="col-md-6 mb-3">
-                          <h6 className="text-primary">Camera Information</h6>
-                          <table className="table table-sm table-bordered">
-                            <tbody>
-                              {defectData.image.exif_data.camera_info.camera_make && (
-                                <tr>
-                                  <th width="40%">Make</th>
-                                  <td>{defectData.image.exif_data.camera_info.camera_make}</td>
-                                </tr>
-                              )}
-                              {defectData.image.exif_data.camera_info.camera_model && (
-                                <tr>
-                                  <th>Model</th>
-                                  <td>{defectData.image.exif_data.camera_info.camera_model}</td>
-                                </tr>
-                              )}
-                              {defectData.image.exif_data.camera_info.software && (
-                                <tr>
-                                  <th>Software</th>
-                                  <td>{defectData.image.exif_data.camera_info.software}</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                  <Col>
+                    <Card>
+                      <Card.Header>
+                        <h5 className="mb-0">📊 Media Information</h5>
+                      </Card.Header>
+                      <Card.Body>
+                        <Row>
+                          {/* Camera Information */}
+                          {defectData.image.exif_data?.camera_info && Object.keys(defectData.image.exif_data.camera_info).length > 0 && (
+                            <Col md={6} className="mb-3">
+                              <h6 className="text-primary">📷 Camera Information</h6>
+                              <table className="table table-sm">
+                                <tbody>
+                                  {defectData.image.exif_data.camera_info.camera_make && (
+                                    <tr>
+                                      <th width="40%">Make:</th>
+                                      <td>{defectData.image.exif_data.camera_info.camera_make}</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.exif_data.camera_info.camera_model && (
+                                    <tr>
+                                      <th>Model:</th>
+                                      <td>{defectData.image.exif_data.camera_info.camera_model}</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.exif_data.camera_info.software && (
+                                    <tr>
+                                      <th>Software:</th>
+                                      <td>{defectData.image.exif_data.camera_info.software}</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </Col>
+                          )}
 
-                      {/* GPS Information */}
-                      {(defectData.image.exif_data?.GPSInfo || defectData.image.metadata?.gps_coordinates) && (
-                        <div className="col-md-6 mb-3">
-                          <h6 className="text-primary">GPS Information</h6>
-                          <table className="table table-sm table-bordered">
-                            <tbody>
-                              {defectData.image.metadata?.gps_coordinates?.latitude && (
-                                <tr>
-                                  <th width="40%">Latitude</th>
-                                  <td>{defectData.image.metadata.gps_coordinates.latitude.toFixed(6)}</td>
-                                </tr>
-                              )}
-                              {defectData.image.metadata?.gps_coordinates?.longitude && (
-                                <tr>
-                                  <th>Longitude</th>
-                                  <td>{defectData.image.metadata.gps_coordinates.longitude.toFixed(6)}</td>
-                                </tr>
-                              )}
-                              {defectData.image.metadata?.location_info?.location_name && (
-                                <tr>
-                                  <th>Location</th>
-                                  <td>{defectData.image.metadata.location_info.location_name}</td>
-                                </tr>
-                              )}
-                              {defectData.image.metadata?.location_info?.country && (
-                                <tr>
-                                  <th>Country</th>
-                                  <td>{defectData.image.metadata.location_info.country}</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                          {/* Technical Information */}
+                          {defectData.image.exif_data?.technical_info && Object.keys(defectData.image.exif_data.technical_info).length > 0 && (
+                            <Col md={6} className="mb-3">
+                              <h6 className="text-success">⚙️ Technical Details</h6>
+                              <table className="table table-sm">
+                                <tbody>
+                                  {defectData.image.exif_data.technical_info.iso && (
+                                    <tr>
+                                      <th width="40%">ISO:</th>
+                                      <td>{defectData.image.exif_data.technical_info.iso}</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.exif_data.technical_info.exposure_time && (
+                                    <tr>
+                                      <th>Exposure:</th>
+                                      <td>{defectData.image.exif_data.technical_info.exposure_time}</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.exif_data.technical_info.focal_length && (
+                                    <tr>
+                                      <th>Focal Length:</th>
+                                      <td>{defectData.image.exif_data.technical_info.focal_length}</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </Col>
+                          )}
 
-                      {/* Technical Information */}
-                      {defectData.image.exif_data?.technical_info && Object.keys(defectData.image.exif_data.technical_info).length > 0 && (
-                        <div className="col-md-6 mb-3">
-                          <h6 className="text-primary">Technical Information</h6>
-                          <table className="table table-sm table-bordered">
-                            <tbody>
-                              {defectData.image.exif_data.technical_info.iso && (
-                                <tr>
-                                  <th width="40%">ISO</th>
-                                  <td>{defectData.image.exif_data.technical_info.iso}</td>
-                                </tr>
-                              )}
-                              {defectData.image.exif_data.technical_info.exposure_time && (
-                                <tr>
-                                  <th>Exposure Time</th>
-                                  <td>{defectData.image.exif_data.technical_info.exposure_time}</td>
-                                </tr>
-                              )}
-                              {defectData.image.exif_data.technical_info.f_number && (
-                                <tr>
-                                  <th>F-Number</th>
-                                  <td>{defectData.image.exif_data.technical_info.f_number}</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                          {/* Basic Media Info */}
+                          {defectData.image.exif_data?.basic_info && (
+                            <Col md={6} className="mb-3">
+                              <h6 className="text-info">📐 Media Properties</h6>
+                              <table className="table table-sm">
+                                <tbody>
+                                  <tr>
+                                    <th width="40%">Dimensions:</th>
+                                    <td>{defectData.image.exif_data.basic_info.width} × {defectData.image.exif_data.basic_info.height}</td>
+                                  </tr>
+                                  {defectData.image.exif_data.basic_info.format && (
+                                    <tr>
+                                      <th>Format:</th>
+                                      <td>{defectData.image.exif_data.basic_info.format}</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </Col>
+                          )}
 
-                      {/* Media Format Information */}
-                      {(defectData.image.exif_data?.basic_info || defectData.image.metadata?.basic_info) && (
-                        <div className="col-md-6 mb-3">
-                          <h6 className="text-primary">Format Information</h6>
-                          <table className="table table-sm table-bordered">
-                            <tbody>
-                              {(defectData.image.exif_data?.basic_info?.width || defectData.image.metadata?.basic_info?.width) && (
-                                <tr>
-                                  <th width="40%">Dimensions</th>
-                                  <td>
-                                    {(defectData.image.exif_data?.basic_info?.width || defectData.image.metadata?.basic_info?.width)} × {(defectData.image.exif_data?.basic_info?.height || defectData.image.metadata?.basic_info?.height)}
-                                  </td>
-                                </tr>
-                              )}
-                              {(defectData.image.exif_data?.basic_info?.format || defectData.image.metadata?.basic_info?.format) && (
-                                <tr>
-                                  <th>Format</th>
-                                  <td>{defectData.image.exif_data?.basic_info?.format || defectData.image.metadata?.basic_info?.format}</td>
-                                </tr>
-                              )}
-                              {defectData.image.metadata?.basic_info?.duration && (
-                                <tr>
-                                  <th>Duration</th>
-                                  <td>{defectData.image.metadata.basic_info.duration}s</td>
-                                </tr>
-                              )}
-                              {defectData.image.metadata?.format_info?.bit_rate && (
-                                <tr>
-                                  <th>Bit Rate</th>
-                                  <td>{(defectData.image.metadata.format_info.bit_rate / 1000000).toFixed(1)} Mbps</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
+                          {/* GPS Information */}
+                          {defectData.image.exif_data?.gps_coordinates && (
+                            <Col md={6} className="mb-3">
+                              <h6 className="text-warning">🌍 GPS Information</h6>
+                              <table className="table table-sm">
+                                <tbody>
+                                  <tr>
+                                    <th width="40%">Latitude:</th>
+                                    <td>{defectData.image.exif_data.gps_coordinates.latitude?.toFixed(6)}</td>
+                                  </tr>
+                                  <tr>
+                                    <th>Longitude:</th>
+                                    <td>{defectData.image.exif_data.gps_coordinates.longitude?.toFixed(6)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </Col>
+                          )}
+
+                          {/* Video-specific Information */}
+                          {defectData.image.media_type === 'video' && (
+                            <Col md={12} className="mb-3">
+                              <h6 className="text-danger">🎬 Video Information</h6>
+                              <table className="table table-sm">
+                                <tbody>
+                                  {defectData.image.video_id && (
+                                    <tr>
+                                      <th width="20%">Video ID:</th>
+                                      <td>{defectData.image.video_id}</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.original_video_url && (
+                                    <tr>
+                                      <th>Original Video:</th>
+                                      <td>Available</td>
+                                    </tr>
+                                  )}
+                                  {defectData.image.processed_video_url && (
+                                    <tr>
+                                      <th>Processed Video:</th>
+                                      <td>Available</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </Col>
+                          )}
+                        </Row>
+                      </Card.Body>
+                    </Card>
                   </Col>
                 </Row>
               )}

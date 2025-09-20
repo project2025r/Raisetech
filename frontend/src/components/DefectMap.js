@@ -71,7 +71,7 @@ function DefectMap({ user }) {
   });
 
   // Fetch all images with defects and coordinates
-  const fetchDefectData = async () => {
+  const fetchDefectData = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null); // Clear any previous errors
@@ -82,6 +82,11 @@ function DefectMap({ user }) {
       if (endDate) params.end_date = endDate;
       if (selectedUser) params.username = selectedUser;
       if (user?.role) params.user_role = user.role;
+
+      // Add cache-busting parameter for force refresh
+      if (forceRefresh) {
+        params._t = Date.now();
+      }
 
       console.log('Fetching defect data with params:', params);
       const response = await axios.get('/api/dashboard/image-stats', { params });
@@ -97,25 +102,37 @@ function DefectMap({ user }) {
             if (image.coordinates && image.coordinates !== 'Not Available') {
               let lat, lng;
 
-              // Handle different coordinate formats
-              if (typeof image.coordinates === 'string') {
-                // Parse coordinates (expected format: "lat,lng")
-                const coords = image.coordinates.split(',');
-                if (coords.length === 2) {
-                  lat = parseFloat(coords[0].trim());
-                  lng = parseFloat(coords[1].trim());
+              // First, try to use EXIF GPS coordinates if available (most accurate)
+              if (image.exif_data?.gps_coordinates) {
+                lat = image.exif_data.gps_coordinates.latitude;
+                lng = image.exif_data.gps_coordinates.longitude;
+                console.log(`🎯 Using EXIF GPS coordinates for ${image.image_id}: [${lat}, ${lng}]`);
+              } else {
+                // Fallback to stored coordinates
+                // Handle different coordinate formats
+                if (typeof image.coordinates === 'string') {
+                  // Parse coordinates (expected format: "lat,lng")
+                  const coords = image.coordinates.split(',');
+                  if (coords.length === 2) {
+                    lat = parseFloat(coords[0].trim());
+                    lng = parseFloat(coords[1].trim());
+                  }
+                } else if (Array.isArray(image.coordinates) && image.coordinates.length === 2) {
+                  // Handle array format [lat, lng]
+                  lat = parseFloat(image.coordinates[0]);
+                  lng = parseFloat(image.coordinates[1]);
+                } else if (typeof image.coordinates === 'object' && image.coordinates.lat && image.coordinates.lng) {
+                  // Handle object format {lat: x, lng: y}
+                  lat = parseFloat(image.coordinates.lat);
+                  lng = parseFloat(image.coordinates.lng);
                 }
-              } else if (Array.isArray(image.coordinates) && image.coordinates.length === 2) {
-                // Handle array format [lat, lng]
-                lat = parseFloat(image.coordinates[0]);
-                lng = parseFloat(image.coordinates[1]);
-              } else if (typeof image.coordinates === 'object' && image.coordinates.lat && image.coordinates.lng) {
-                // Handle object format {lat: x, lng: y}
-                lat = parseFloat(image.coordinates.lat);
-                lng = parseFloat(image.coordinates.lng);
+                console.log(`📍 Using stored coordinates for ${image.image_id}: [${lat}, ${lng}]`);
               }
 
-            if (!isNaN(lat) && !isNaN(lng)) {
+            // Validate coordinates are within reasonable bounds
+            if (!isNaN(lat) && !isNaN(lng) &&
+                lat >= -90 && lat <= 90 &&
+                lng >= -180 && lng <= 180) {
               console.log(`✅ Valid coordinates for image ${image.id}: [${lat}, ${lng}]`);
               processedDefects.push({
                 id: image.id,
@@ -200,15 +217,19 @@ function DefectMap({ user }) {
     fetchUsers();
   }, [user]);
 
-  // Set up real-time updates with polling
+  // Auto-refresh every 30 seconds to catch new uploads
   useEffect(() => {
     const interval = setInterval(() => {
-      console.log('🔄 Auto-refreshing defect map data...');
-      fetchDefectData();
-    }, 30000); // Refresh every 30 seconds
+      fetchDefectData(true); // Force refresh to get latest data
+    }, 30000); // 30 seconds
 
     return () => clearInterval(interval);
-  }, [startDate, endDate, selectedUser]);
+  }, [startDate, endDate, selectedUser, user?.role]);
+
+  // Manual refresh function
+  const handleRefresh = () => {
+    fetchDefectData(true);
+  };
 
   // Handle filter application
   const handleApplyFilters = () => {
@@ -352,13 +373,22 @@ function DefectMap({ user }) {
               >
                 Apply Filters
               </Button>
-              <Button 
-                variant="outline-secondary" 
-                size="sm" 
+              <Button
+                variant="outline-secondary"
+                size="sm"
                 onClick={handleResetFilters}
-                className="filter-btn"
+                className="me-3 filter-btn"
               >
                 Reset Filters
+              </Button>
+              <Button
+                variant="success"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={loading}
+                className="filter-btn"
+              >
+                {loading ? '🔄 Refreshing...' : '🔄 Refresh Map'}
               </Button>
             </div>
           </Col>
@@ -451,7 +481,31 @@ function DefectMap({ user }) {
                             }}
                           />
                           <div className="mt-1">
-                            <small className="text-info fw-bold">📹 Video Thumbnail</small>
+                            <small className="text-info fw-bold">📹 Video Representative Frame</small>
+                            {defect.video_id && (
+                              <div>
+                                <small className="text-muted d-block">Video ID: {defect.video_id}</small>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Regular Image Display */}
+                      {defect.media_type !== 'video' && defect.original_image_full_url && (
+                        <div className="mb-3 text-center">
+                          <img
+                            src={defect.original_image_full_url}
+                            alt="Defect image"
+                            className="img-fluid border rounded"
+                            style={{ maxHeight: '150px', maxWidth: '100%' }}
+                            onError={(e) => {
+                              console.warn(`Failed to load image for defect ${defect.image_id}`);
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                          <div className="mt-1">
+                            <small className="text-primary fw-bold">📷 Original Image</small>
                           </div>
                         </div>
                       )}
@@ -494,12 +548,21 @@ function DefectMap({ user }) {
                       {/* EXIF/Metadata Information */}
                       {(defect.exif_data || defect.metadata) && (
                         <div className="mb-3">
-                          <h6 className="text-primary">Media Information</h6>
+                          <h6 className="text-primary">📊 Media Information</h6>
                           <div className="small">
+                            {/* GPS Information - Show first as it's most important for mapping */}
+                            {defect.exif_data?.gps_coordinates && (
+                              <div className="mb-2 p-2 bg-light rounded">
+                                <strong className="text-success">🌍 GPS (EXIF):</strong>
+                                <div>Lat: {defect.exif_data.gps_coordinates.latitude?.toFixed(6)}</div>
+                                <div>Lng: {defect.exif_data.gps_coordinates.longitude?.toFixed(6)}</div>
+                              </div>
+                            )}
+
                             {/* Camera Information */}
                             {defect.exif_data?.camera_info && Object.keys(defect.exif_data.camera_info).length > 0 && (
                               <div className="mb-2">
-                                <strong>Camera:</strong>
+                                <strong>📷 Camera:</strong>
                                 <ul className="list-unstyled ms-2">
                                   {defect.exif_data.camera_info.camera_make && (
                                     <li>Make: {defect.exif_data.camera_info.camera_make}</li>
@@ -514,7 +577,7 @@ function DefectMap({ user }) {
                             {/* Technical Information */}
                             {defect.exif_data?.technical_info && Object.keys(defect.exif_data.technical_info).length > 0 && (
                               <div className="mb-2">
-                                <strong>Technical:</strong>
+                                <strong>⚙️ Technical:</strong>
                                 <ul className="list-unstyled ms-2">
                                   {defect.exif_data.technical_info.iso && (
                                     <li>ISO: {defect.exif_data.technical_info.iso}</li>
@@ -529,7 +592,7 @@ function DefectMap({ user }) {
                             {/* Basic Media Info */}
                             {defect.exif_data?.basic_info && (
                               <div className="mb-2">
-                                <strong>Dimensions:</strong> {defect.exif_data.basic_info.width} × {defect.exif_data.basic_info.height}
+                                <strong>📐 Dimensions:</strong> {defect.exif_data.basic_info.width} × {defect.exif_data.basic_info.height}
                                 {defect.exif_data.basic_info.format && (
                                   <span> ({defect.exif_data.basic_info.format})</span>
                                 )}

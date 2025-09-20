@@ -520,6 +520,10 @@ class ImageProcessingWorkflow:
                 'role': metadata['role'],
                 'original_image_s3_url': original_s3_url,
                 'processed_image_s3_url': processed_s3_url,
+                # Include EXIF data and metadata
+                'exif_data': metadata.get('exif_data', {}),
+                'metadata': metadata.get('metadata', {}),
+                'media_type': metadata.get('media_type', 'image'),
             }
 
             # Add defect-specific data
