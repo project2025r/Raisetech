@@ -3,6 +3,8 @@ import pandas as pd
 import os
 import json
 import logging
+import boto3
+from botocore.exceptions import ClientError
 from config.db import connect_to_db
 import datetime
 from utils.rbac import get_allowed_roles, create_role_filter, validate_user_role
@@ -556,7 +558,15 @@ def get_dashboard_summary():
         
         # Sort all potholes by timestamp, newest first
         try:
-            dashboard_data["potholes"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            def safe_timestamp_sort(item):
+                timestamp = item.get("timestamp", "")
+                if isinstance(timestamp, datetime.datetime):
+                    return timestamp.isoformat()
+                elif isinstance(timestamp, str):
+                    return timestamp
+                else:
+                    return ""
+            dashboard_data["potholes"]["latest"].sort(key=safe_timestamp_sort, reverse=True)
         except Exception as e:
             logger.error(f"Error sorting potholes: {e}")
         
@@ -624,7 +634,15 @@ def get_dashboard_summary():
         
         # Sort all cracks by timestamp, newest first
         try:
-            dashboard_data["cracks"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            def safe_timestamp_sort(item):
+                timestamp = item.get("timestamp", "")
+                if isinstance(timestamp, datetime.datetime):
+                    return timestamp.isoformat()
+                elif isinstance(timestamp, str):
+                    return timestamp
+                else:
+                    return ""
+            dashboard_data["cracks"]["latest"].sort(key=safe_timestamp_sort, reverse=True)
         except Exception as e:
             logger.error(f"Error sorting cracks: {e}")
         
@@ -688,7 +706,15 @@ def get_dashboard_summary():
         
         # Sort all kerbs by timestamp, newest first
         try:
-            dashboard_data["kerbs"]["latest"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            def safe_timestamp_sort(item):
+                timestamp = item.get("timestamp", "")
+                if isinstance(timestamp, datetime.datetime):
+                    return timestamp.isoformat()
+                elif isinstance(timestamp, str):
+                    return timestamp
+                else:
+                    return ""
+            dashboard_data["kerbs"]["latest"].sort(key=safe_timestamp_sort, reverse=True)
         except Exception as e:
             logger.error(f"Error sorting kerbs: {e}")
         
@@ -783,8 +809,19 @@ def get_pothole_data():
                     "Data Model": "new"
                 })
         
-        # Sort by timestamp
-        results.sort(key=lambda x: x.get("Timestamp", ""), reverse=True)
+        # Sort by timestamp with type safety
+        def safe_timestamp_sort(item):
+            timestamp = item.get("Timestamp", "")
+            if isinstance(timestamp, datetime.datetime):
+                return timestamp.isoformat()
+            elif isinstance(timestamp, str):
+                return timestamp
+            else:
+                return ""
+        try:
+            results.sort(key=safe_timestamp_sort, reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting pothole export results: {e}")
         
         return jsonify({
             "success": True,
@@ -877,8 +914,19 @@ def get_crack_data():
                     "Data Model": "new"
                 })
         
-        # Sort by timestamp
-        results.sort(key=lambda x: x.get("Timestamp", ""), reverse=True)
+        # Sort by timestamp with type safety
+        def safe_timestamp_sort(item):
+            timestamp = item.get("Timestamp", "")
+            if isinstance(timestamp, datetime.datetime):
+                return timestamp.isoformat()
+            elif isinstance(timestamp, str):
+                return timestamp
+            else:
+                return ""
+        try:
+            results.sort(key=safe_timestamp_sort, reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting crack export results: {e}")
         
         return jsonify({
             "success": True,
@@ -972,8 +1020,19 @@ def get_kerb_data():
                     "Data Model": "new"
                 })
         
-        # Sort by timestamp
-        results.sort(key=lambda x: x.get("Timestamp", ""), reverse=True)
+        # Sort by timestamp with type safety
+        def safe_timestamp_sort(item):
+            timestamp = item.get("Timestamp", "")
+            if isinstance(timestamp, datetime.datetime):
+                return timestamp.isoformat()
+            elif isinstance(timestamp, str):
+                return timestamp
+            else:
+                return ""
+        try:
+            results.sort(key=safe_timestamp_sort, reverse=True)
+        except Exception as e:
+            logger.error(f"Error sorting kerb export results: {e}")
         
         return jsonify({
             "success": True,
@@ -1517,6 +1576,52 @@ def get_image_stats():
         }).sort("timestamp", -1))
         logger.info(f"Found {len(kerb_images)} kerb images")
         
+        # Helper function to generate pre-signed URLs
+        def add_presigned_urls(image_data, img):
+            """Add pre-signed URLs to image data for secure access"""
+            try:
+                s3_client = boto3.client(
+                    's3',
+                    aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                    aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+                    region_name=os.environ.get('AWS_REGION', 'us-east-1')
+                )
+
+                aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+                aws_folder = aws_folder.strip('/')
+                parts = aws_folder.split('/', 1)
+                bucket = parts[0]
+                prefix = parts[1] if len(parts) > 1 else ''
+
+                # Generate pre-signed URL for original image
+                s3_key = img.get('original_image_s3_url')
+                if s3_key:
+                    # Handle S3 key path logic
+                    if prefix and s3_key.startswith(prefix):
+                        full_s3_key = s3_key
+                    elif prefix and s3_key.startswith(f"{prefix}/"):
+                        full_s3_key = s3_key
+                    else:
+                        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+                    try:
+                        presigned_url = s3_client.generate_presigned_url(
+                            'get_object',
+                            Params={'Bucket': bucket, 'Key': full_s3_key},
+                            ExpiresIn=3600  # 1 hour
+                        )
+                        image_data['original_image_presigned_url'] = presigned_url
+                        logger.debug(f"✅ Generated pre-signed URL for dashboard image: {img.get('image_id')}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to generate pre-signed URL for {img.get('image_id')}: {e}")
+                        image_data['original_image_presigned_url'] = None
+
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize S3 client for dashboard pre-signed URLs: {e}")
+                image_data['original_image_presigned_url'] = None
+
+            return image_data
+
         # Process images for response
         all_images = []
         
@@ -1542,6 +1647,9 @@ def get_image_stats():
             if img.get('media_type') == 'video' and img.get('representative_frame'):
                 image_data['representative_frame'] = img.get('representative_frame')
                 image_data['video_id'] = img.get('video_id')
+
+            # Add pre-signed URLs for secure access
+            image_data = add_presigned_urls(image_data, img)
 
             all_images.append(image_data)
         
@@ -1569,6 +1677,9 @@ def get_image_stats():
                 image_data['representative_frame'] = img.get('representative_frame')
                 image_data['video_id'] = img.get('video_id')
 
+            # Add pre-signed URLs for secure access
+            image_data = add_presigned_urls(image_data, img)
+
             all_images.append(image_data)
 
         # Process kerb images
@@ -1595,10 +1706,96 @@ def get_image_stats():
                 image_data['representative_frame'] = img.get('representative_frame')
                 image_data['video_id'] = img.get('video_id')
 
+            # Add pre-signed URLs for secure access
+            image_data = add_presigned_urls(image_data, img)
+
             all_images.append(image_data)
-        
-        # Sort all images by timestamp
-        all_images.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        # Get video data from video_processing collection
+        video_docs = list(db.video_processing.find(query_filter, {
+            '_id': 1,
+            'video_id': 1,
+            'timestamp': 1,
+            'coordinates': 1,
+            'username': 1,
+            'role': 1,
+            'status': 1,
+            'model_outputs': 1,
+            'representative_frame': 1,
+            'exif_data': 1,
+            'metadata': 1,
+            'media_type': 1,
+            'original_video_url': 1
+        }).sort("timestamp", -1))
+        logger.info(f"Found {len(video_docs)} videos")
+
+        # Process video data for map display
+        for video in video_docs:
+            # Include videos with coordinates (regardless of status for debugging)
+            logger.info(f"🎬 Processing video {video.get('video_id')}: status={video.get('status')}, coordinates={video.get('coordinates')}")
+            if video.get('coordinates'):  # CRITICAL FIX: Include all videos with coordinates, not just completed ones
+                model_outputs = video.get('model_outputs', {})
+                total_video_defects = (
+                    len(model_outputs.get('potholes', [])) +
+                    len(model_outputs.get('cracks', [])) +
+                    len(model_outputs.get('kerbs', []))
+                )
+
+                # Determine primary defect type for video
+                pothole_count = len(model_outputs.get('potholes', []))
+                crack_count = len(model_outputs.get('cracks', []))
+                kerb_count = len(model_outputs.get('kerbs', []))
+
+                # CRITICAL FIX: Use standard defect type names for map compatibility
+                if pothole_count >= crack_count and pothole_count >= kerb_count:
+                    video_type = "pothole"  # Changed from "pothole-video"
+                elif crack_count >= kerb_count:
+                    video_type = "crack"    # Changed from "crack-video"
+                else:
+                    video_type = "kerb"     # Changed from "kerb-video"
+
+                logger.info(f"🎬 Video {video.get('video_id')} classified as '{video_type}' (P:{pothole_count}, C:{crack_count}, K:{kerb_count})")
+
+                video_data = {
+                    "id": str(video.get('_id')),
+                    "image_id": video.get('video_id'),  # Use video_id as image_id for consistency
+                    "timestamp": video.get('timestamp'),
+                    "coordinates": video.get('coordinates'),
+                    "username": video.get('username', 'Unknown'),
+                    "type": video_type,
+                    "defect_count": total_video_defects,
+                    "original_image_id": video.get('video_id'),
+                    "original_image_s3_url": video.get('original_video_url'),
+                    "original_image_full_url": generate_s3_url_for_dashboard(video.get('original_video_url')),
+                    "exif_data": video.get('exif_data', {}),
+                    "metadata": video.get('metadata', {}),
+                    "media_type": "video",
+                    "representative_frame": video.get('representative_frame'),
+                    "video_id": video.get('video_id'),
+                    "model_outputs": model_outputs
+                }
+
+                all_images.append(video_data)
+                logger.info(f"✅ Added video {video.get('video_id')} to map data: type={video_type}, coordinates={video.get('coordinates')}, defects={total_video_defects}")
+
+        # Sort all images and videos by timestamp with type safety
+        def safe_timestamp_sort(item):
+            """Safely extract timestamp for sorting, handling both datetime and string types"""
+            timestamp = item.get("timestamp", "")
+            if isinstance(timestamp, datetime):
+                return timestamp.isoformat()
+            elif isinstance(timestamp, str):
+                return timestamp
+            else:
+                return ""
+
+        try:
+            all_images.sort(key=safe_timestamp_sort, reverse=True)
+            logger.info(f"✅ Successfully sorted {len(all_images)} items by timestamp")
+        except Exception as sort_error:
+            logger.error(f"❌ Error sorting images by timestamp: {sort_error}")
+            # Fallback: don't sort if there's still an issue
+            pass
         
         # Calculate statistics
         total_images = len(all_images)

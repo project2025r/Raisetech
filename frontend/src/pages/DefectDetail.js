@@ -4,6 +4,214 @@ import { Container, Row, Col, Card, Button, Spinner, Alert, Badge } from 'react-
 import axios from 'axios';
 import './dashboard.css';
 
+/**
+ * Image URL Resolution Logic - EXACT SAME AS DASHBOARD
+ * Handles both S3 URLs (new data) and GridFS IDs (legacy data)
+ */
+const getImageUrlForDisplay = (imageData, imageType = 'original') => {
+  console.log('DefectDetail getImageUrlForDisplay called:', { imageData, imageType });
+
+  if (!imageData) {
+    console.log('No imageData provided');
+    return null;
+  }
+
+  // Check if this is video data with representative frame
+  if (imageData.media_type === 'video' && imageData.representative_frame) {
+    console.log('Using representative frame for video data');
+    return `data:image/jpeg;base64,${imageData.representative_frame}`;
+  }
+
+  // Try S3 full URL first (new images with pre-generated URLs) - proxy through backend
+  const fullUrlField = `${imageType}_image_full_url`;
+  if (imageData[fullUrlField]) {
+    console.log('Using full URL field:', fullUrlField, imageData[fullUrlField]);
+    // Extract S3 key from full URL and use proxy endpoint
+    const urlParts = imageData[fullUrlField].split('/');
+    const bucketIndex = urlParts.findIndex(part => part.includes('.s3.'));
+    if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
+      const s3Key = urlParts.slice(bucketIndex + 1).join('/');
+      const proxyUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('Generated proxy URL from full URL:', proxyUrl);
+      return proxyUrl;
+    }
+  }
+
+  // Try S3 key with proxy endpoint (new images without full URL)
+  const s3KeyField = `${imageType}_image_s3_url`;
+  if (imageData[s3KeyField]) {
+    console.log('Using S3 key field:', s3KeyField, imageData[s3KeyField]);
+
+    // Properly encode the S3 key for URL path
+    const s3Key = imageData[s3KeyField];
+    const encodedKey = s3Key.split('/').map(part => encodeURIComponent(part)).join('/');
+    const url = `/api/pavement/get-s3-image/${encodedKey}`;
+
+    console.log('Generated proxy URL from S3 key:', url);
+    console.log('Original S3 key:', s3Key);
+    console.log('Encoded S3 key:', encodedKey);
+
+    return url;
+  }
+
+  // Fall back to GridFS endpoint (legacy images)
+  const gridfsIdField = `${imageType}_image_id`;
+  if (imageData[gridfsIdField]) {
+    console.log('Using GridFS field:', gridfsIdField, imageData[gridfsIdField]);
+    const url = `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    console.log('Generated GridFS URL:', url);
+    return url;
+  }
+
+  // No image URL available
+  console.log('No image URL available for:', imageType, imageData);
+  return null;
+};
+
+/**
+ * Enhanced Image Display Component - EXACT SAME AS DASHBOARD
+ * Supports both original and processed images with toggle
+ */
+const EnhancedDefectImageDisplay = ({ imageData, imageType, defectType }) => {
+  const [currentImageUrl, setCurrentImageUrl] = useState(null);
+  const [hasError, setHasError] = useState(false);
+  const [fallbackAttempts, setFallbackAttempts] = useState(0);
+
+  useEffect(() => {
+    // Reset state when imageData changes
+    setHasError(false);
+    setFallbackAttempts(0);
+
+    // Get initial image URL using Dashboard logic
+    const imageUrl = getImageUrlForDisplay(imageData, imageType);
+
+    // Debug logging
+    console.log('DefectDetail EnhancedImageDisplay Debug:', {
+      imageType,
+      imageData,
+      generatedUrl: imageUrl,
+      s3KeyField: `${imageType}_image_s3_url`,
+      s3KeyValue: imageData?.[`${imageType}_image_s3_url`],
+      fullUrlField: `${imageType}_image_full_url`,
+      fullUrlValue: imageData?.[`${imageType}_image_full_url`]
+    });
+
+    setCurrentImageUrl(imageUrl);
+  }, [imageData, imageType]);
+
+  const getFallbackImageUrl = (imageData, imageType) => {
+    console.log('🔄 Getting fallback URL for:', imageType, imageData);
+
+    // Try direct S3 URL if we have the full URL field
+    const fullUrlField = `${imageType}_image_full_url`;
+    if (imageData[fullUrlField]) {
+      console.log('🔄 Trying direct S3 URL:', imageData[fullUrlField]);
+      return imageData[fullUrlField];
+    }
+
+    // Try GridFS if S3 failed
+    const gridfsIdField = `${imageType}_image_id`;
+    if (imageData[gridfsIdField]) {
+      console.log('🔄 Trying GridFS URL:', imageData[gridfsIdField]);
+      return `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    }
+
+    // Try alternative S3 proxy with different encoding
+    const s3KeyField = `${imageType}_image_s3_url`;
+    if (imageData[s3KeyField]) {
+      console.log('🔄 Trying alternative S3 proxy encoding');
+      const s3Key = imageData[s3KeyField];
+      const alternativeUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('🔄 Alternative proxy URL:', alternativeUrl);
+      return alternativeUrl;
+    }
+
+    console.log('❌ No fallback URL available');
+    return null;
+  };
+
+  const handleImageError = () => {
+    console.error('❌ DefectDetail image loading failed:', currentImageUrl);
+
+    // Try fallback URLs
+    if (fallbackAttempts === 0) {
+      const fallbackUrl = getFallbackImageUrl(imageData, imageType);
+
+      if (fallbackUrl && fallbackUrl !== currentImageUrl) {
+        console.log('🔄 Trying fallback URL:', fallbackUrl);
+        setCurrentImageUrl(fallbackUrl);
+        setFallbackAttempts(1);
+        return;
+      }
+    }
+
+    if (fallbackAttempts === 1) {
+      // Second fallback: try alternative image type
+      const alternativeType = imageType === 'original' ? 'processed' : 'original';
+      const alternativeUrl = getImageUrlForDisplay(imageData, alternativeType);
+
+      if (alternativeUrl && alternativeUrl !== currentImageUrl) {
+        console.log('🔄 Trying alternative image type:', alternativeType);
+        setCurrentImageUrl(alternativeUrl);
+        setFallbackAttempts(2);
+        return;
+      }
+    }
+
+    // All fallbacks exhausted
+    console.error('❌ All fallbacks exhausted for DefectDetail image');
+    setHasError(true);
+  };
+
+  // Clean error state - same as Dashboard
+  if (hasError || !currentImageUrl) {
+    return (
+      <div className="text-muted d-flex align-items-center justify-content-center" style={{ minHeight: '200px' }}>
+        <div className="text-center">
+          <i className="fas fa-image-slash fa-2x mb-2"></i>
+          <div>No image available</div>
+          {fallbackAttempts > 0 && (
+            <small className="text-warning d-block mt-1">
+              (Tried {fallbackAttempts} fallback{fallbackAttempts > 1 ? 's' : ''})
+            </small>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Clean image display - same as Dashboard
+  return (
+    <div className="mb-3">
+      <div className="text-center">
+        <img
+          src={currentImageUrl}
+          alt={`${imageType} defect image`}
+          className="img-fluid border rounded"
+          style={{ maxHeight: '400px', maxWidth: '100%' }}
+          onError={handleImageError}
+          onLoad={() => {
+            console.log('✅ DefectDetail image loaded successfully:', currentImageUrl);
+          }}
+          loading="lazy"
+        />
+
+        {/* Image Type Label */}
+        <div className="mt-2">
+          <small className="text-primary fw-bold">
+            📷 {imageType === 'original' ? 'Original' : 'Processed'} Image
+          </small>
+          {fallbackAttempts > 0 && (
+            <div>
+              <small className="text-warning">(Fallback source)</small>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 function DefectDetail() {
   const { imageId } = useParams();
   const [defectData, setDefectData] = useState(null);
@@ -82,84 +290,56 @@ function DefectDetail() {
                 <h5 className="mb-0">
                   {getDefectTypeLabel(defectData.type)} - ID: {imageId}
                 </h5>
-                <div>
-                  <Button 
-                    variant={imageType === 'original' ? 'light' : 'outline-light'} 
-                    size="sm" 
-                    className="me-2"
-                    onClick={toggleImageType}
-                  >
-                    Original
-                  </Button>
-                  <Button 
-                    variant={imageType === 'processed' ? 'light' : 'outline-light'} 
-                    size="sm"
-                    onClick={toggleImageType}
-                  >
-                    Processed
-                  </Button>
-                </div>
+                {/* Only show Original/Processed buttons for non-video entries */}
+                {defectData.image.media_type !== 'video' && (
+                  <div>
+                    <Button
+                      variant={imageType === 'original' ? 'light' : 'outline-light'}
+                      size="sm"
+                      className="me-2"
+                      onClick={toggleImageType}
+                    >
+                      Original
+                    </Button>
+                    <Button
+                      variant={imageType === 'processed' ? 'light' : 'outline-light'}
+                      size="sm"
+                      onClick={toggleImageType}
+                    >
+                      Processed
+                    </Button>
+                  </div>
+                )}
               </div>
             </Card.Header>
             <Card.Body>
               <Row>
                 <Col md={6} className="text-center mb-4">
-                  {defectData.image && (() => {
-                    // Check if this is video data with representative frame
-                    if (defectData.image.media_type === 'video' && defectData.image.representative_frame) {
-                      return (
-                        <div className="defect-image-container">
-                          <img
-                            src={`data:image/jpeg;base64,${defectData.image.representative_frame}`}
-                            alt={`${defectData.type} video thumbnail`}
-                            className="img-fluid border rounded shadow-sm"
-                            style={{ maxHeight: '400px' }}
-                            onError={(e) => {
-                              console.warn(`Failed to load representative frame for video ${defectData.image.image_id}`);
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                          <div className="mt-2">
-                            <small className="text-info fw-bold">
-                              📹 Video Thumbnail
-                            </small>
-                          </div>
-                        </div>
-                      );
-                    }
+                  {/* Toggle Buttons - Same as Dashboard */}
+                  <div className="d-flex justify-content-center mb-3">
+                    <div className="btn-group btn-group-sm" role="group">
+                      <button
+                        type="button"
+                        className={`btn ${imageType === 'processed' ? 'btn-primary' : 'btn-outline-primary'}`}
+                        onClick={() => setImageType('processed')}
+                      >
+                        Processed
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn ${imageType === 'original' ? 'btn-primary' : 'btn-outline-primary'}`}
+                        onClick={() => setImageType('original')}
+                      >
+                        Original
+                      </button>
+                    </div>
+                  </div>
 
-                    // Handle regular image data
-                    // Check if S3 URLs are available (new format)
-                    const s3Url = imageType === 'original'
-                      ? (defectData.image.original_image_full_url || defectData.image.original_image_s3_url)
-                      : (defectData.image.processed_image_full_url || defectData.image.processed_image_s3_url);
-
-                    const gridfsId = imageType === 'original'
-                      ? defectData.image.original_image_id
-                      : defectData.image.processed_image_id;
-
-                    // Use S3 URL if available, otherwise fall back to GridFS
-                    const imageSrc = s3Url || (gridfsId ? `/api/pavement/get-image/${gridfsId}` : null);
-
-                    return imageSrc ? (
-                      <div className="defect-image-container">
-                        <img
-                          src={imageSrc}
-                          alt={`${defectData.type} defect`}
-                          className="img-fluid border rounded shadow-sm"
-                          style={{ maxHeight: '400px' }}
-                          onError={(e) => {
-                            // If S3 image fails to load and we have GridFS ID, try GridFS as fallback
-                            if (s3Url && gridfsId) {
-                              e.target.src = `/api/pavement/get-image/${gridfsId}`;
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="text-muted">No image available</div>
-                    );
-                  })()}
+                  <EnhancedDefectImageDisplay
+                    imageData={defectData.image}
+                    imageType={imageType}
+                    defectType={defectData.type}
+                  />
                 </Col>
                 <Col md={6}>
                   <h5>Basic Information</h5>
@@ -328,17 +508,46 @@ function DefectDetail() {
                                       <td>{defectData.image.video_id}</td>
                                     </tr>
                                   )}
-                                  {defectData.image.original_video_url && (
+                                  {defectData.image.metadata?.format_info?.duration && (
                                     <tr>
-                                      <th>Original Video:</th>
-                                      <td>Available</td>
+                                      <th>Duration:</th>
+                                      <td>{Math.round(defectData.image.metadata.format_info.duration)}s</td>
                                     </tr>
                                   )}
-                                  {defectData.image.processed_video_url && (
+                                  {defectData.image.metadata?.basic_info?.width && defectData.image.metadata?.basic_info?.height && (
                                     <tr>
-                                      <th>Processed Video:</th>
-                                      <td>Available</td>
+                                      <th>Resolution:</th>
+                                      <td>{defectData.image.metadata.basic_info.width}x{defectData.image.metadata.basic_info.height}</td>
                                     </tr>
+                                  )}
+                                  {defectData.image.metadata?.format_info?.format_name && (
+                                    <tr>
+                                      <th>Format:</th>
+                                      <td>{defectData.image.metadata.format_info.format_name.toUpperCase()}</td>
+                                    </tr>
+                                  )}
+                                  {/* Show detection counts for videos */}
+                                  {defectData.image.model_outputs && (
+                                    <>
+                                      {defectData.image.model_outputs.potholes && defectData.image.model_outputs.potholes.length > 0 && (
+                                        <tr>
+                                          <th>Potholes Detected:</th>
+                                          <td>{defectData.image.model_outputs.potholes.length}</td>
+                                        </tr>
+                                      )}
+                                      {defectData.image.model_outputs.cracks && defectData.image.model_outputs.cracks.length > 0 && (
+                                        <tr>
+                                          <th>Cracks Detected:</th>
+                                          <td>{defectData.image.model_outputs.cracks.length}</td>
+                                        </tr>
+                                      )}
+                                      {defectData.image.model_outputs.kerbs && defectData.image.model_outputs.kerbs.length > 0 && (
+                                        <tr>
+                                          <th>Kerbs Detected:</th>
+                                          <td>{defectData.image.model_outputs.kerbs.length}</td>
+                                        </tr>
+                                      )}
+                                    </>
                                   )}
                                 </tbody>
                               </table>

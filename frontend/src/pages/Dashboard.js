@@ -1340,6 +1340,8 @@ function Dashboard({ user }) {
                 activeKey={activeTab} 
                 onSelect={(k) => setActiveTab(k)} 
                 className="dashboard-tabs"
+                mountOnEnter
+                unmountOnExit
               >
                 {/* Dashboard View Tab */}
                 <Tab eventKey="dashboard" title="Dashboard View">

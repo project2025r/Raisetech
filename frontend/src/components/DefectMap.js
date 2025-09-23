@@ -1,10 +1,360 @@
-import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import React, { useEffect, useState, useRef } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Card, Row, Col, Form, Button } from 'react-bootstrap';
+import { Card, Row, Col, Form, Button, Spinner } from 'react-bootstrap';
 import { Link } from 'react-router-dom';
+
+// Error Boundary for Map Component
+class MapErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Map Error Boundary caught an error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="alert alert-danger">
+          <h6>Map Loading Error</h6>
+          <p>There was an issue loading the map. Please refresh the page.</p>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => window.location.reload()}
+          >
+            Refresh Page
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// Helper component to invalidate map size after mount and on tile load
+function MapSizeFix({ mapRef }) {
+  const map = useMap();
+
+  useEffect(() => {
+    // Store map reference for parent component
+    if (mapRef) {
+      mapRef.current = map;
+    }
+
+    // Invalidate size shortly after mount with better error handling
+    const t1 = setTimeout(() => {
+      try {
+        if (map && map.invalidateSize) {
+          map.invalidateSize(true);
+        }
+      } catch (error) {
+        console.warn('Map invalidateSize error (t1):', error);
+      }
+    }, 100);
+
+    const t2 = setTimeout(() => {
+      try {
+        if (map && map.invalidateSize) {
+          map.invalidateSize(true);
+        }
+      } catch (error) {
+        console.warn('Map invalidateSize error (t2):', error);
+      }
+    }, 500);
+
+    // Also on window resize with error handling
+    const onResize = () => {
+      try {
+        if (map && map.invalidateSize) {
+          map.invalidateSize(true);
+        }
+      } catch (error) {
+        console.warn('Map resize error:', error);
+      }
+    };
+
+    window.addEventListener('resize', onResize);
+
+    // Invalidate after zoom animations end with error handling
+    const onZoomEnd = () => {
+      try {
+        if (map && map.invalidateSize) {
+          map.invalidateSize(true);
+        }
+      } catch (error) {
+        console.warn('Map zoom end error:', error);
+      }
+    };
+
+    const onMoveEnd = () => {
+      try {
+        if (map && map.invalidateSize) {
+          map.invalidateSize(true);
+        }
+      } catch (error) {
+        console.warn('Map move end error:', error);
+      }
+    };
+
+    if (map) {
+      map.on('zoomend', onZoomEnd);
+      map.on('moveend', onMoveEnd);
+    }
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener('resize', onResize);
+      if (map) {
+        try {
+          map.off('zoomend', onZoomEnd);
+          map.off('moveend', onMoveEnd);
+        } catch (error) {
+          console.warn('Map cleanup error:', error);
+        }
+      }
+    };
+  }, [map, mapRef]);
+
+  return null;
+}
+
+/**
+ * Image URL Resolution Logic - Same as Dashboard
+ * Handles both S3 URLs (new data) and GridFS IDs (legacy data)
+ */
+const getImageUrlForDisplay = (imageData, imageType = 'original') => {
+  console.log('🔍 Map getImageUrlForDisplay called:', { imageData, imageType });
+
+  if (!imageData) {
+    console.log('❌ No imageData provided');
+    return null;
+  }
+
+  // Check if this is video data with representative frame
+  if (imageData.media_type === 'video' && imageData.representative_frame) {
+    console.log('📹 Using representative frame for video data');
+    return `data:image/jpeg;base64,${imageData.representative_frame}`;
+  }
+
+  // Try S3 full URL first (new images with pre-generated URLs) - proxy through backend
+  const fullUrlField = `${imageType}_image_full_url`;
+  if (imageData[fullUrlField]) {
+    console.log('🔗 Using full URL field:', fullUrlField, imageData[fullUrlField]);
+    // Extract S3 key from full URL and use proxy endpoint
+    const urlParts = imageData[fullUrlField].split('/');
+    const bucketIndex = urlParts.findIndex(part => part.includes('.s3.'));
+    if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
+      const s3Key = urlParts.slice(bucketIndex + 1).join('/');
+      const proxyUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('✅ Generated proxy URL from full URL:', proxyUrl);
+      return proxyUrl;
+    }
+  }
+
+  // Try S3 key with proxy endpoint (new images)
+  const s3KeyField = `${imageType}_image_s3_url`;
+  if (imageData[s3KeyField]) {
+    console.log('🔗 Using S3 key field:', s3KeyField, imageData[s3KeyField]);
+    const s3Key = imageData[s3KeyField];
+    const proxyUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+    console.log('✅ Generated proxy URL from S3 key:', proxyUrl);
+    return proxyUrl;
+  }
+
+  // Try GridFS endpoint (legacy images)
+  const gridfsIdField = `${imageType}_image_id`;
+  if (imageData[gridfsIdField]) {
+    console.log('🗄️ Using GridFS endpoint:', gridfsIdField, imageData[gridfsIdField]);
+    return `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+  }
+
+  console.warn('❌ No valid image URL found for:', imageType, imageData.image_id);
+  return null;
+};
+
+/**
+ * Enhanced Image Display Component - Same as Dashboard
+ * Supports both original and processed images with toggle
+ */
+const EnhancedMapImageDisplay = ({ defect }) => {
+  const [currentImageUrl, setCurrentImageUrl] = useState(null);
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [fallbackAttempts, setFallbackAttempts] = useState(0);
+  const [isOriginal, setIsOriginal] = useState(false); // Start with processed image
+
+  useEffect(() => {
+    // Reset state when defect or image type changes
+    setHasError(false);
+    setIsLoading(true);
+    setFallbackAttempts(0);
+
+    // Get image URL using same logic as Dashboard
+    const imageUrl = getImageUrlForDisplay(defect, isOriginal ? 'original' : 'processed');
+
+    console.log('🖼️ Map Enhanced Image Display Debug:', {
+      imageType: isOriginal ? 'original' : 'processed',
+      imageId: defect?.image_id,
+      generatedUrl: imageUrl,
+      s3Key: defect?.[`${isOriginal ? 'original' : 'processed'}_image_s3_url`],
+      fullUrl: defect?.[`${isOriginal ? 'original' : 'processed'}_image_full_url`],
+      gridfsId: defect?.[`${isOriginal ? 'original' : 'processed'}_image_id`]
+    });
+
+    setCurrentImageUrl(imageUrl);
+  }, [defect, isOriginal]);
+
+  const getFallbackImageUrl = (imageData, imageType) => {
+    console.log('🔄 Getting fallback URL for:', imageType, imageData);
+
+    // Try direct S3 URL if we have the full URL field
+    const fullUrlField = `${imageType}_image_full_url`;
+    if (imageData[fullUrlField]) {
+      console.log('🔄 Trying direct S3 URL:', imageData[fullUrlField]);
+      return imageData[fullUrlField];
+    }
+
+    // Try GridFS if S3 failed
+    const gridfsIdField = `${imageType}_image_id`;
+    if (imageData[gridfsIdField]) {
+      console.log('🔄 Trying GridFS URL:', imageData[gridfsIdField]);
+      return `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    }
+
+    // Try alternative S3 proxy with different encoding
+    const s3KeyField = `${imageType}_image_s3_url`;
+    if (imageData[s3KeyField]) {
+      console.log('🔄 Trying alternative S3 proxy encoding');
+      const s3Key = imageData[s3KeyField];
+      const alternativeUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
+      console.log('🔄 Alternative proxy URL:', alternativeUrl);
+      return alternativeUrl;
+    }
+
+    console.log('❌ No fallback URL available');
+    return null;
+  };
+
+  const handleImageError = () => {
+    console.error('❌ Map image loading failed:', currentImageUrl);
+    setIsLoading(false);
+
+    // Try fallback URLs
+    if (fallbackAttempts === 0) {
+      const currentImageType = isOriginal ? 'original' : 'processed';
+      const fallbackUrl = getFallbackImageUrl(defect, currentImageType);
+
+      if (fallbackUrl && fallbackUrl !== currentImageUrl) {
+        console.log('🔄 Trying fallback URL:', fallbackUrl);
+        setCurrentImageUrl(fallbackUrl);
+        setFallbackAttempts(1);
+        return;
+      }
+    }
+
+    if (fallbackAttempts === 1) {
+      // Second fallback: try alternative image type
+      const alternativeType = isOriginal ? 'processed' : 'original';
+      const alternativeUrl = getImageUrlForDisplay(defect, alternativeType);
+
+      if (alternativeUrl && alternativeUrl !== currentImageUrl) {
+        console.log('🔄 Trying alternative image type:', alternativeType);
+        setCurrentImageUrl(alternativeUrl);
+        setFallbackAttempts(2);
+        return;
+      }
+    }
+
+    // All fallbacks exhausted
+    console.error('❌ All fallbacks exhausted for map image');
+    setHasError(true);
+  };
+
+  // Clean render logic - same as Dashboard
+  if (hasError || !currentImageUrl) {
+    return (
+      <div className="mb-3 text-center">
+        <div className="text-muted d-flex align-items-center justify-content-center" style={{ minHeight: '100px' }}>
+          <div className="text-center">
+            <i className="fas fa-image-slash fa-2x mb-2"></i>
+            <div>No image available</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-3">
+      {/* Toggle Buttons - Same as Dashboard */}
+      <div className="d-flex justify-content-center mb-2">
+        <div className="btn-group btn-group-sm" role="group">
+          <button
+            type="button"
+            className={`btn ${!isOriginal ? 'btn-primary' : 'btn-outline-primary'}`}
+            onClick={() => setIsOriginal(false)}
+          >
+            Processed
+          </button>
+          <button
+            type="button"
+            className={`btn ${isOriginal ? 'btn-primary' : 'btn-outline-primary'}`}
+            onClick={() => setIsOriginal(true)}
+          >
+            Original
+          </button>
+        </div>
+      </div>
+
+      {/* Image Display */}
+      <div className="text-center">
+        {isLoading ? (
+          <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '150px' }}>
+            <Spinner animation="border" size="sm" variant="primary" />
+            <span className="ms-2 small">Loading...</span>
+          </div>
+        ) : (
+          <img
+            src={currentImageUrl}
+            alt={`${isOriginal ? 'Original' : 'Processed'} defect image`}
+            className="img-fluid border rounded"
+            style={{ maxHeight: '200px', maxWidth: '100%' }}
+            onError={handleImageError}
+            onLoad={() => {
+              console.log('✅ Map image loaded successfully:', currentImageUrl);
+              setIsLoading(false);
+              setHasError(false);
+            }}
+            loading="lazy"
+          />
+        )}
+
+        {/* Image Type Label */}
+        <div className="mt-2">
+          <small className="text-primary fw-bold">
+            📷 {isOriginal ? 'Original' : 'Processed'} Image
+          </small>
+          {fallbackAttempts > 0 && (
+            <div>
+              <small className="text-warning">(Fallback source)</small>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Fix for the Leaflet default icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -58,6 +408,7 @@ function DefectMap({ user }) {
   const [error, setError] = useState(null);
   const [center] = useState([20.5937, 78.9629]); // India center
   const [zoom] = useState(6); // Country-wide zoom for India
+  const mapRef = useRef(null);
   
   // Filters for the map
   const [startDate, setStartDate] = useState('');
@@ -83,14 +434,29 @@ function DefectMap({ user }) {
       if (selectedUser) params.username = selectedUser;
       if (user?.role) params.user_role = user.role;
 
-      // Add cache-busting parameter for force refresh
+      // Always add cache-busting parameter to ensure latest data
+      params._t = Date.now();
+
+      // Add additional cache-busting for force refresh
       if (forceRefresh) {
-        params._t = Date.now();
+        params._force = 'true';
+        params._refresh = Math.random().toString(36).substring(7);
       }
 
-      console.log('Fetching defect data with params:', params);
-      const response = await axios.get('/api/dashboard/image-stats', { params });
-      console.log('API response:', response.data);
+      console.log('🔄 Fetching defect data with params:', params);
+      const response = await axios.get('/api/dashboard/image-stats', {
+        params,
+        // Disable axios caching
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      console.log('📊 API response received:', {
+        success: response.data.success,
+        totalImages: response.data.total_images,
+        imageCount: response.data.images?.length
+      });
 
       if (response.data.success) {
         // Process the data to extract defect locations with type information
@@ -99,6 +465,7 @@ function DefectMap({ user }) {
         response.data.images.forEach(image => {
           try {
             // Only process images with valid coordinates
+            console.log(`🔍 Processing ${image.media_type || 'image'} ${image.image_id}: coordinates=${image.coordinates}, type=${image.type}`);
             if (image.coordinates && image.coordinates !== 'Not Available') {
               let lat, lng;
 
@@ -106,7 +473,7 @@ function DefectMap({ user }) {
               if (image.exif_data?.gps_coordinates) {
                 lat = image.exif_data.gps_coordinates.latitude;
                 lng = image.exif_data.gps_coordinates.longitude;
-                console.log(`🎯 Using EXIF GPS coordinates for ${image.image_id}: [${lat}, ${lng}]`);
+                console.log(`🎯 Using EXIF GPS coordinates for ${image.media_type || 'image'} ${image.image_id}: [${lat}, ${lng}]`);
               } else {
                 // Fallback to stored coordinates
                 // Handle different coordinate formats
@@ -126,14 +493,14 @@ function DefectMap({ user }) {
                   lat = parseFloat(image.coordinates.lat);
                   lng = parseFloat(image.coordinates.lng);
                 }
-                console.log(`📍 Using stored coordinates for ${image.image_id}: [${lat}, ${lng}]`);
+                console.log(`📍 Using stored coordinates for ${image.media_type || 'image'} ${image.image_id}: [${lat}, ${lng}]`);
               }
 
             // Validate coordinates are within reasonable bounds
             if (!isNaN(lat) && !isNaN(lng) &&
                 lat >= -90 && lat <= 90 &&
                 lng >= -180 && lng <= 180) {
-              console.log(`✅ Valid coordinates for image ${image.id}: [${lat}, ${lng}]`);
+              console.log(`✅ Valid coordinates for ${image.media_type || 'image'} ${image.id}: [${lat}, ${lng}] - Adding to map`);
               processedDefects.push({
                 id: image.id,
                 image_id: image.image_id,
@@ -154,10 +521,10 @@ function DefectMap({ user }) {
                 original_image_full_url: image.original_image_full_url
               });
             } else {
-              console.warn(`❌ Invalid coordinates for image ${image.id}:`, image.coordinates, `parsed: lat=${lat}, lng=${lng}`);
+              console.warn(`❌ Invalid coordinates for ${image.media_type || 'image'} ${image.id}:`, image.coordinates, `parsed: lat=${lat}, lng=${lng}`);
             }
           } else {
-            console.log(`⚠️ Skipping image ${image.id}: coordinates=${image.coordinates}`);
+            console.log(`⚠️ Skipping ${image.media_type || 'image'} ${image.id}: coordinates=${image.coordinates}`);
           }
           } catch (coordError) {
             console.error(`❌ Error processing coordinates for image ${image.id}:`, coordError, image.coordinates);
@@ -217,13 +584,17 @@ function DefectMap({ user }) {
     fetchUsers();
   }, [user]);
 
-  // Auto-refresh every 30 seconds to catch new uploads
+  // Auto-refresh every 30 seconds to catch new uploads with EXIF data
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchDefectData(true); // Force refresh to get latest data
+      console.log('🔄 Auto-refreshing defect data for latest EXIF coordinates...');
+      fetchDefectData(true); // Force refresh to get latest EXIF data
     }, 30000); // 30 seconds
 
-    return () => clearInterval(interval);
+    return () => {
+      console.log('🛑 Clearing auto-refresh interval');
+      clearInterval(interval);
+    };
   }, [startDate, endDate, selectedUser, user?.role]);
 
   // Manual refresh function
@@ -440,26 +811,36 @@ function DefectMap({ user }) {
         ) : error ? (
           <div className="alert alert-danger">{error}</div>
         ) : (
-          <div className="map-container" style={{ height: '500px', width: '100%' }}>
-            <MapContainer 
-              center={center} 
-              zoom={zoom} 
+          <div className="map-container" style={{ height: '500px', width: '100%', position: 'relative' }}>
+            <MapErrorBoundary>
+              <MapContainer
+              center={center}
+              zoom={zoom}
               style={{ height: '100%', width: '100%' }}
               scrollWheelZoom={true}
+              key={`map-${center[0]}-${center[1]}-${zoom}`} // Force remount on center/zoom change
             >
+              {/* Ensure Leaflet recalculates size after mount/visibility */}
+              <MapSizeFix mapRef={mapRef} />
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
               
               {filteredDefects.map((defect) => {
+                // Defensive programming: ensure defect has required properties
+                if (!defect || !defect.position || !Array.isArray(defect.position) || defect.position.length !== 2) {
+                  console.warn('Invalid defect data:', defect);
+                  return null;
+                }
+
                 // Determine icon based on media type and defect type
                 const iconKey = defect.media_type === 'video' ? `${defect.type}-video` : defect.type;
-                const selectedIcon = icons[iconKey] || icons[defect.type];
+                const selectedIcon = icons[iconKey] || icons[defect.type] || icons['pothole']; // fallback icon
 
                 return (
                 <Marker
-                  key={defect.id}
+                  key={defect.id || `defect-${Math.random()}`}
                   position={defect.position}
                   icon={selectedIcon}
                 >
@@ -468,20 +849,37 @@ function DefectMap({ user }) {
                       <h6>{defect.type.charAt(0).toUpperCase() + defect.type.slice(1)} Defect</h6>
 
                       {/* Video Thumbnail */}
-                      {defect.media_type === 'video' && defect.representative_frame && (
+                      {defect.media_type === 'video' && (
                         <div className="mb-3 text-center">
-                          <img
-                            src={`data:image/jpeg;base64,${defect.representative_frame}`}
-                            alt="Video thumbnail"
-                            className="img-fluid border rounded"
-                            style={{ maxHeight: '150px', maxWidth: '100%' }}
-                            onError={(e) => {
-                              console.warn(`Failed to load representative frame for video ${defect.image_id}`);
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                          <div className="mt-1">
-                            <small className="text-info fw-bold">📹 Video Representative Frame</small>
+                          {defect.representative_frame ? (
+                            <>
+                              <img
+                                src={`data:image/jpeg;base64,${defect.representative_frame}`}
+                                alt="Video thumbnail"
+                                className="img-fluid border rounded shadow-sm"
+                                style={{ maxHeight: '150px', maxWidth: '100%', objectFit: 'cover' }}
+                                onError={(e) => {
+                                  console.warn(`Failed to load representative frame for video ${defect.image_id}`);
+                                  e.target.style.display = 'none';
+                                  // Show fallback message
+                                  const fallback = e.target.nextElementSibling;
+                                  if (fallback && fallback.classList.contains('video-thumbnail-fallback')) {
+                                    fallback.style.display = 'block';
+                                  }
+                                }}
+                              />
+                              <div className="video-thumbnail-fallback text-muted small p-2 border rounded bg-light" style={{ display: 'none' }}>
+                                <i className="fas fa-video"></i> Video thumbnail unavailable
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-muted small p-3 border rounded bg-light">
+                              <i className="fas fa-video fa-2x mb-2"></i>
+                              <div>Video thumbnail not available</div>
+                            </div>
+                          )}
+                          <div className="mt-2">
+                            <small className="text-info fw-bold">📹 Video Thumbnail</small>
                             {defect.video_id && (
                               <div>
                                 <small className="text-muted d-block">Video ID: {defect.video_id}</small>
@@ -491,23 +889,9 @@ function DefectMap({ user }) {
                         </div>
                       )}
 
-                      {/* Regular Image Display */}
-                      {defect.media_type !== 'video' && defect.original_image_full_url && (
-                        <div className="mb-3 text-center">
-                          <img
-                            src={defect.original_image_full_url}
-                            alt="Defect image"
-                            className="img-fluid border rounded"
-                            style={{ maxHeight: '150px', maxWidth: '100%' }}
-                            onError={(e) => {
-                              console.warn(`Failed to load image for defect ${defect.image_id}`);
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                          <div className="mt-1">
-                            <small className="text-primary fw-bold">📷 Original Image</small>
-                          </div>
-                        </div>
+                      {/* Enhanced Image Display with Fallbacks */}
+                      {defect.media_type !== 'video' && (
+                        <EnhancedMapImageDisplay defect={defect} />
                       )}
 
                       {/* Basic Information */}
@@ -616,11 +1000,19 @@ function DefectMap({ user }) {
                                   {defect.video_id && (
                                     <li><strong>Video ID:</strong> {defect.video_id}</li>
                                   )}
-                                  {defect.original_video_url && (
-                                    <li><strong>Original Video:</strong> Available</li>
-                                  )}
-                                  {defect.processed_video_url && (
-                                    <li><strong>Processed Video:</strong> Available</li>
+                                  {/* Show detection counts for videos */}
+                                  {defect.model_outputs && (
+                                    <>
+                                      {defect.model_outputs.potholes && defect.model_outputs.potholes.length > 0 && (
+                                        <li><strong>Potholes Detected:</strong> {defect.model_outputs.potholes.length}</li>
+                                      )}
+                                      {defect.model_outputs.cracks && defect.model_outputs.cracks.length > 0 && (
+                                        <li><strong>Cracks Detected:</strong> {defect.model_outputs.cracks.length}</li>
+                                      )}
+                                      {defect.model_outputs.kerbs && defect.model_outputs.kerbs.length > 0 && (
+                                        <li><strong>Kerbs Detected:</strong> {defect.model_outputs.kerbs.length}</li>
+                                      )}
+                                    </>
                                   )}
                                 </ul>
                               </div>
@@ -638,7 +1030,8 @@ function DefectMap({ user }) {
                         >
                           View Details
                         </Link>
-                        {defect.original_image_full_url && (
+                        {/* Only show 'View Original' button for non-video entries */}
+                        {defect.media_type !== 'video' && defect.original_image_full_url && (
                           <a
                             href={defect.original_image_full_url}
                             target="_blank"
@@ -656,6 +1049,7 @@ function DefectMap({ user }) {
                 );
               })}
             </MapContainer>
+            </MapErrorBoundary>
           </div>
         )}
       </Card.Body>

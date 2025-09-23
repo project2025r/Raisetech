@@ -806,6 +806,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                 "role": role,
                 "username": username,
                 "timestamp": timestamp,
+                "coordinates": coordinates,  # Add coordinates to initial document
                 "models_run": models_to_run,
                 "status": "processing",
                 "model_outputs": {
@@ -1281,19 +1282,44 @@ def detect_potholes():
         print("✅ Image decoded successfully")
         print(f"📊 Image shape: {image.shape}")
         
+        # Enhanced coordinate handling with device integration
+        device_coordinates = request.json.get('deviceCoordinates', {})
+
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
+        exif_coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else None
 
-        # Log coordinate extraction results
-        if lat is not None and lon is not None:
-            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+        # Coordinate priority: EXIF GPS > Device GPS > Device IP > Client provided
+        final_coordinates = None
+        coordinate_source = "unknown"
+
+        if exif_coordinates:
+            final_coordinates = exif_coordinates
+            coordinate_source = "exif_gps"
+            logger.info(f"🎯 Using EXIF GPS coordinates: {final_coordinates}")
+        elif device_coordinates and device_coordinates.get('source') == 'GPS':
+            final_coordinates = device_coordinates.get('formatted', client_coordinates)
+            coordinate_source = "device_gps"
+            logger.info(f"📱 Using device GPS coordinates: {final_coordinates}")
+        elif device_coordinates and device_coordinates.get('source') == 'IP':
+            final_coordinates = device_coordinates.get('formatted', client_coordinates)
+            coordinate_source = "device_ip"
+            logger.info(f"🌐 Using device IP coordinates: {final_coordinates}")
         else:
-            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
+            final_coordinates = client_coordinates
+            coordinate_source = "client_provided"
+            logger.info(f"📍 Using client-provided coordinates: {final_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
+
+        # Enhance metadata with device coordinate information
+        if device_coordinates:
+            exif_metadata['device_coordinates'] = device_coordinates
+            exif_metadata['coordinate_source'] = coordinate_source
+
         print(f"📊 Extracted EXIF metadata: {bool(exif_metadata)}")
+        print(f"📍 Final coordinates: {final_coordinates} (source: {coordinate_source})")
         
         # Process the image
         processed_image = image.copy()
@@ -1313,7 +1339,7 @@ def detect_potholes():
                     "processed": False,
                     "message": "No road detected in the image. Image not processed.",
                     "classification": classification_result,
-                    "coordinates": coordinates,
+                    "coordinates": final_coordinates,
                     "username": username,
                     "role": role,
                     "potholes": [],
@@ -1428,7 +1454,7 @@ def detect_potholes():
                                 "volume": float(volume),
                                 "volume_range": volume_range,
                                 "confidence": float(conf),
-                                "coordinates": coordinates,
+                                "coordinates": final_coordinates,
                                 "username": username,
                                 "role": role,
                                 "has_mask": True
@@ -1450,7 +1476,7 @@ def detect_potholes():
                             "volume": 0.0,
                             "volume_range": "Unknown",
                             "confidence": float(conf),
-                            "coordinates": coordinates,
+                            "coordinates": final_coordinates,
                             "username": username,
                             "role": role,
                             "has_mask": False
@@ -1463,11 +1489,13 @@ def detect_potholes():
             # Initialize the workflow manager
             workflow = ImageProcessingWorkflow()
 
-            # Prepare metadata including EXIF data
+            # Prepare metadata including EXIF data and coordinate information
             metadata = {
                 'username': username,
                 'role': role,
-                'coordinates': coordinates,
+                'coordinates': final_coordinates,
+                'coordinate_source': coordinate_source,
+                'device_coordinates': device_coordinates,
                 'timestamp': timestamp,
                 'exif_data': exif_metadata,
                 'metadata': exif_metadata,
@@ -1506,7 +1534,14 @@ def detect_potholes():
             "message": f"Detected {len(pothole_results)} potholes",
             "processed_image": encode_processed_image(processed_image),
             "potholes": pothole_results,
-            "coordinates": coordinates,
+            "coordinates": final_coordinates,
+            "coordinate_info": {
+                "final_coordinates": final_coordinates,
+                "coordinate_source": coordinate_source,
+                "device_coordinates": device_coordinates,
+                "exif_coordinates": exif_coordinates,
+                "client_coordinates": client_coordinates
+            },
             "username": username,
             "role": role
         })
@@ -2194,6 +2229,197 @@ def get_s3_image(s3_key):
         }), 500
 
 
+@pavement_bp.route('/emergency-image-access/<path:s3_key>', methods=['GET'])
+def emergency_image_access(s3_key):
+    """
+    EMERGENCY IMAGE ACCESS ENDPOINT
+    This endpoint tries multiple strategies to access S3 images when normal methods fail.
+    It attempts to make objects public if needed and provides direct image serving.
+    """
+    try:
+        logger.info(f"🚨 EMERGENCY: Image access request - S3 Key: {s3_key}")
+
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+
+        # Get AWS folder and bucket info
+        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Try multiple S3 key variations
+        s3_key_variations = [
+            s3_key,  # Original key
+            f"{prefix}/{s3_key}" if prefix and not s3_key.startswith(prefix) else s3_key,  # With prefix
+            s3_key.replace(f"{prefix}/", "") if s3_key.startswith(f"{prefix}/") else s3_key,  # Without prefix
+        ]
+
+        # Remove duplicates while preserving order
+        s3_key_variations = list(dict.fromkeys(s3_key_variations))
+
+        logger.info(f"🔍 EMERGENCY: Trying {len(s3_key_variations)} S3 key variations")
+
+        image_data = None
+        content_type = 'image/jpeg'
+        successful_key = None
+
+        # Try each variation
+        for i, test_key in enumerate(s3_key_variations):
+            try:
+                logger.info(f"🔍 EMERGENCY: Attempt {i+1}/{len(s3_key_variations)} - Key: {test_key}")
+
+                # Try to get the object
+                response = s3_client.get_object(Bucket=bucket, Key=test_key)
+                image_data = response['Body'].read()
+                content_type = response.get('ContentType', 'image/jpeg')
+                successful_key = test_key
+
+                logger.info(f"✅ EMERGENCY: Success with key variation {i+1}: {test_key}")
+                break
+
+            except ClientError as e:
+                error_code = e.response['Error']['Code']
+                logger.warning(f"⚠️ EMERGENCY: Key variation {i+1} failed - {error_code}: {test_key}")
+
+                if error_code == 'AccessDenied':
+                    # Try to make the object public
+                    try:
+                        logger.info(f"🔓 EMERGENCY: Attempting to make object public: {test_key}")
+                        s3_client.put_object_acl(
+                            Bucket=bucket,
+                            Key=test_key,
+                            ACL='public-read'
+                        )
+
+                        # Try again after making it public
+                        response = s3_client.get_object(Bucket=bucket, Key=test_key)
+                        image_data = response['Body'].read()
+                        content_type = response.get('ContentType', 'image/jpeg')
+                        successful_key = test_key
+
+                        logger.info(f"✅ EMERGENCY: Success after making public: {test_key}")
+                        break
+
+                    except Exception as acl_error:
+                        logger.warning(f"⚠️ EMERGENCY: Failed to make public: {acl_error}")
+                        continue
+                else:
+                    continue
+
+        if image_data:
+            logger.info(f"✅ EMERGENCY: Successfully retrieved image - Size: {len(image_data)} bytes")
+
+            # Return image with CORS headers
+            from flask import Response
+            return Response(
+                image_data,
+                mimetype=content_type,
+                headers={
+                    'Cache-Control': 'public, max-age=3600',
+                    'Content-Length': str(len(image_data)),
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'X-Emergency-Access': 'true',
+                    'X-Successful-Key': successful_key
+                }
+            )
+        else:
+            logger.error(f"❌ EMERGENCY: All key variations failed for: {s3_key}")
+            return jsonify({
+                "success": False,
+                "message": f"Emergency access failed - image not found with any key variation",
+                "attempted_keys": s3_key_variations
+            }), 404
+
+    except Exception as e:
+        logger.error(f"❌ EMERGENCY: Unexpected error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Emergency access error: {str(e)}"
+        }), 500
+
+
+@pavement_bp.route('/get-presigned-url/<path:s3_key>', methods=['GET'])
+def get_presigned_url(s3_key):
+    """
+    Generate a pre-signed URL for S3 objects
+    This provides secure, temporary access to S3 objects without making them public
+    """
+    try:
+        logger.info(f"🔗 Pre-signed URL Request - S3 Key: {s3_key}")
+
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.environ.get('AWS_REGION', 'us-east-1')
+        )
+
+        # Get AWS folder and bucket info
+        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+        aws_folder = aws_folder.strip('/')
+        parts = aws_folder.split('/', 1)
+        bucket = parts[0]
+        prefix = parts[1] if len(parts) > 1 else ''
+
+        # Smart S3 key handling (same logic as get_s3_image)
+        if prefix and s3_key.startswith(prefix):
+            full_s3_key = s3_key
+            logger.info(f"🔍 S3 key already contains full path: {s3_key}")
+        elif prefix and s3_key.startswith(f"{prefix}/"):
+            full_s3_key = s3_key
+            logger.info(f"🔍 S3 key already contains full path with slash: {s3_key}")
+        else:
+            full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+            logger.info(f"🔍 Added prefix to relative S3 key: {prefix}/{s3_key}")
+
+        logger.info(f"🔍 Pre-signed URL - Bucket: {bucket}, Full Key: {full_s3_key}")
+
+        # Generate pre-signed URL (valid for 1 hour)
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': full_s3_key},
+            ExpiresIn=3600  # 1 hour
+        )
+
+        logger.info(f"✅ Pre-signed URL generated successfully")
+
+        return jsonify({
+            'success': True,
+            'presigned_url': presigned_url,
+            'expires_in': 3600,
+            's3_key': s3_key,
+            'full_s3_key': full_s3_key
+        })
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        logger.error(f"❌ S3 ClientError generating pre-signed URL - Code: {error_code}, S3 Key: {s3_key}")
+
+        return jsonify({
+            'success': False,
+            'error': f'S3 error: {error_code}',
+            's3_key': s3_key
+        }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected error generating pre-signed URL: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to generate pre-signed URL',
+            's3_key': s3_key
+        }), 500
+
+
 @pavement_bp.route('/potholes/list', methods=['GET'])
 def list_potholes():
     """
@@ -2762,52 +2988,171 @@ def get_image_details(image_id):
         pothole_image = db.pothole_images.find_one({"image_id": image_id})
         crack_image = db.crack_images.find_one({"image_id": image_id})
         kerb_image = db.kerb_images.find_one({"image_id": image_id})
-        
+
+        # Also check in video_processing collection for video data
+        # Handle composite video IDs like "video_68cc3743674213968d89d887_pothole"
+        video_id_to_search = image_id
+        if image_id.startswith("video_") and "_" in image_id:
+            # Extract the actual video ID from composite ID
+            parts = image_id.split("_")
+            if len(parts) >= 2:
+                video_id_to_search = parts[1]  # Get the middle part (actual video ID)
+                logger.info(f"🔍 Extracted video ID '{video_id_to_search}' from composite ID '{image_id}'")
+
+        video_data = db.video_processing.find_one({"video_id": video_id_to_search})
+
+        # Log what we found
+        logger.info(f"🔍 Image detail search for ID '{image_id}':")
+        logger.info(f"   - Pothole image: {'Found' if pothole_image else 'Not found'}")
+        logger.info(f"   - Crack image: {'Found' if crack_image else 'Not found'}")
+        logger.info(f"   - Kerb image: {'Found' if kerb_image else 'Not found'}")
+        logger.info(f"   - Video data: {'Found' if video_data else 'Not found'}")
+        if video_data:
+            rep_frame = video_data.get('representative_frame')
+            logger.info(f"   - Video has representative frame: {'Yes' if rep_frame else 'No'}")
+            if rep_frame:
+                logger.info(f"   - Representative frame length: {len(rep_frame)} characters")
+
         # If no image found in any collection
-        if not pothole_image and not crack_image and not kerb_image:
+        if not pothole_image and not crack_image and not kerb_image and not video_data:
             return jsonify({
                 "success": False,
                 "message": f"Image with ID {image_id} not found"
             }), 404
         
-        # Use the first available image as base and combine defect data
-        base_image = pothole_image or crack_image or kerb_image
-        combined_image_data = {
-            "_id": str(base_image["_id"]),
-            "image_id": base_image["image_id"],
-            "timestamp": base_image["timestamp"],
-            "coordinates": base_image["coordinates"],
-            "username": base_image.get("username", "Unknown"),
-            "role": base_image.get("role", "Unknown"),
-            "original_image_id": base_image.get("original_image_id"),
-            "processed_image_id": base_image.get("processed_image_id"),
-            "detection_type": base_image.get("detection_type", "unknown"),
-            # Add S3 URLs for image display
-            "original_image_s3_url": base_image.get("original_image_s3_url"),
-            "processed_image_s3_url": base_image.get("processed_image_s3_url"),
-            "original_image_full_url": generate_s3_url_for_dashboard(base_image.get("original_image_s3_url")),
-            "processed_image_full_url": generate_s3_url_for_dashboard(base_image.get("processed_image_s3_url")),
-            # Add EXIF and metadata information
-            "exif_data": base_image.get("exif_data", {}),
-            "metadata": base_image.get("metadata", {}),
-            "media_type": base_image.get("media_type", "image"),
-            # Add video-specific fields
-            "representative_frame": base_image.get("representative_frame"),
-            "video_id": base_image.get("video_id"),
-            "original_video_url": base_image.get("original_video_url"),
-            "processed_video_url": base_image.get("processed_video_url"),
-            # Initialize all defect arrays
-            "potholes": [],
-            "cracks": [],
-            "kerbs": [],
-            "pothole_count": 0,
-            "crack_count": 0,
-            "kerb_count": 0,
-            "type_counts": {},
-            "condition_counts": {},
-            "detected_defects": [],
-            "multi_defect_image": False
-        }
+        # Use the first available image/video as base and combine defect data
+        # Prioritize video data if it exists, otherwise use image data
+        base_image = video_data or pothole_image or crack_image or kerb_image
+
+        # Handle video data differently
+        if video_data:
+            combined_image_data = {
+                "_id": str(video_data["_id"]),
+                "image_id": video_data["video_id"],
+                "timestamp": video_data["timestamp"],
+                "coordinates": video_data.get("coordinates"),
+                "username": video_data.get("username", "Unknown"),
+                "role": video_data.get("role", "Unknown"),
+                "original_image_id": None,  # Videos don't have image IDs
+                "processed_image_id": None,
+                "detection_type": "video",
+                # Add video URLs instead of image URLs
+                "original_image_s3_url": video_data.get("original_video_url"),
+                "processed_image_s3_url": video_data.get("processed_video_url"),
+                "original_image_full_url": generate_s3_url_for_dashboard(video_data.get("original_video_url")),
+                "processed_image_full_url": generate_s3_url_for_dashboard(video_data.get("processed_video_url")),
+            }
+        else:
+            combined_image_data = {
+                "_id": str(base_image["_id"]),
+                "image_id": base_image["image_id"],
+                "timestamp": base_image["timestamp"],
+                "coordinates": base_image["coordinates"],
+                "username": base_image.get("username", "Unknown"),
+                "role": base_image.get("role", "Unknown"),
+                "original_image_id": base_image.get("original_image_id"),
+                "processed_image_id": base_image.get("processed_image_id"),
+                "detection_type": base_image.get("detection_type", "unknown"),
+                # Add S3 URLs for image display
+                "original_image_s3_url": base_image.get("original_image_s3_url"),
+                "processed_image_s3_url": base_image.get("processed_image_s3_url"),
+                "original_image_full_url": generate_s3_url_for_dashboard(base_image.get("original_image_s3_url")),
+                "processed_image_full_url": generate_s3_url_for_dashboard(base_image.get("processed_image_s3_url")),
+            }
+
+        # Generate pre-signed URLs for secure image access
+        try:
+            s3_client = boto3.client(
+                's3',
+                aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+                region_name=os.environ.get('AWS_REGION', 'us-east-1')
+            )
+
+            aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
+            aws_folder = aws_folder.strip('/')
+            parts = aws_folder.split('/', 1)
+            bucket = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ''
+
+            # Generate pre-signed URLs for original and processed images
+            for url_type in ['original', 'processed']:
+                s3_key = combined_image_data.get(f"{url_type}_image_s3_url")
+                if s3_key:
+                    # Handle S3 key path logic
+                    if prefix and s3_key.startswith(prefix):
+                        full_s3_key = s3_key
+                    elif prefix and s3_key.startswith(f"{prefix}/"):
+                        full_s3_key = s3_key
+                    else:
+                        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
+
+                    try:
+                        presigned_url = s3_client.generate_presigned_url(
+                            'get_object',
+                            Params={'Bucket': bucket, 'Key': full_s3_key},
+                            ExpiresIn=3600  # 1 hour
+                        )
+                        combined_image_data[f"{url_type}_image_presigned_url"] = presigned_url
+                        logger.info(f"✅ Generated pre-signed URL for {url_type} image: {s3_key}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to generate pre-signed URL for {url_type} image {s3_key}: {e}")
+                        combined_image_data[f"{url_type}_image_presigned_url"] = None
+
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize S3 client for pre-signed URLs: {e}")
+            combined_image_data["original_image_presigned_url"] = None
+            combined_image_data["processed_image_presigned_url"] = None
+
+        # Continue with existing metadata - handle video vs image data differently
+        if video_data:
+            # For video data, use video-specific metadata
+            combined_image_data.update({
+                # Add EXIF and metadata information
+                "exif_data": video_data.get("exif_data", {}),
+                "metadata": video_data.get("metadata", {}),
+                "media_type": "video",  # Explicitly set to video
+                # Add video-specific fields
+                "representative_frame": video_data.get("representative_frame"),
+                "video_id": video_data.get("video_id"),
+                "original_video_url": video_data.get("original_video_url"),
+                "processed_video_url": video_data.get("processed_video_url"),
+                # Initialize all defect arrays
+                "potholes": [],
+                "cracks": [],
+                "kerbs": [],
+                "pothole_count": 0,
+                "crack_count": 0,
+                "kerb_count": 0,
+                "type_counts": {},
+                "condition_counts": {},
+                "detected_defects": [],
+                "multi_defect_image": False
+            })
+        else:
+            # For image data, use image-specific metadata
+            combined_image_data.update({
+                # Add EXIF and metadata information
+                "exif_data": base_image.get("exif_data", {}),
+                "metadata": base_image.get("metadata", {}),
+                "media_type": base_image.get("media_type", "image"),
+                # Add video-specific fields (will be None for images)
+                "representative_frame": base_image.get("representative_frame"),
+                "video_id": base_image.get("video_id"),
+                "original_video_url": base_image.get("original_video_url"),
+                "processed_video_url": base_image.get("processed_video_url"),
+                # Initialize all defect arrays
+                "potholes": [],
+                "cracks": [],
+                "kerbs": [],
+                "pothole_count": 0,
+                "crack_count": 0,
+                "kerb_count": 0,
+                "type_counts": {},
+                "condition_counts": {},
+                "detected_defects": [],
+                "multi_defect_image": False
+            })
         
         # Add pothole data if present
         if pothole_image:
@@ -2828,13 +3173,49 @@ def get_image_details(image_id):
             combined_image_data["kerbs"] = kerb_image.get("kerbs", [])
             combined_image_data["kerb_count"] = kerb_image.get("kerb_count", 0)
             combined_image_data["condition_counts"] = kerb_image.get("condition_counts", {})
-        
+
+        # Add video data if present
+        if video_data:
+            model_outputs = video_data.get("model_outputs", {})
+
+            # Extract defects from video model outputs
+            if "potholes" in model_outputs and model_outputs["potholes"]:
+                detected_defects.append("potholes")
+                combined_image_data["potholes"] = model_outputs["potholes"]
+                combined_image_data["pothole_count"] = len(model_outputs["potholes"])
+
+            if "cracks" in model_outputs and model_outputs["cracks"]:
+                detected_defects.append("cracks")
+                combined_image_data["cracks"] = model_outputs["cracks"]
+                combined_image_data["crack_count"] = len(model_outputs["cracks"])
+
+            if "kerbs" in model_outputs and model_outputs["kerbs"]:
+                detected_defects.append("kerbs")
+                combined_image_data["kerbs"] = model_outputs["kerbs"]
+                combined_image_data["kerb_count"] = len(model_outputs["kerbs"])
+
+            # Add video-specific metadata
+            combined_image_data["model_outputs"] = model_outputs
+
         # Set combined metadata
         combined_image_data["detected_defects"] = detected_defects
         combined_image_data["multi_defect_image"] = len(detected_defects) > 1
         
         # Determine primary type (for backward compatibility)
-        if pothole_image:
+        if video_data:
+            # For videos, determine type based on most detected defects
+            model_outputs = video_data.get("model_outputs", {})
+            pothole_count = len(model_outputs.get("potholes", []))
+            crack_count = len(model_outputs.get("cracks", []))
+            kerb_count = len(model_outputs.get("kerbs", []))
+
+            if pothole_count >= crack_count and pothole_count >= kerb_count:
+                image_type = "pothole"
+            elif crack_count >= kerb_count:
+                image_type = "crack"
+            else:
+                image_type = "kerb"
+        elif pothole_image:
             image_type = "pothole"
         elif crack_image:
             image_type = "crack"
@@ -2843,6 +3224,16 @@ def get_image_details(image_id):
         else:
             image_type = "unknown"
             
+        # Log the response data for debugging
+        logger.info(f"✅ Returning image detail data:")
+        logger.info(f"   - Type: {image_type}")
+        logger.info(f"   - Media type: {combined_image_data.get('media_type', 'unknown')}")
+        rep_frame_final = combined_image_data.get('representative_frame')
+        logger.info(f"   - Has representative frame: {'Yes' if rep_frame_final else 'No'}")
+        if rep_frame_final:
+            logger.info(f"   - Representative frame length: {len(rep_frame_final)} characters")
+        logger.info(f"   - Detected defects: {combined_image_data.get('detected_defects', [])}")
+
         return jsonify({
             "success": True,
             "image": combined_image_data,
@@ -3956,6 +4347,25 @@ def detect_video():
         except Exception as e:
             logger.error(f"Error uploading original video: {e}")
         
+        # Extract video EXIF metadata and GPS coordinates
+        try:
+            logger.info("🔄 Extracting video EXIF metadata...")
+            video_metadata = extract_media_metadata(temp_video_path, 'video')
+            video_lat, video_lon = get_video_gps_coordinates(temp_video_path)
+
+            # Use EXIF GPS coordinates if available, otherwise use client coordinates
+            if video_lat is not None and video_lon is not None:
+                final_coordinates = format_coordinates(video_lat, video_lon)
+                logger.info(f"🎯 Using video EXIF GPS coordinates: {final_coordinates}")
+            else:
+                final_coordinates = coordinates
+                logger.info(f"📍 Using client-provided coordinates: {coordinates}")
+
+        except Exception as e:
+            logger.warning(f"Failed to extract video EXIF data: {e}")
+            video_metadata = {}
+            final_coordinates = coordinates
+
         # Create initial video_processing document here
         timestamp = datetime.now().isoformat()
         models_to_run = []
@@ -3976,6 +4386,10 @@ def detect_video():
                 "role": role,
                 "username": username,
                 "timestamp": timestamp,
+                "coordinates": final_coordinates,  # Add coordinates
+                "exif_data": video_metadata,      # Add EXIF data
+                "metadata": video_metadata,       # Add metadata for compatibility
+                "media_type": "video",            # Add media type
                 "models_run": models_to_run,
                 "status": "processing",
                 "model_outputs": {
@@ -3994,7 +4408,7 @@ def detect_video():
             stream_with_context(process_pavement_video(
                 temp_video_path,
                 selected_model,
-                coordinates,
+                final_coordinates,  # Use EXIF GPS coordinates if available
                 video_timestamp,
                 aws_folder,
                 s3_folder,

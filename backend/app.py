@@ -90,6 +90,16 @@ def get_video_processing_data_route():
     from routes.dashboard import get_video_processing_data
     return get_video_processing_data()
 
+# Register S3 Image Retrieval endpoints
+try:
+    from integrate_s3_image_retrieval import register_s3_image_endpoints
+    register_s3_image_endpoints(app)
+    logger.info("✅ S3 Image Retrieval endpoints registered successfully")
+except ImportError:
+    logger.warning("⚠️ S3 Image Retrieval integration not available")
+except Exception as e:
+    logger.error(f"❌ Failed to register S3 Image Retrieval endpoints: {e}")
+
 # Register the route for video processing export
 @app.route('/api/dashboard/video-processing-export', methods=['GET'])
 def export_video_processing_data_route():
