@@ -251,9 +251,9 @@ function RoadInfrastructure() {
 
     try {
       const formData = new FormData();
-      formData.append('type', 'road_infra');
       formData.append('selectedClasses', JSON.stringify(selectedClasses));
-      formData.append('coordinates', coordinates);
+      formData.append('from_location', coordinates);
+      formData.append('to_location', coordinates);
 
       // Handle different input sources
       if (inputSource === 'video' && videoFile) {
@@ -726,24 +726,24 @@ function RoadInfrastructure() {
                       </Spinner>
                     </div>
                   )}
-                  {/* Playback controls */}
-                  {frameBuffer.length > 0 && !isBuffering && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 10 }}>
-                      <button onClick={handleRewind} disabled={currentFrameIndex === 0}>⏪</button>
-                      <button onClick={handlePlayPause}>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</button>
-                      <button onClick={handleForward} disabled={currentFrameIndex >= frameBuffer.length - 1}>⏩</button>
-                      <input
-                        type="range"
-                        min={0}
-                        max={frameBuffer.length - 1}
-                        value={currentFrameIndex}
-                        onChange={handleSliderChange}
-                        style={{ flex: 1 }}
-                      />
-                      <span style={{ minWidth: 60 }}>{currentFrameIndex + 1} / {frameBuffer.length}</span>
-                    </div>
-                  )}
                 </div>
+                {/* Playback controls */}
+                {frameBuffer.length > 0 && !isBuffering && (
+                  <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 10 }}>
+                    <button onClick={handleRewind} disabled={currentFrameIndex === 0}>⏪</button>
+                    <button onClick={handlePlayPause}>{isPlaying ? '⏸️ Pause' : '▶️ Play'}</button>
+                    <button onClick={handleForward} disabled={currentFrameIndex >= frameBuffer.length - 1}>⏩</button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={frameBuffer.length - 1}
+                      value={currentFrameIndex}
+                      onChange={handleSliderChange}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ minWidth: 60 }}>{currentFrameIndex + 1} / {frameBuffer.length}</span>
+                  </div>
+                )}
                 
                 {detectionResults && detectionResults.detections && (
                   <>

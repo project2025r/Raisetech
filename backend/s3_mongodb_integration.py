@@ -163,37 +163,32 @@ class S3ImageManager:
         # Generate public URL
         return f"https://{self.bucket}.s3.{self.aws_region}.amazonaws.com/{full_s3_key}"
     
-    def get_s3_image_info(self, s3_key):
+    def download_image_from_s3(self, s3_key):
         """
-        Get information about an S3 image
-        
+        Download an image from S3
+
         Args:
             s3_key (str): S3 key path
-            
+
         Returns:
-            dict: Image information or None if not found
+            bytes: Image data or None if not found
         """
         try:
             full_s3_key = f"{self.prefix}/{s3_key}" if self.prefix else s3_key
             
-            response = self.s3_client.head_object(Bucket=self.bucket, Key=full_s3_key)
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=full_s3_key)
             
-            return {
-                'exists': True,
-                'size': response.get('ContentLength'),
-                'last_modified': response.get('LastModified'),
-                'content_type': response.get('ContentType'),
-                'public_url': self.generate_s3_url(s3_key)
-            }
+            return response['Body'].read()
             
         except ClientError as e:
-            if e.response['Error']['Code'] == '404':
-                return {'exists': False}
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                logger.error(f"Image not found at S3 key: {full_s3_key}")
+                return None
             else:
-                logger.error(f"Error getting S3 image info: {e}")
+                logger.error(f"Error downloading image from S3: {e}")
                 return None
         except Exception as e:
-            logger.error(f"Unexpected error getting S3 image info: {e}")
+            logger.error(f"Unexpected error downloading image from S3: {e}")
             return None
 
 

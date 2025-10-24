@@ -28,54 +28,41 @@ const getImageUrlForDisplay = (imageData, imageType = 'original') => {
     return null;
   }
 
-  // Check if this is video data with representative frame
+  // 1. Prioritize pre-signed URL for secure, direct access
+  const presignedUrlField = `${imageType}_image_presigned_url`;
+  if (imageData[presignedUrlField]) {
+    console.log('Using pre-signed URL:', imageData[presignedUrlField]);
+    return imageData[presignedUrlField];
+  }
+
+  // 2. Check if this is video data with a representative frame
   if (imageData.media_type === 'video' && imageData.representative_frame) {
     console.log('Using representative frame for video data');
     return `data:image/jpeg;base64,${imageData.representative_frame}`;
   }
 
-  // Try S3 full URL first (new images with pre-generated URLs) - proxy through backend
-  const fullUrlField = `${imageType}_image_full_url`;
-  if (imageData[fullUrlField]) {
-    console.log('Using full URL field:', fullUrlField, imageData[fullUrlField]);
-    // Extract S3 key from full URL and use proxy endpoint
-    const urlParts = imageData[fullUrlField].split('/');
-    const bucketIndex = urlParts.findIndex(part => part.includes('.s3.'));
-    if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
-      const s3Key = urlParts.slice(bucketIndex + 1).join('/');
-      const proxyUrl = `/api/pavement/get-s3-image/${encodeURIComponent(s3Key)}`;
-      console.log('Generated proxy URL from full URL:', proxyUrl);
-      return proxyUrl;
-    }
-  }
-
-  // Try S3 key with proxy endpoint (new images without full URL)
+  // 3. Fallback to S3 key with proxy endpoint
   const s3KeyField = `${imageType}_image_s3_url`;
   if (imageData[s3KeyField]) {
-    console.log('Using S3 key field:', s3KeyField, imageData[s3KeyField]);
-
-    // Properly encode the S3 key for URL path
+    console.log('Using S3 key field with proxy:', imageData[s3KeyField]);
     const s3Key = imageData[s3KeyField];
+    // Ensure the key is properly encoded for the URL path
     const encodedKey = s3Key.split('/').map(part => encodeURIComponent(part)).join('/');
-    const url = `/api/pavement/get-s3-image/${encodedKey}`;
-
-    console.log('Generated proxy URL from S3 key:', url);
-    console.log('Original S3 key:', s3Key);
-    console.log('Encoded S3 key:', encodedKey);
-
-    return url;
+    const proxyUrl = `/api/pavement/get-s3-image/${encodedKey}`;
+    console.log('Generated proxy URL from S3 key:', proxyUrl);
+    return proxyUrl;
   }
 
-  // Fall back to GridFS endpoint (legacy images)
+  // 4. Fallback to legacy GridFS endpoint
   const gridfsIdField = `${imageType}_image_id`;
   if (imageData[gridfsIdField]) {
-    console.log('Using GridFS field:', gridfsIdField, imageData[gridfsIdField]);
-    const url = `/api/pavement/get-image/${imageData[gridfsIdField]}`;
-    console.log('Generated GridFS URL:', url);
-    return url;
+    console.log('Using legacy GridFS field:', imageData[gridfsIdField]);
+    const gridfsUrl = `/api/pavement/get-image/${imageData[gridfsIdField]}`;
+    console.log('Generated GridFS URL:', gridfsUrl);
+    return gridfsUrl;
   }
 
-  // No image URL available
+  // 5. No image URL available
   console.log('No image URL available for:', imageType, imageData);
   return null;
 };
@@ -1579,12 +1566,15 @@ function Dashboard({ user }) {
                             {dashboardData.videos?.latest && dashboardData.videos.latest.length > 0 ? (
                               <div style={{ maxHeight: '700px', overflowY: 'auto', paddingRight: '10px' }}>
                                 <Row>
-                                  {dashboardData.videos.latest.map((video, index) => (
-                                    <VideoCard
-                                      key={`video-${video.video_id || index}`}
-                                      video={video}
-                                    />
-                                  ))}
+                                  {dashboardData.videos.latest.map((video, index) => {
+                                    console.log('Rendering VideoCard with video:', video);
+                                    return (
+                                      <VideoCard
+                                        key={`video-${video.video_id || index}`}
+                                        video={video}
+                                      />
+                                    );
+                                  })}
                                 </Row>
                               </div>
                             ) : (

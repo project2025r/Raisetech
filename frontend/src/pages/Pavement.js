@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Container, Card, Button, Form, Tabs, Tab, Alert, Spinner, OverlayTrigger, Popover, Modal } from 'react-bootstrap';
 import axios from 'axios';
@@ -6,6 +5,7 @@ import Webcam from 'react-webcam';
 import './Pavement.css';
 import useResponsive from '../hooks/useResponsive';
 import VideoDefectDetection from '../components/VideoDefectDetection';
+import MapPanel from '../components/MapPanel';
 import { validateMultipleFiles, showFileValidationError } from '../utils/fileValidation';
 
 
@@ -24,6 +24,8 @@ const Pavement = () => {
   const [coordinates, setCoordinates] = useState('Not Available');
   const [cameraOrientation, setCameraOrientation] = useState('environment');
   const [locationPermission, setLocationPermission] = useState('unknown');
+  const [imgFromLoc, setImgFromLoc] = useState(null);
+  const [imgToLoc, setImgToLoc] = useState(null);
   const [locationError, setLocationError] = useState('');
   const [locationLoading, setLocationLoading] = useState(false);
   
@@ -46,7 +48,9 @@ const Pavement = () => {
 
   // Add state for image status table filtering
   const [imageFilter, setImageFilter] = useState('all'); // 'all', 'road', 'non-road'
+  const [showDronePopup, setShowDronePopup] = useState(false);
 
+  const [imageInputSource, setImageInputSource] = useState('upload'); // 'upload', 'camera'
 
 
   // Add state for road classification toggle (default to false for better user experience)
@@ -158,10 +162,10 @@ const Pavement = () => {
       
       // If permission is denied, provide user guidance
       if (permissionState === 'denied') {
-        const errorMsg = 'Location access denied. To enable location access:\n' +
-                        '• Safari: Settings > Privacy & Security > Location Services\n' +
-                        '• Chrome: Settings > Privacy > Location\n' +
-                        '• Firefox: Settings > Privacy > Location\n' +
+        const errorMsg = 'Location access denied. To enable location access:\n' + 
+                        '• Safari: Settings > Privacy & Security > Location Services\n' + 
+                        '• Chrome: Settings > Privacy > Location\n' + 
+                        '• Firefox: Settings > Privacy > Location\n' + 
                         'Then refresh this page and try again.';
         setLocationError(errorMsg);
         setCoordinates('Permission Denied');
@@ -371,9 +375,7 @@ const Pavement = () => {
         default:
           endpoint = '/api/pavement/detect-all';
       }
-
-      // Make API request
-      const response = await axios.post(endpoint, requestData);
+      const response = await axios.post(`http://localhost:5000${endpoint}`, requestData);
 
       // Handle response
       if (response.data.success) {
@@ -704,7 +706,6 @@ const Pavement = () => {
       fileInputRef.current.value = '';
     }
   };
-
 
 
 
@@ -1105,40 +1106,46 @@ const Pavement = () => {
 
               <div className="mb-3">
                 <Form.Label>Image Source</Form.Label>
-                <div className="d-flex gap-2 mb-2">
-                  <Button 
-                    variant={cameraActive ? "primary" : "outline-primary"}
-                    onClick={toggleCamera}
-                    disabled={locationLoading}
-                  >
-                    {locationLoading ? (
-                      <>
-                        <Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" />
-                        <span className="ms-2">Getting Location...</span>
-                      </>
-                    ) : (
-                      cameraActive ? "Disable Camera" : "Enable Camera"
-                    )}
-                  </Button>
-                                      <div className="file-input-container">
-                      <label className="file-input-label">
-                        Upload Image
-                        <input
-                          type="file"
-                          className="file-input"
-                          accept="image/*,.avif"
-                          onChange={handleFileChange}
-                          ref={fileInputRef}
-                          disabled={cameraActive}
-                          multiple
-                        />
-                      </label>
-                      <small className="text-muted d-block mt-1">
-                        <i className="fas fa-info-circle me-1"></i>
-                        Supports all image formats including AVIF (automatically converted to JPG for processing)
-                      </small>
-                    </div>
+                <Form.Select
+                  value={imageInputSource}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === 'drone') {
+                      setShowDronePopup(true);
+                    } else {
+                      setImageInputSource(value);
+                      if (value === 'camera') {
+                        toggleCamera();
+                      } else if (cameraActive) {
+                        // If switching away from camera, disable it
+                        toggleCamera();
+                      }
+                    }
+                  }}
+                  disabled={loading || batchProcessing}
+                >
+                  <option value="upload">Upload Image</option>
+                  <option value="camera">Enable Camera</option>
+                  <option value="drone">Drone View</option>
+                </Form.Select>
+              </div>
+
+              {imageInputSource === 'upload' && (
+                <div className="file-input-container mb-3">
+                  <label className="file-input-label">
+                    Upload Image
+                    <input
+                      type="file"
+                      className="file-input"
+                      accept="image/*,.avif"
+                      onChange={handleFileChange}
+                      ref={fileInputRef}
+                      disabled={cameraActive}
+                      multiple
+                    />
+                  </label>
                 </div>
+              )}
                 
                 {/* Location Status Display */}
                 {cameraActive && (
@@ -1178,7 +1185,6 @@ const Pavement = () => {
                     )}
                   </div>
                 )}
-              </div>
 
               {cameraActive && (
                 <div className="webcam-container mb-3">
@@ -1312,6 +1318,16 @@ const Pavement = () => {
               </div>
             </Card.Body>
           </Card>
+
+          {/* Image Map Panel */}
+          <MapPanel
+            panelTitle="Image Route Map"
+            fromLocation={imgFromLoc}
+            toLocation={imgToLoc}
+            onFromChange={setImgFromLoc}
+            onToChange={setImgToLoc}
+            onRoutesLoaded={() => {}}
+          />
 
 
           {/* Enhanced Detection Results Table */}
@@ -1651,7 +1667,7 @@ const Pavement = () => {
                                   })()}
                                 </td>
                                 <td>
-                                  <span className={`badge ${
+                                  <span className={`badge ${ 
                                     detection.detectionType === 'potholes' ? 'bg-danger' :
                                     detection.detectionType === 'cracks' ? 'bg-warning' : 'bg-info'
                                   }`}>
@@ -1711,8 +1727,8 @@ const Pavement = () => {
                   <h6 className="mb-1">Processing images: {processedCount}/{totalToProcess}</h6>
                   <div className="progress" style={{ height: '10px' }}>
                     <div 
-                      className="progress-bar" 
-                      role="progressbar" 
+                      className="progress-bar"
+                      role="progressbar"
                       style={{ width: `${(processedCount / totalToProcess) * 100}%` }}
                       aria-valuenow={processedCount}
                       aria-valuemin="0" 
@@ -1723,7 +1739,6 @@ const Pavement = () => {
               </div>
             </div>
           )}
-
 
 
 
@@ -2161,6 +2176,18 @@ const Pavement = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <Modal show={showDronePopup} onHide={() => setShowDronePopup(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Feature Update</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>This feature will be updated soon.</Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDronePopup(false)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 };
@@ -2242,6 +2269,3 @@ if (typeof document !== 'undefined') {
 }
 
 export default Pavement;
- 
-
-

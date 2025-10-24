@@ -1,10 +1,39 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Card, Button, Form, Alert, Spinner, Table, Row, Col } from 'react-bootstrap';
+import React, { useState, useRef, useEffect, memo } from 'react';
+import { Card, Button, Form, Alert, Spinner, Table, Row, Col, Modal } from 'react-bootstrap';
+import MapPanel from './MapPanel';
 import axios from 'axios';
 import Webcam from 'react-webcam';
 import useResponsive from '../hooks/useResponsive';
 import './VideoDefectDetection.css';
 import { validateUploadFile, showFileValidationError } from '../utils/fileValidation';
+
+// Helper functions for GPS range checking
+function lngLatToMeters(lat, lon) {
+	const originShift = 2 * Math.PI * 6378137 / 2.0;
+	const mx = lon * originShift / 180.0;
+	let my = Math.log(Math.tan((90 + lat) * Math.PI / 360.0)) / (Math.PI / 180.0);
+	my = my * originShift / 180.0;
+	return { x: mx, y: my };
+}
+
+function pointToSegmentDistanceMeters(p, a, b) {
+	const P = lngLatToMeters(p[0], p[1]);
+	const A = lngLatToMeters(a[0], a[1]);
+	const B = lngLatToMeters(b[0], b[1]);
+	const vx = B.x - A.x;
+	const vy = B.y - A.y;
+	const wx = P.x - A.x;
+	const wy = P.y - A.y;
+	const c1 = vx * wx + vy * wy;
+	if (c1 <= 0) return Math.hypot(P.x - A.x, P.y - A.y);
+	const c2 = vx * vx + vy * vy;
+	if (c2 <= c1) return Math.hypot(P.x - B.x, P.y - B.y);
+	const t = c1 / c2;
+	const projx = A.x + t * vx;
+	const projy = A.y + t * vy;
+	return Math.hypot(P.x - projx, P.y - projy);
+}
+
 
 const VideoDefectDetection = () => {
   const [selectedModel, setSelectedModel] = useState('All');
@@ -17,13 +46,25 @@ const VideoDefectDetection = () => {
   const [shouldStop, setShouldStop] = useState(false);
   const [coordinates, setCoordinates] = useState('Not Available');
   const [inputSource, setInputSource] = useState('video');
+  const [fromLoc, setFromLoc] = useState(null);
+  const [toLoc, setToLoc] = useState(null);
+  const [gpsTrack, setGpsTrack] = useState([]);
+  const [routes, setRoutes] = useState([]);
+  const [routeReady, setRouteReady] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraOrientation, setCameraOrientation] = useState('environment');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordedChunks, setRecordedChunks] = useState([]);
   const recordedChunksRef = useRef([]); // <-- Add this line
-  
+
+  // Add new state for live camera location handling
+  const [liveFromLoc, setLiveFromLoc] = useState('');
+  const [liveToLoc, setLiveToLoc] = useState('');
+  const [liveCurrentLoc, setLiveCurrentLoc] = useState(null);
+  const [locationUpdated, setLocationUpdated] = useState(false);
+  const liveLocationIntervalRef = useRef(null);
+
   // Video processing states
   const [frameBuffer, setFrameBuffer] = useState([]);
   const [currentFrameIndex, setCurrentFrameIndex] = useState(0);
@@ -32,21 +73,70 @@ const VideoDefectDetection = () => {
   const [processingProgress, setProcessingProgress] = useState(0);
   const [allDetections, setAllDetections] = useState([]);
   const [videoResults, setVideoResults] = useState(null);
-  
+
   // Add new state for frame-by-frame updates
   const [currentDetections, setCurrentDetections] = useState([]);
   const [showResults, setShowResults] = useState(false);
   const streamRef = useRef(null);
+  const [showDronePopup, setShowDronePopup] = useState(false);
+
+  useEffect(() => {
+    if (inputSource === 'camera') {
+        if (liveFromLoc && liveToLoc) {
+            const fromCoords = liveFromLoc.split(',').map(c => parseFloat(c.trim()));
+            const toCoords = liveToLoc.split(',').map(c => parseFloat(c.trim()));
+            if (fromCoords.length === 2 && toCoords.length === 2 && !fromCoords.some(isNaN) && !toCoords.some(isNaN)) {
+                setFromLoc({ lat: fromCoords[0], lon: fromCoords[1] });
+                setToLoc({ lat: toCoords[0], lon: toCoords[1] });
+                setGpsTrack([fromCoords, toCoords]);
+                setRouteReady(true);
+            }
+        }
+        return;
+    }
+    if (!gpsTrack || gpsTrack.length < 2) {
+      setRouteReady(false);
+      return;
+    }
+
+    const validPoints = gpsTrack.filter((point) => Array.isArray(point) && point.length === 2 &&
+      typeof point[0] === 'number' && typeof point[1] === 'number' &&
+      !Number.isNaN(point[0]) && !Number.isNaN(point[1]) &&
+      point[0] >= -90 && point[0] <= 90 && point[1] >= -180 && point[1] <= 180
+    );
+
+    if (validPoints.length < 2) {
+      setRouteReady(false);
+      return;
+    }
+
+    const newFrom = validPoints[0];
+    const newTo = validPoints[validPoints.length - 1];
+    const formattedFrom = { lat: newFrom[0].toFixed(6), lon: newFrom[1].toFixed(6) };
+    const formattedTo = { lat: newTo[0].toFixed(6), lon: newTo[1].toFixed(6) };
+
+    const hasChanged =
+      !fromLoc || !toLoc ||
+      fromLoc.lat !== formattedFrom.lat || fromLoc.lon !== formattedFrom.lon ||
+      toLoc.lat !== formattedTo.lat || toLoc.lon !== formattedTo.lon;
+
+    if (hasChanged) {
+      setFromLoc(formattedFrom);
+      setToLoc(formattedTo);
+    }
+
+    setRouteReady(true);
+  }, [gpsTrack, fromLoc, toLoc, inputSource, liveFromLoc, liveToLoc]);
 
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const { isMobile } = useResponsive();
-  
-  const BUFFER_SIZE = 10;
+
+  const BUFFER_SIZE = 100; // Increased buffer size for smoother playback
   const PLAYBACK_FPS = 15;
-  const MAX_RECORDING_TIME = 60; // 1 minute limit
+  const MAX_RECORDING_TIME = 30; // 30 seconds limit for live camera
 
   const [totalFrames, setTotalFrames] = useState(null);
   const totalFramesValid = Number.isFinite(totalFrames) && totalFrames > 0;
@@ -64,11 +154,13 @@ const VideoDefectDetection = () => {
 
   // Get user location
   useEffect(() => {
-    if (navigator.geolocation) {
+    if (inputSource === 'camera' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
           setCoordinates(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+          // Initialize From default once
+          if (!fromLoc) setFromLoc({ lat: latitude.toFixed(6), lon: longitude.toFixed(6) });
         },
         (err) => {
           console.error("Error getting location:", err);
@@ -76,7 +168,7 @@ const VideoDefectDetection = () => {
         }
       );
     }
-  }, []);
+  }, [inputSource]);
 
   // Recording timer
   useEffect(() => {
@@ -95,7 +187,7 @@ const VideoDefectDetection = () => {
         clearInterval(recordingTimerRef.current);
       }
     }
-    
+
     return () => {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
@@ -168,6 +260,8 @@ const VideoDefectDetection = () => {
   }, []);
 
   const [warning, setWarning] = useState('');
+  const [showRangeModal, setShowRangeModal] = useState(false);
+  const [rangeMessage, setRangeMessage] = useState('');
 
   // Handle video file selection
   const handleVideoChange = (e) => {
@@ -228,6 +322,25 @@ const VideoDefectDetection = () => {
 
   // Start recording
   const handleStartRecording = async () => {
+    if (inputSource === 'camera') {
+      if (!liveFromLoc || !liveToLoc) {
+        setError('Please enter both "From" and "To" coordinates for live camera mode.');
+        return;
+      }
+      const fromCoords = liveFromLoc.split(',').map(c => parseFloat(c.trim()));
+      const toCoords = liveToLoc.split(',').map(c => parseFloat(c.trim()));
+
+      if (fromCoords.length !== 2 || toCoords.length !== 2 || fromCoords.some(isNaN) || toCoords.some(isNaN)) {
+        setError('Invalid coordinate format. Please use "latitude, longitude".');
+        return;
+      }
+
+      setFromLoc({ lat: fromCoords[0], lon: fromCoords[1] });
+      setToLoc({ lat: toCoords[0], lon: toCoords[1] });
+      setGpsTrack([fromCoords, toCoords]);
+      setRouteReady(true);
+    }
+
     console.log('handleStartRecording called');
     if (!webcamRef.current || !webcamRef.current.stream) {
       setError('Camera not available');
@@ -250,11 +363,7 @@ const VideoDefectDetection = () => {
       mediaRecorder.ondataavailable = (event) => {
         console.log('ondataavailable fired, size:', event.data.size);
         if (event.data.size > 0) {
-          setRecordedChunks(prev => {
-            const updated = [...prev, event.data];
-            recordedChunksRef.current = updated; // <-- Keep ref in sync
-            return updated;
-          });
+          recordedChunksRef.current.push(event.data);
         }
       };
 
@@ -279,10 +388,39 @@ const VideoDefectDetection = () => {
         // Reset the ref and state for next recording
         recordedChunksRef.current = [];
         setRecordedChunks([]);
+        if (liveLocationIntervalRef.current) {
+          clearInterval(liveLocationIntervalRef.current);
+        }
       };
 
       mediaRecorder.onstart = () => {
         console.log('mediaRecorder.onstart fired');
+        if (inputSource === 'camera') {
+          let frame = 0;
+          liveLocationIntervalRef.current = setInterval(() => {
+            frame++;
+            const progress = frame / (MAX_RECORDING_TIME / 5);
+            const fromCoords = liveFromLoc.split(',').map(c => parseFloat(c.trim()));
+            const toCoords = liveToLoc.split(',').map(c => parseFloat(c.trim()));
+            const lat = fromCoords[0] + (toCoords[0] - fromCoords[0]) * progress;
+            const lon = fromCoords[1] + (toCoords[1] - fromCoords[1]) * progress;
+            const newCoord = [lat, lon];
+            setLiveCurrentLoc(newCoord);
+            setGpsTrack(prev => [...prev, newCoord]);
+            setLocationUpdated(false);
+            setTimeout(() => setLocationUpdated(true), 1000);
+
+            // Check if out of range
+            const path = [fromCoords, toCoords];
+            const halfWidthM = 50; // 50 meters tolerance
+            const d = pointToSegmentDistanceMeters(newCoord, path[0], path[1]);
+            if (d > halfWidthM) {
+              setRangeMessage('Range exceeded, please stay within the specified coordinates.');
+              setShowRangeModal(true);
+            }
+
+          }, 5000);
+        } 
       };
       mediaRecorder.onerror = (e) => {
         console.error('mediaRecorder.onerror', e);
@@ -303,6 +441,15 @@ const VideoDefectDetection = () => {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       setRecordingTime(0);
+      // Stop GPS interval
+      const intervalId = mediaRecorderRef.current.__gpsIntervalId;
+      if (intervalId) {
+        clearInterval(intervalId);
+        mediaRecorderRef.current.__gpsIntervalId = null;
+      }
+      if (liveLocationIntervalRef.current) {
+        clearInterval(liveLocationIntervalRef.current);
+      }
     }
   };
 
@@ -321,6 +468,11 @@ const VideoDefectDetection = () => {
   const handleProcess = async () => {
     if (!isReadyForProcessing()) {
       setError('Please provide a video file first');
+      return;
+    }
+
+    if (inputSource === 'camera' && (!fromLoc || !toLoc)) {
+      setError('Waiting for GPS track to determine route. Please ensure location access is enabled.');
       return;
     }
 
@@ -347,7 +499,16 @@ const VideoDefectDetection = () => {
       const formData = new FormData();
       formData.append('video', videoFile);
       formData.append('selectedModel', selectedModel);
-      formData.append('coordinates', coordinates);
+      if (inputSource === 'camera') {
+        formData.append('coordinates', coordinates);
+        if (fromLoc && toLoc) {
+          formData.append('fromLocation', JSON.stringify(fromLoc));
+          formData.append('toLocation', JSON.stringify(toLoc));
+        }
+        if (gpsTrack && gpsTrack.length > 0) {
+          formData.append('gpsTrack', JSON.stringify(gpsTrack));
+        }
+      }
       const userString = sessionStorage.getItem('user');
       const user = userString ? JSON.parse(userString) : null;
       formData.append('username', user?.username || 'Unknown');
@@ -364,7 +525,28 @@ const VideoDefectDetection = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let serverMsg = `HTTP error! status: ${response.status}`;
+        try {
+          const errData = await response.json();
+          if (errData && errData.code === 'GPS_VALIDATION_FAILED') {
+            setRangeMessage('You are outside the defined range — please return within the route.');
+            setShowRangeModal(true);
+            setIsProcessing(false);
+            setLoading(false);
+            return;
+          } else if (errData && (errData.code === 'GPS_INPUT_INVALID' || errData.code === 'GPS_INPUT_MISSING')) {
+            serverMsg = errData.message || serverMsg;
+          } else if (errData && errData.message) {
+            serverMsg = errData.message;
+          }
+        } catch (e) {
+          // Fallback to text if JSON parsing fails
+          try {
+            const txt = await response.text();
+            if (txt) serverMsg = txt;
+          } catch (_) {}
+        }
+        throw new Error(serverMsg);
       }
 
       const reader = response.body.getReader();
@@ -374,7 +556,7 @@ const VideoDefectDetection = () => {
       // Helper to accumulate detections
       const appendDetections = (detections) => {
         if (detections && Array.isArray(detections) && detections.length > 0) {
-          setAllDetections(prev => [...prev, ...detections]);
+          setAllDetections(prev => [...prev, ...detections].slice(-100)); // Limit detections to 100
         }
       };
 
@@ -435,10 +617,7 @@ const VideoDefectDetection = () => {
 
                   // Update frame display immediately
                   if (data.frame && typeof data.frame === 'string' && data.frame.length > 1000) {
-                    setFrameBuffer(prev => {
-                      const newBuffer = [...prev, data.frame];
-                      return newBuffer;
-                    });
+                    setFrameBuffer(prev => [...prev, data.frame].slice(-BUFFER_SIZE)); // Limit frame buffer
                     setProcessedVideo(data.frame);
                     setCurrentFrameIndex(prev => prev + 1);
                     if (isBuffering) {
@@ -456,6 +635,10 @@ const VideoDefectDetection = () => {
                   if (data.all_detections) {
                     setVideoResults(data);
                     setAllDetections(data.all_detections);
+                    // If backend returns a GPS track, update the state to draw it on the map
+                    if (data.gps_track && Array.isArray(data.gps_track) && data.gps_track.length > 0) {
+                      setGpsTrack(data.gps_track);
+                    }
                     setIsProcessing(false);
                     setLoading(false);
                     setIsBuffering(false);
@@ -553,6 +736,11 @@ const VideoDefectDetection = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+    setLiveFromLoc('');
+    setLiveToLoc('');
+    setLiveCurrentLoc(null);
+    setGpsTrack([]);
+    setRouteReady(false);
   };
 
   // Playback controls
@@ -594,402 +782,507 @@ const VideoDefectDetection = () => {
 
   return (
     <div className="video-defect-detection">
-      <Row>
-        <Col md={6}>
-          <Card className="mb-4">
-            <Card.Header className="bg-primary text-white">
-              <h5 className="mb-0">Video Defect Detection</h5>
-            </Card.Header>
-            <Card.Body>
-              {error && (
-                <Alert variant="danger" className="mb-3">
-                  {error}
-                </Alert>
-              )}
-              {warning && (
-                <Alert variant="warning" className="mb-3">
-                  {warning}
-                </Alert>
-              )}
+        <Card className="mb-4">
+          <Card.Header className="bg-primary text-white">
+            <h5 className="mb-0">Video Defect Detection</h5>
+          </Card.Header>
+          <Card.Body>
+            {error && (
+              <Alert variant="danger" className="mb-3">
+                {error}
+              </Alert>
+            )}
+            {warning && (
+              <Alert variant="warning" className="mb-3">
+                {warning}
+              </Alert>
+            )}
 
-              {/* Model Selection */}
+            {/* Model Selection */}
+            <Form.Group className="mb-3">
+              <Form.Label>Detection Model</Form.Label>
+              <Form.Select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                disabled={isProcessing}
+              >
+                {modelOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+
+            {/* Video Upload */}
+            {inputSource === 'video' && (
               <Form.Group className="mb-3">
-                <Form.Label>Detection Model</Form.Label>
-                <Form.Select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
+                <Form.Label>Upload Video</Form.Label>
+                <Form.Control
+                  type="file"
+                  accept="video/*"
+                  onChange={handleVideoChange}
+                  ref={fileInputRef}
                   disabled={isProcessing}
-                >
-                  {modelOptions.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-
-              {/* Input Source Selection */}
-              <Form.Group className="mb-3">
-                <Form.Label>Input Source</Form.Label>
-                <Form.Select
-                  value={inputSource}
-                  onChange={(e) => setInputSource(e.target.value)}
-                  disabled={isProcessing}
-                >
-                  <option value="video">Video Upload</option>
-                  <option value="camera">Live Camera Recording</option>
-                </Form.Select>
-              </Form.Group>
-
-              {/* Video Upload */}
-              {inputSource === 'video' && (
-                <Form.Group className="mb-3">
-                  <Form.Label>Upload Video</Form.Label>
-                  <Form.Control
-                    type="file"
-                    accept="video/*"
-                    onChange={handleVideoChange}
-                    ref={fileInputRef}
-                    disabled={isProcessing}
-                  />
-                  {videoPreview && (
-                    <div className="mt-3">
-                      <video
-                        src={videoPreview}
-                        controls
-                        className="video-preview"
-                        style={{ maxHeight: '200px' }}
-                      />
-                    </div>
-                  )}
-                </Form.Group>
-              )}
-
-              {/* Camera Recording */}
-              {inputSource === 'camera' && (
-                <div className="mb-3">
-                  <div className="d-flex gap-2 mb-2">
-                    <Button
-                      variant={cameraActive ? "danger" : "info"}
-                      onClick={toggleCamera}
-                      disabled={isProcessing}
-                    >
-                      {cameraActive ? 'Stop Camera' : 'Start Camera'}
-                    </Button>
-                    {isMobile && cameraActive && (
-                      <Button
-                        variant="outline-secondary"
-                        onClick={toggleCameraOrientation}
-                        size="sm"
-                      >
-                        Rotate Camera
-                      </Button>
-                    )}
+                />
+                {videoPreview && (
+                  <div className="mt-3">
+                    <video
+                      src={videoPreview}
+                      controls
+                      className="video-preview"
+                      style={{ maxHeight: '200px' }}
+                      key={videoPreview}
+                    />
                   </div>
-
-                  {cameraActive && (
-                    <div className="webcam-container">
-                      <Webcam
-                        audio={false}
-                        ref={webcamRef}
-                        screenshotFormat="image/jpeg"
-                        width="100%"
-                        height="auto"
-                        videoConstraints={{
-                          width: 640,
-                          height: 480,
-                          facingMode: cameraOrientation
-                        }}
-                      />
-                      
-                      <div className="mt-2">
-                        {!isRecording ? (
-                          <Button
-                            variant="success"
-                            onClick={handleStartRecording}
-                            disabled={isProcessing}
-                          >
-                            Start Recording
-                          </Button>
-                        ) : (
-                          <div className="d-flex align-items-center gap-2">
-                            <Button
-                              variant="danger"
-                              onClick={handleStopRecording}
-                            >
-                              Stop Recording
-                            </Button>
-                            <span className="text-danger">
-                              Recording: {formatTime(recordingTime)} / {formatTime(MAX_RECORDING_TIME)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {videoPreview && (
-                    <div className="mt-3">
-                      <video
-                        src={videoPreview}
-                        controls
-                        className="video-preview"
-                        style={{ maxHeight: '200px' }}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="action-buttons">
-                <Button
-                  variant="primary"
-                  onClick={handleProcess}
-                  disabled={!isReadyForProcessing() || isProcessing}
-                >
-                  {loading ? (
-                    <>
-                      <Spinner size="sm" className="me-2" />
-                      Processing...
-                    </>
-                  ) : (
-                    'Process Video'
-                  )}
-                </Button>
-                
-                {isProcessing && (
-                  <Button
-                    variant="warning"
-                    onClick={handleStopProcessing}
-                  >
-                    Stop Processing
-                  </Button>
                 )}
-                
-                <Button
-                  variant="secondary"
-                  onClick={handleReset}
-                  disabled={isProcessing}
-                >
-                  Reset
-                </Button>
-              </div>
+              </Form.Group>
+            )}
 
-              {/* Always show progress during processing */}
-              {isProcessing && (
-                <div className="mt-3">
-                  {(totalFramesValid || estimatedTotalFrames) && processingProgress > 0 && Number.isFinite(processingProgress) ? (
-                    <>
-                      <div className="d-flex justify-content-between">
-                        <span>Processing Progress:</span>
-                        <span>{Math.max(0, Math.min(100, processingProgress)).toFixed(1)}%</span>
-                      </div>
-                      <div className="progress mt-1">
-                        <div
-                          className="progress-bar progress-bar-striped progress-bar-animated"
-                          role="progressbar"
-                          style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
-                          aria-valuenow={Math.max(0, Math.min(100, processingProgress))}
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                        ></div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="d-flex align-items-center mt-3">
-                      <span>Processing...</span>
-                      <div className="progress flex-grow-1 ms-2" style={{ height: '20px' }}>
-                        <div
-                          className="progress-bar progress-bar-striped progress-bar-animated"
-                          role="progressbar"
-                          style={{ width: `100%`, backgroundColor: '#e0e0e0' }}
-                          aria-valuenow={0}
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                        ></div>
-                      </div>
-                    </div>
+            {/* Input Source Selection */}
+            <Form.Group className="mb-3">
+              <Form.Label>Input Source</Form.Label>
+              <Form.Select
+                value={inputSource}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === 'drone') {
+                    setShowDronePopup(true);
+                  } else {
+                    setInputSource(value);
+                  }
+                }}
+                disabled={isProcessing}
+              >
+                <option value="video">Upload Video</option>
+                <option value="camera">Live Camera Recording</option>
+                <option value="drone">Drone View</option>
+              </Form.Select>
+            </Form.Group>
+
+            {/* Camera Recording */}
+            {inputSource === 'camera' && (
+              <div className="mb-3">
+                {/* From/To Location Inputs for Live Camera */}
+                <Row className="mb-3">
+                  <Col md={6}>
+                    <Form.Group>
+                      <Form.Label>From Coordinates (Lat, Lng)</Form.Label>
+                      <Form.Control
+                        type="text"
+                        placeholder="e.g., 1.290270, 103.851959"
+                        value={liveFromLoc}
+                        onChange={(e) => setLiveFromLoc(e.target.value)}
+                        disabled={isRecording || isProcessing}
+                      />
+                    </Form.Group>
+                  </Col>
+                  <Col md={6}>
+                    <Form.Group>
+                      <Form.Label>To Coordinates (Lat, Lng)</Form.Label>
+                      <Form.Control
+                        type="text"
+                        placeholder="e.g., 1.352083, 103.819836"
+                        value={liveToLoc}
+                        onChange={(e) => setLiveToLoc(e.target.value)}
+                        disabled={isRecording || isProcessing}
+                      />
+                    </Form.Group>
+                  </Col>
+                </Row>
+
+                <div className="d-flex gap-2 mb-2">
+                  <Button
+                    variant={cameraActive ? "danger" : "info"}
+                    onClick={toggleCamera}
+                    disabled={isProcessing}
+                  >
+                    {cameraActive ? 'Stop Camera' : 'Start Camera'}
+                  </Button>
+                  {isMobile && cameraActive && (
+                    <Button
+                      variant="outline-secondary"
+                      onClick={toggleCameraOrientation}
+                      size="sm"
+                    >
+                      Rotate Camera
+                    </Button>
                   )}
                 </div>
+
+                {cameraActive && (
+                  <div className="webcam-container">
+                    <Webcam
+                      audio={false}
+                      ref={webcamRef}
+                      screenshotFormat="image/jpeg"
+                      width="100%"
+                      height="auto"
+                      videoConstraints={{
+                        width: 640,
+                        height: 480,
+                        facingMode: cameraOrientation
+                      }}
+                    />
+                    
+                    <div className="mt-2">
+                      {!isRecording ? (
+                        <Button
+                          variant="success"
+                          onClick={handleStartRecording}
+                          disabled={isProcessing}
+                        >
+                          Start Recording
+                        </Button>
+                      ) : (
+                        <div className="d-flex align-items-center gap-2">
+                          <Button
+                            variant="danger"
+                            onClick={handleStopRecording}
+                          >
+                            Stop Recording
+                          </Button>
+                          <span className="text-danger">
+                            Recording: {formatTime(recordingTime)} / {formatTime(MAX_RECORDING_TIME)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {videoPreview && (
+                  <div className="mt-3">
+                    <video
+                      src={videoPreview}
+                      controls
+                      className="video-preview"
+                      style={{ maxHeight: '200px' }}
+                      key={videoPreview}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="action-buttons">
+              <Button
+                variant="primary"
+                onClick={handleProcess}
+                disabled={!isReadyForProcessing() || isProcessing}
+              >
+                {loading ? (
+                  <>
+                    <Spinner size="sm" className="me-2" />
+                    Processing...
+                  </>
+                ) : (
+                  'Process Video'
+                )}
+              </Button>
+              
+              {isProcessing && (
+                <Button
+                  variant="warning"
+                  onClick={handleStopProcessing}
+                >
+                  Stop Processing
+                </Button>
               )}
+              
+              <Button
+                variant="secondary"
+                onClick={handleReset}
+                disabled={isProcessing}
+              >
+                Reset
+              </Button>
+            </div>
+
+            {/* Always show progress during processing */}
+            {isProcessing && (
+              <div className="mt-3">
+                {(totalFramesValid || estimatedTotalFrames) && processingProgress > 0 && Number.isFinite(processingProgress) ? (
+                  <>
+                    <div className="d-flex justify-content-between">
+                      <span>Processing Progress:</span>
+                      <span>{Math.max(0, Math.min(100, processingProgress)).toFixed(1)}%</span>
+                    </div>
+                    <div className="progress mt-1">
+                      <div
+                        className="progress-bar progress-bar-striped progress-bar-animated"
+                        role="progressbar"
+                        style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
+                        aria-valuenow={Math.max(0, Math.min(100, processingProgress))}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                      ></div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="d-flex align-items-center mt-3">
+                    <span>Processing...</span>
+                    <div className="progress flex-grow-1 ms-2" style={{ height: '20px' }}>
+                      <div
+                        className="progress-bar progress-bar-striped progress-bar-animated"
+                        role="progressbar"
+                        style={{ width: `100%`, backgroundColor: '#e0e0e0' }}
+                        aria-valuenow={0}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                      ></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+
+        {(inputSource === 'camera' ? routeReady : true) && 
+            <MapPanel
+              panelTitle="Video Route Map"
+              fromLocation={fromLoc}
+              toLocation={toLoc}
+              onFromChange={setFromLoc}
+              onToChange={setToLoc}
+              onRoutesLoaded={setRoutes}
+              gpsTrack={gpsTrack}
+              onOutOfRange={() => {
+                setRangeMessage('You are outside the defined range — please return within the route.');
+                setShowRangeModal(true);
+              }}
+            />
+        }
+
+        {/* Live Location Update Display */}
+        {inputSource === 'camera' && isRecording && (
+          <Card className="mt-4">
+            <Card.Body>
+                <Row className="align-items-center">
+                    <Col>
+                        <strong>Location:</strong>
+                        {liveFromLoc && <span> From: {liveFromLoc}</span>}
+                        {liveToLoc && <span> To: {liveToLoc}</span>}
+                        {liveCurrentLoc ? (
+                        <span> Current: {` ${liveCurrentLoc[0].toFixed(6)}, ${liveCurrentLoc[1].toFixed(6)}`}
+                        </span>
+                        ) : (
+                        <span> Waiting for update...</span>
+                        )}
+                    </Col>
+                    <Col xs="auto">
+                        {locationUpdated ? (
+                        <span className="text-success">✓ Updated</span>
+                        ) : (
+                        <Spinner animation="border" size="sm" role="status">
+                            <span className="visually-hidden">Loading...</span>
+                        </Spinner>
+                        )}
+                    </Col>
+                </Row>
             </Card.Body>
           </Card>
-        </Col>
+        )}
 
-        <Col md={6}>
-          {/* Show detection results as soon as we have any, and always after processing is complete if results exist */}
-          {((showResults || allDetections.length > 0 || (!isProcessing && videoResults && allDetections.length > 0))) && (
-            <Card>
-              <Card.Header className="bg-info text-white">
-                <h5 className="mb-0">Detection Results</h5>
-                {isProcessing && (
-                  <small className="text-white-50">
-                    Results update in real-time as processing continues...
-                  </small>
-                )}
-                {!isProcessing && videoResults && (
-                  <small className="text-success">
-                    <b>Processing Complete.</b> Final results are shown below.
-                  </small>
-                )}
-              </Card.Header>
-              <Card.Body>
-                {/* Summary */}
-                <div className="detection-summary mb-3">
-                  <h6>Detection Summary:</h6>
-                  <div className="mb-2">
-                    {Object.entries(getDetectionSummary()).map(([type, count]) => (
-                      <span key={type} className="badge bg-secondary me-1">
-                        {type}: {count}
-                      </span>
-                    ))}
-                  </div>
-                  
-                  {/* Tracking Statistics */}
-                  <div className="tracking-stats">
-                    <small className="text-muted">
-                      <strong>Tracking Stats:</strong> {' '}
-                      <span className="badge bg-success me-1">
-                        Unique: {getTrackingStats().uniqueDetections}
-                      </span>
-                      <span className="badge bg-info me-1">
-                        Total Frames: {getTrackingStats().frameDetections}
-                      </span>
-                      <span className="badge bg-warning">
-                        Duplicates Removed: {getTrackingStats().duplicatesRemoved}
-                      </span>
-                    </small>
-                  </div>
+        {/* Show detection results as soon as we have any, and always after processing is complete if results exist */}
+        {((showResults || allDetections.length > 0 || (!isProcessing && videoResults && allDetections.length > 0))) && (
+          <Card className="mt-4">
+            <Card.Header className="bg-info text-white">
+              <h5 className="mb-0">Detection Results</h5>
+              {isProcessing && (
+                <small className="text-white-50">
+                  Results update in real-time as processing continues...
+                </small>
+              )}
+              {!isProcessing && videoResults && (
+                <small className="text-success">
+                  <b>Processing Complete.</b> Final results are shown below.
+                </small>
+              )}
+            </Card.Header>
+            <Card.Body>
+              {/* Summary */}
+              <div className="detection-summary mb-3">
+                <h6>Detection Summary:</h6>
+                <div className="mb-2">
+                  {Object.entries(getDetectionSummary()).map(([type, count]) => (
+                    <span key={type} className="badge bg-secondary me-1">
+                      {type}: {count}
+                    </span>
+                  ))}
                 </div>
+                
+                {/* Tracking Statistics */}
+                <div className="tracking-stats">
+                  <small className="text-muted">
+                    <strong>Tracking Stats:</strong> {' '}
+                    <span className="badge bg-success me-1">
+                      Unique: {getTrackingStats().uniqueDetections}
+                    </span>
+                    <span className="badge bg-info me-1">
+                      Total Frames: {getTrackingStats().frameDetections}
+                    </span>
+                    <span className="badge bg-warning">
+                      Duplicates Removed: {getTrackingStats().duplicatesRemoved}
+                    </span>
+                  </small>
+                </div>
+              </div>
 
-                {/* Separate Tables for Each Defect Type */}
-                {(() => {
-                  const potholeDetections = allDetections.filter(d => d.type === 'Pothole');
-                  const crackDetections = allDetections.filter(d => d.type.includes('Crack'));
-                  const kerbDetections = allDetections.filter(d => d.type.includes('Kerb'));
+              {/* Separate Tables for Each Defect Type */}
+              {(() => {
+                const potholeDetections = allDetections.filter(d => d.type === 'Pothole');
+                const crackDetections = allDetections.filter(d => d.type.includes('Crack'));
+                const kerbDetections = allDetections.filter(d => d.type.includes('Kerb'));
 
-                  return (
-                    <div>
-                      {/* Pothole Table - Show only if "All" or "Potholes" is selected */}
-                      {(selectedModel === 'All' || selectedModel === 'Potholes') && (
-                        <div className="defect-section potholes mb-4">
-                          <h6 className="text-danger">
-                            <span className="emoji">🕳️</span>
-                            Potholes Detected: {potholeDetections.length}
-                          </h6>
-                          {potholeDetections.length > 0 ? (
-                            <div className="detection-table-container">
-                              <Table striped bordered hover size="sm">
-                                <thead>
-                                  <tr>
-                                    <th>ID</th>
-                                    <th>Area (cm²)</th>
-                                    <th>Depth (cm)</th>
-                                    <th>Volume (cm³)</th>
-                                    <th>Volume Range</th>
+                return (
+                  <div>
+                    {/* Pothole Table - Show only if "All" or "Potholes" is selected */}
+                    {(selectedModel === 'All' || selectedModel === 'Potholes') && (
+                      <div className="defect-section potholes mb-4">
+                        <h6 className="text-danger">
+                          <span className="emoji">🕳️</span>
+                          Potholes Detected: {potholeDetections.length}
+                        </h6>
+                        {potholeDetections.length > 0 ? (
+                          <div className="detection-table-container">
+                            <Table striped bordered hover size="sm">
+                              <thead>
+                                <tr>
+                                  <th>ID</th>
+                                  <th>Area (cm²)</th>
+                                  <th>Depth (cm)</th>
+                                  <th>Volume (cm³)</th>
+                                  <th>Volume Range</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {potholeDetections.map((detection, index) => (
+                                  <tr key={index}>
+                                    <td>{detection.track_id || index + 1}</td>
+                                    <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.depth_cm ? detection.depth_cm.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.volume ? detection.volume.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.volume_range || 'N/A'}</td>
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {potholeDetections.map((detection, index) => (
-                                    <tr key={index}>
-                                      <td>{detection.track_id || index + 1}</td>
-                                      <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
-                                      <td>{detection.depth_cm ? detection.depth_cm.toFixed(2) : 'N/A'}</td>
-                                      <td>{detection.volume ? detection.volume.toFixed(2) : 'N/A'}</td>
-                                      <td>{detection.volume_range || 'N/A'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </Table>
-                            </div>
-                          ) : (
-                            <div className="no-defects-message">No potholes detected</div>
-                          )}
-                        </div>
-                      )}
+                                ))}
+                              </tbody>
+                            </Table>
+                          </div>
+                        ) : (
+                          <div className="no-defects-message">No potholes detected</div>
+                        )}
+                      </div>
+                    )}
 
-                      {/* Cracks Table - Show only if "All" or "Alligator Cracks" is selected */}
-                      {(selectedModel === 'All' || selectedModel === 'Alligator Cracks') && (
-                        <div className="defect-section cracks mb-4">
-                          <h6 className="text-success">
-                            <span className="emoji">🪨</span>
-                            Cracks Detected: {crackDetections.length}
-                          </h6>
-                          {crackDetections.length > 0 ? (
-                            <div className="detection-table-container">
-                              <Table striped bordered hover size="sm">
-                                <thead>
-                                  <tr>
-                                    <th>ID</th>
-                                    <th>Type</th>
-                                    <th>Area (cm²)</th>
-                                    <th>Area Range</th>
+                    {/* Cracks Table - Show only if "All" or "Alligator Cracks" is selected */}
+                    {(selectedModel === 'All' || selectedModel === 'Alligator Cracks') && (
+                      <div className="defect-section cracks mb-4">
+                        <h6 className="text-success">
+                          <span className="emoji">🪨</span>
+                          Cracks Detected: {crackDetections.length}
+                        </h6>
+                        {crackDetections.length > 0 ? (
+                          <div className="detection-table-container">
+                            <Table striped bordered hover size="sm">
+                              <thead>
+                                <tr>
+                                  <th>ID</th>
+                                  <th>Type</th>
+                                  <th>Area (cm²)</th>
+                                  <th>Area Range</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {crackDetections.map((detection, index) => (
+                                  <tr key={index}>
+                                    <td>{detection.track_id || index + 1}</td>
+                                    <td>{detection.type}</td>
+                                    <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
+                                    <td>{detection.area_range || 'N/A'}</td>
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {crackDetections.map((detection, index) => (
-                                    <tr key={index}>
-                                      <td>{detection.track_id || index + 1}</td>
-                                      <td>{detection.type}</td>
-                                      <td>{detection.area_cm2 ? detection.area_cm2.toFixed(2) : 'N/A'}</td>
-                                      <td>{detection.area_range || 'N/A'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </Table>
-                            </div>
-                          ) : (
-                            <div className="no-defects-message">No cracks detected</div>
-                          )}
-                        </div>
-                      )}
+                                ))}
+                              </tbody>
+                            </Table>
+                          </div>
+                        ) : (
+                          <div className="no-defects-message">No cracks detected</div>
+                        )}
+                      </div>
+                    )}
 
-                      {/* Kerbs Table - Show only if "All" or "Kerbs" is selected */}
-                      {(selectedModel === 'All' || selectedModel === 'Kerbs') && (
-                        <div className="defect-section kerbs mb-4">
-                          <h6 className="text-primary">
-                            <span className="emoji">🚧</span>
-                            Kerbs Detected: {kerbDetections.length}
-                          </h6>
-                          {kerbDetections.length > 0 ? (
-                            <div className="detection-table-container">
-                              <Table striped bordered hover size="sm">
-                                <thead>
-                                  <tr>
-                                    <th>ID</th>
-                                    <th>Type</th>
-                                    <th>Condition</th>
-                                    <th>Length</th>
+                    {/* Kerbs Table - Show only if "All" or "Kerbs" is selected */}
+                    {(selectedModel === 'All' || selectedModel === 'Kerbs') && (
+                      <div className="defect-section kerbs mb-4">
+                        <h6 className="text-primary">
+                          <span className="emoji">🚧</span>
+                          Kerbs Detected: {kerbDetections.length}
+                        </h6>
+                        {kerbDetections.length > 0 ? (
+                          <div className="detection-table-container">
+                            <Table striped bordered hover size="sm">
+                              <thead>
+                                <tr>
+                                  <th>ID</th>
+                                  <th>Type</th>
+                                  <th>Condition</th>
+                                  <th>Length</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {kerbDetections.map((detection, index) => (
+                                  <tr key={index}>
+                                    <td>{detection.track_id || index + 1}</td>
+                                    <td>{detection.kerb_type || 'Concrete Kerb'}</td>
+                                    <td>{detection.condition || detection.type}</td>
+                                    <td>{detection.length_m ? detection.length_m.toFixed(2) : 'N/A'}</td>
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {kerbDetections.map((detection, index) => (
-                                    <tr key={index}>
-                                      <td>{detection.track_id || index + 1}</td>
-                                      <td>{detection.kerb_type || 'Concrete Kerb'}</td>
-                                      <td>{detection.condition || detection.type}</td>
-                                      <td>{detection.length_m ? detection.length_m.toFixed(2) : 'N/A'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </Table>
-                            </div>
-                          ) : (
-                            <div className="no-defects-message">No kerbs detected</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </Card.Body>
-            </Card>
-          )}
-        </Col>
-      </Row>
+                                ))}
+                              </tbody>
+                            </Table>
+                          </div>
+                        ) : (
+                          <div className="no-defects-message">No kerbs detected</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </Card.Body>
+          </Card>
+        )}
+
+      {/* Range Exceeded Modal */}
+      <Modal show={showRangeModal} onHide={() => setShowRangeModal(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Out of Route</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {rangeMessage || 'You are outside the defined range — please return within the route.'}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="primary" onClick={() => setShowRangeModal(false)}>
+            OK
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showDronePopup} onHide={() => setShowDronePopup(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Feature Update</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>This feature will be updated soon.</Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDronePopup(false)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
 };
 
-export default VideoDefectDetection; 
+export default memo(VideoDefectDetection);

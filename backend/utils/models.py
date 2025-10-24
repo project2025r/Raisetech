@@ -18,11 +18,11 @@ def get_device():
     if DEVICE is None:
         if torch.cuda.is_available():
             DEVICE = torch.device("cuda")
-            print(f"✅ CUDA is available! Using GPU: {torch.cuda.get_device_name(0)}")
-            print(f"📊 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            print(f"[INFO] CUDA is available! Using GPU: {torch.cuda.get_device_name(0)}")
+            print(f"[INFO] GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
         else:
             DEVICE = torch.device("cpu")
-            print("⚠️ CUDA not available, using CPU")
+            print("[WARNING] CUDA not available, using CPU")
     return DEVICE
 
 # Define model paths with absolute paths
@@ -80,11 +80,11 @@ def load_yolo_models():
                         with torch.no_grad():
                             _ = model.model(dummy_input)
                         
-                        print(f"🚀 Model {model_name} optimized for CUDA with FP16")
+                        print(f"[INFO] Model {model_name} optimized for CUDA with FP16")
                         
                     except Exception as e:
-                        print(f"⚠️ CUDA optimization failed for {model_name}: {e}")
-                        print(f"🔄 Falling back to FP32 for {model_name}")
+                        print(f"[WARNING] CUDA optimization failed for {model_name}: {e}")
+                        print(f"[INFO] Falling back to FP32 for {model_name}")
                         
                         # Fallback to FP32 on CUDA
                         model.model.float()
@@ -94,23 +94,23 @@ def load_yolo_models():
                         with torch.no_grad():
                             _ = model.model(dummy_input)
                         
-                        print(f"✅ Model {model_name} loaded on CUDA with FP32")
+                        print(f"[SUCCESS] Model {model_name} loaded on CUDA with FP32")
                 else:
                     # CPU optimization
                     model.model.float()  # Ensure FP32 for CPU
-                    print(f"✅ Model {model_name} loaded on CPU with FP32")
+                    print(f"[SUCCESS] Model {model_name} loaded on CPU with FP32")
                 
                 models[model_name] = model
                 models[f"{model_name}_classes"] = list(model.names.values())
-                print(f"✅ Loaded model: {model_name} on {device}")
+                print(f"[SUCCESS] Loaded model: {model_name} on {device}")
                 
             except Exception as e:
-                print(f"❌ Error loading model {model_name}: {e}")
+                print(f"[ERROR] Error loading model {model_name}: {e}")
                 
                 # Complete fallback to CPU if CUDA fails
                 if device.type == 'cuda':
                     try:
-                        print(f"🔄 Retrying {model_name} on CPU...")
+                        print(f"[INFO] Retrying {model_name} on CPU...")
                         model = YOLO(model_path)
                         model.to(torch.device("cpu"))
                         model.model.float()  # Ensure FP32 for CPU
@@ -123,11 +123,11 @@ def load_yolo_models():
                         
                         models[model_name] = model
                         models[f"{model_name}_classes"] = list(model.names.values())
-                        print(f"✅ Loaded model: {model_name} on CPU (fallback)")
+                        print(f"[SUCCESS] Loaded model: {model_name} on CPU (fallback)")
                     except Exception as e2:
-                        print(f"❌ Failed to load {model_name} on CPU: {e2}")
+                        print(f"[ERROR] Failed to load {model_name} on CPU: {e2}")
         else:
-            print(f"⚠️ Model file not found: {model_path}")
+            print(f"[WARNING] Model file not found: {model_path}")
     
     return models
 
@@ -136,54 +136,54 @@ def load_midas():
     Load the MiDaS depth estimation model with proper device and dtype handling
     """
     try:
-        print("🔄 Loading MiDaS model...")
+        print("[INFO] Loading MiDaS model...")
         device = get_device()
         
         # First try loading the small model
         try:
-            print("📥 Attempting to load MiDaS_small model...")
+            print("[INFO] Attempting to load MiDaS_small model...")
             midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", pretrained=True, trust_repo=True)
-            print("✅ MiDaS_small model loaded successfully")
+            print("[SUCCESS] MiDaS_small model loaded successfully")
         except Exception as e:
-            print(f"⚠️ Failed to load MiDaS_small, error: {str(e)}")
-            print("🔄 Attempting to load DPT_Large model as fallback...")
+            print(f"[WARNING] Failed to load MiDaS_small, error: {str(e)}")
+            print("[INFO] Attempting to load DPT_Large model as fallback...")
             try:
                 midas = torch.hub.load("intel-isl/MiDaS", "DPT_Large", pretrained=True, trust_repo=True)
-                print("✅ DPT_Large model loaded successfully")
+                print("[SUCCESS] DPT_Large model loaded successfully")
             except Exception as e2:
-                print(f"❌ Failed to load DPT_Large model: {str(e2)}")
+                print(f"[ERROR] Failed to load DPT_Large model: {str(e2)}")
                 return None, None
         
-        print(f"🔄 Moving MiDaS model to device: {device}")
+        print(f"[INFO] Moving MiDaS model to device: {device}")
         midas.to(device)
         midas.eval()
         
         # Apply device-specific optimizations
         if device.type == 'cuda':
             try:
-                print("🔄 Optimizing model for CUDA...")
+                print("[INFO] Optimizing model for CUDA...")
                 torch.cuda.empty_cache()
                 midas.half()  # Convert to FP16 for faster inference
-                print("✅ MiDaS model optimized for CUDA with FP16")
+                print("[SUCCESS] MiDaS model optimized for CUDA with FP16")
             except Exception as e:
-                print(f"⚠️ MiDaS CUDA optimization failed: {str(e)}")
-                print("🔄 Falling back to FP32 for MiDaS")
+                print(f"[WARNING] MiDaS CUDA optimization failed: {str(e)}")
+                print("[INFO] Falling back to FP32 for MiDaS")
                 midas.float()
-                print("✅ MiDaS model loaded on CUDA with FP32")
+                print("[SUCCESS] MiDaS model loaded on CUDA with FP32")
         else:
             midas.float()  # Ensure FP32 for CPU
-            print("✅ MiDaS model loaded on CPU with FP32")
+            print("[SUCCESS] MiDaS model loaded on CPU with FP32")
         
-        print("🔄 Loading MiDaS transforms...")
+        print("[INFO] Loading MiDaS transforms...")
         try:
             midas_transform = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
-            print("✅ MiDaS transforms loaded successfully")
+            print("[SUCCESS] MiDaS transforms loaded successfully")
         except Exception as e:
-            print(f"❌ Failed to load MiDaS transforms: {str(e)}")
+            print(f"[ERROR] Failed to load MiDaS transforms: {str(e)}")
             return None, None
         
         # Verify model is loaded correctly
-        print("🔄 Verifying MiDaS model...")
+        print("[INFO] Verifying MiDaS model...")
         try:
             # Create a dummy input
             dummy_input = torch.randn(1, 3, 256, 256).to(device)
@@ -193,21 +193,21 @@ def load_midas():
             # Test inference
             with torch.no_grad():
                 _ = midas(dummy_input)
-            print("✅ MiDaS model verification successful")
+            print("[SUCCESS] MiDaS model verification successful")
         except Exception as e:
-            print(f"❌ MiDaS model verification failed: {str(e)}")
+            print(f"[ERROR] MiDaS model verification failed: {str(e)}")
             return None, None
         
-        print(f"✅ MiDaS setup completed successfully on {device}")
+        print(f"[SUCCESS] MiDaS setup completed successfully on {device}")
         return midas, midas_transform
         
     except Exception as e:
-        print(f"❌ Critical error in MiDaS setup: {str(e)}")
+        print(f"[ERROR] Critical error in MiDaS setup: {str(e)}")
         
         # Fallback to CPU if CUDA fails
         if get_device().type == 'cuda':
             try:
-                print("🔄 Retrying MiDaS setup on CPU...")
+                print("[INFO] Retrying MiDaS setup on CPU...")
                 midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", pretrained=True, trust_repo=True)
                 midas.to(torch.device("cpu"))
                 midas.eval()
@@ -219,10 +219,10 @@ def load_midas():
                     dummy_input = torch.randn(1, 3, 256, 256)
                     _ = midas(dummy_input)
                 
-                print("✅ MiDaS model loaded successfully on CPU (fallback)")
+                print("[SUCCESS] MiDaS model loaded successfully on CPU (fallback)")
                 return midas, midas_transform
             except Exception as e2:
-                print(f"❌ Failed to load MiDaS on CPU: {str(e2)}")
+                print(f"[ERROR] Failed to load MiDaS on CPU: {str(e2)}")
         
         return None, None
 
@@ -287,11 +287,11 @@ def estimate_depth(frame, midas, midas_transform):
         # Apply slight Gaussian blur to reduce noise
         depth_map = cv2.GaussianBlur(depth_map, (3, 3), 0)
         
-        print("✅ Depth map generated successfully")
+        print("[SUCCESS] Depth map generated successfully")
         return depth_map
         
     except Exception as e:
-        print(f"❌ Error in depth estimation: {str(e)}")
+        print(f"[ERROR] Error in depth estimation: {str(e)}")
         return None
 
 def calculate_real_depth(binary_mask, depth_map, pixel_to_cm=0.1, calibration_value=1.6):
@@ -397,23 +397,23 @@ def classify_road_image(image, models, confidence_threshold=0.3):
         }
     """
     if not models or "classification" not in models:
-        print("⚠️ Classification model not available")
+        print("[WARNING] Classification model not available")
         return {"is_road": True, "confidence": 1.0, "class_name": "unknown"}  # Default to allow processing
 
-    print(f"🔍 DEBUG: Starting YOLOv11n classification with threshold {confidence_threshold}")
-    print(f"🔍 DEBUG: Available models: {list(models.keys())}")
-    print(f"🔍 DEBUG: Classification model type: {type(models['classification'])}")
-    print(f"🔍 DEBUG: Image shape: {image.shape}")
-    print(f"🔍 DEBUG: Image dtype: {image.dtype}")
-    print(f"🔍 DEBUG: Image min/max values: {image.min()}/{image.max()}")
-    print(f"🔍 DEBUG: Image channels: {image.shape[2] if len(image.shape) == 3 else 'N/A'}")
+    print(f"[DEBUG] Starting YOLOv11n classification with threshold {confidence_threshold}")
+    print(f"[DEBUG] Available models: {list(models.keys())}")
+    print(f"[DEBUG] Classification model type: {type(models['classification'])}")
+    print(f"[DEBUG] Image shape: {image.shape}")
+    print(f"[DEBUG] Image dtype: {image.dtype}")
+    print(f"[DEBUG] Image min/max values: {image.min()}/{image.max()}")
+    print(f"[DEBUG] Image channels: {image.shape[2] if len(image.shape) == 3 else 'N/A'}")
 
     # Debug: Print actual class names from the model
     if hasattr(models["classification"], 'names'):
         actual_class_names = models["classification"].names
-        print(f"🔍 DEBUG: Actual model class names: {actual_class_names}")
+        print(f"[DEBUG] Actual model class names: {actual_class_names}")
     else:
-        print("🔍 DEBUG: Model has no 'names' attribute")
+        print("[DEBUG] Model has no 'names' attribute")
 
     try:
         device = get_device()
@@ -423,7 +423,7 @@ def classify_road_image(image, models, confidence_threshold=0.3):
             # CRITICAL FIX: Test both color formats to handle camera vs uploaded image differences
             # Camera images and uploaded images may have different color channel ordering
 
-            print(f"🔍 DEBUG: Testing both color formats for optimal classification")
+            print(f"[DEBUG] Testing both color formats for optimal classification")
 
             # Test 1: Original image (might already be RGB from camera)
             test_image_1 = image.copy()
@@ -451,36 +451,36 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                     class_2 = np.argmax(confidences_2)
                     conf_2 = float(confidences_2[class_2])
 
-                print(f"🔍 DEBUG: Format 1 (original): class={class_1}, conf={conf_1:.3f}")
-                print(f"🔍 DEBUG: Format 2 (BGR->RGB): class={class_2}, conf={conf_2:.3f}")
+                print(f"[DEBUG] Format 1 (original): class={class_1}, conf={conf_1:.3f}")
+                print(f"[DEBUG] Format 2 (BGR->RGB): class={class_2}, conf={conf_2:.3f}")
 
                 # Choose the format that gives road classification (class 1) with higher confidence
                 # Updated for new model: Class 0 = noroad, Class 1 = road
                 if class_1 == 1 and class_2 != 1:
                     inference_image = test_image_1
-                    print(f"🔍 DEBUG: Using original format (detected road)")
+                    print(f"[DEBUG] Using original format (detected road)")
                 elif class_2 == 1 and class_1 != 1:
                     inference_image = test_image_2
-                    print(f"🔍 DEBUG: Using BGR->RGB format (detected road)")
+                    print(f"[DEBUG] Using BGR->RGB format (detected road)")
                 elif class_1 == 1 and class_2 == 1:
                     # Both detect road, use the one with higher confidence
                     if conf_1 >= conf_2:
                         inference_image = test_image_1
-                        print(f"🔍 DEBUG: Using original format (higher road confidence)")
+                        print(f"[DEBUG] Using original format (higher road confidence)")
                     else:
                         inference_image = test_image_2
-                        print(f"🔍 DEBUG: Using BGR->RGB format (higher road confidence)")
+                        print(f"[DEBUG] Using BGR->RGB format (higher road confidence)")
                 else:
                     # Neither detects road clearly, use BGR->RGB as default (standard OpenCV)
                     inference_image = test_image_2
-                    print(f"🔍 DEBUG: Using BGR->RGB format (default)")
+                    print(f"[DEBUG] Using BGR->RGB format (default)")
 
             except Exception as e:
-                print(f"🔍 DEBUG: Error in format testing: {e}, using BGR->RGB as fallback")
+                print(f"[DEBUG] Error in format testing: {e}, using BGR->RGB as fallback")
                 inference_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         else:
             inference_image = image
-            print(f"🔍 DEBUG: Using image as-is (not 3-channel)")
+            print(f"[DEBUG] Using image as-is (not 3-channel)")
 
         # Run classification with proper error handling
         with torch.no_grad():
@@ -491,8 +491,8 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                 results = models["classification"](inference_image, conf=0.1, device=device)
             except RuntimeError as e:
                 if "dtype" in str(e):
-                    print(f"⚠️ Classification model dtype error: {e}")
-                    print("🔄 Attempting classification inference with CPU fallback...")
+                    print(f"[WARNING] Classification model dtype error: {e}")
+                    print("[INFO] Attempting classification inference with CPU fallback...")
                     results = models["classification"](inference_image, conf=0.1, device='cpu')
                 else:
                     raise e
@@ -500,9 +500,9 @@ def classify_road_image(image, models, confidence_threshold=0.3):
         # Process classification results
         if results and len(results) > 0:
             result = results[0]
-            print(f"🔍 DEBUG: Classification result type: {type(result)}")
-            print(f"🔍 DEBUG: Result has probs: {hasattr(result, 'probs') and result.probs is not None}")
-            print(f"🔍 DEBUG: Result has boxes: {hasattr(result, 'boxes') and result.boxes is not None}")
+            print(f"[DEBUG] Classification result type: {type(result)}")
+            print(f"[DEBUG] Result has probs: {hasattr(result, 'probs') and result.probs is not None}")
+            print(f"[DEBUG] Result has boxes: {hasattr(result, 'boxes') and result.boxes is not None}")
 
             # Get the highest confidence prediction
             if result.probs is not None:
@@ -511,8 +511,8 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                 class_idx = np.argmax(confidences)
                 confidence = float(confidences[class_idx])
 
-                print(f"🔍 DEBUG: All confidences: {confidences}")
-                print(f"🔍 DEBUG: Selected class_idx: {class_idx}, confidence: {confidence}")
+                print(f"[DEBUG] All confidences: {confidences}")
+                print(f"[DEBUG] Selected class_idx: {class_idx}, confidence: {confidence}")
 
                 # Get class names from the model - use actual model names
                 if hasattr(models["classification"], 'names'):
@@ -521,9 +521,9 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                     # Updated fallback for new model: Class 0 = noroad, Class 1 = road
                     class_names = list(CLASSIFICATION_CLASSES.values())
 
-                print(f"🔍 DEBUG: Using class names: {class_names}")
+                print(f"[DEBUG] Using class names: {class_names}")
                 class_name = class_names[class_idx] if class_idx < len(class_names) else f"class_{class_idx}"
-                print(f"🔍 DEBUG: Predicted class: {class_name}")
+                print(f"[DEBUG] Predicted class: {class_name}")
 
                 # YOLOv11n road classification logic
                 # The model should output classes like "road" and "non_road" or similar
@@ -533,7 +533,7 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                 # Class 1: 'No Road'
                 # Class 2: 'Road'
 
-                print(f"🔍 DEBUG: class_idx: {class_idx}, class_name: '{class_name}'")
+                print(f"[DEBUG] class_idx: {class_idx}, class_name: '{class_name}'")
 
                 # Determine if image contains road based on class index and confidence
                 # Updated for new model: Class 0 = noroad, Class 1 = road
@@ -541,28 +541,28 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                     # For road class, be more permissive with confidence
                     if confidence >= confidence_threshold:
                         is_road = True
-                        print(f"🔍 DEBUG: Road class detected with confidence ({confidence:.3f})")
+                        print(f"[DEBUG] Road class detected with confidence ({confidence:.3f})")
                     else:
                         # Even with lower confidence, if it's classified as road, accept it
                         is_road = True
-                        print(f"🔍 DEBUG: Road class with lower confidence ({confidence:.3f}) - still accepting as road")
+                        print(f"[DEBUG] Road class with lower confidence ({confidence:.3f}) - still accepting as road")
                 elif class_idx == 0:  # Class 0 is "noroad"
                     # For non-road class, require higher confidence to reject
                     if confidence >= 0.7:  # Higher threshold for rejecting
                         is_road = False
-                        print(f"🔍 DEBUG: Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
+                        print(f"[DEBUG] Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
                     else:
                         # If confidence is low for non-road, default to road (be permissive)
                         is_road = True
-                        print(f"🔍 DEBUG: Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
+                        print(f"[DEBUG] Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
                 else:
                     # Unknown class - default to road (be permissive)
                     is_road = True
-                    print(f"🔍 DEBUG: Unknown class ({class_idx}) - defaulting to road")
+                    print(f"[DEBUG] Unknown class ({class_idx}) - defaulting to road")
 
-                print(f"🔍 DEBUG: confidence: {confidence:.3f}")
-                print(f"🔍 DEBUG: confidence_threshold: {confidence_threshold}")
-                print(f"🔍 DEBUG: Final is_road: {is_road}")
+                print(f"[DEBUG] confidence: {confidence:.3f}")
+                print(f"[DEBUG] confidence_threshold: {confidence_threshold}")
+                print(f"[DEBUG] Final is_road: {is_road}")
 
                 return {
                     "is_road": is_road,
@@ -575,8 +575,8 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                 confidences = result.boxes.conf.cpu().numpy()
                 class_ids = result.boxes.cls.cpu().numpy()
 
-                print(f"🔍 DEBUG: Detection format - confidences: {confidences}")
-                print(f"🔍 DEBUG: Detection format - class_ids: {class_ids}")
+                print(f"[DEBUG] Detection format - confidences: {confidences}")
+                print(f"[DEBUG] Detection format - class_ids: {class_ids}")
 
                 if len(confidences) > 0:
                     max_conf_idx = np.argmax(confidences)
@@ -592,14 +592,14 @@ def classify_road_image(image, models, confidence_threshold=0.3):
 
                     class_name = class_names[class_id] if class_id < len(class_names) else f"class_{class_id}"
 
-                    print(f"🔍 DEBUG: Detection - class_name: {class_name}, confidence: {confidence}")
+                    print(f"[DEBUG] Detection - class_name: {class_name}, confidence: {confidence}")
 
                     # YOLOv11n road classification logic for detection format
                     # Class 0: '.ipynb_checkpoints' (training artifact)
                     # Class 1: 'No Road'
                     # Class 2: 'Road'
 
-                    print(f"🔍 DEBUG: Detection - class_id: {class_id}, class_name: '{class_name}'")
+                    print(f"[DEBUG] Detection - class_id: {class_id}, class_name: '{class_name}'")
 
                     # More permissive logic for road classification (detection format)
                     # Updated for new model: Class 0 = noroad, Class 1 = road
@@ -607,22 +607,22 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                         # For road class, be more permissive
                         if confidence >= confidence_threshold:
                             is_road = True
-                            print(f"🔍 DEBUG: Detection - Road class detected with confidence ({confidence:.3f})")
+                            print(f"[DEBUG] Detection - Road class detected with confidence ({confidence:.3f})")
                         else:
                             is_road = True  # Accept even with lower confidence
-                            print(f"🔍 DEBUG: Detection - Road class with lower confidence ({confidence:.3f}) - still accepting")
+                            print(f"[DEBUG] Detection - Road class with lower confidence ({confidence:.3f}) - still accepting")
                     elif class_id == 0:  # Class 0 is "noroad"
                         # For non-road class, require higher confidence to reject
                         if confidence >= 0.7:
                             is_road = False
-                            print(f"🔍 DEBUG: Detection - Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
+                            print(f"[DEBUG] Detection - Non-road class detected with high confidence ({confidence:.3f}) - rejecting")
                         else:
                             is_road = True  # Default to road if low confidence
-                            print(f"🔍 DEBUG: Detection - Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
+                            print(f"[DEBUG] Detection - Non-road class with low confidence ({confidence:.3f}) - defaulting to road")
                     else:
                         # Unknown class - default to road (be permissive)
                         is_road = True
-                        print(f"🔍 DEBUG: Detection - Unknown class ({class_id}) - defaulting to road")
+                        print(f"[DEBUG] Detection - Unknown class ({class_id}) - defaulting to road")
 
                     return {
                         "is_road": is_road,
@@ -631,12 +631,12 @@ def classify_road_image(image, models, confidence_threshold=0.3):
                     }
 
         # If no valid results, default to accepting (be permissive)
-        print("⚠️ No valid classification results found - defaulting to accept as road (permissive mode)")
+        print("[WARNING] No valid classification results found - defaulting to accept as road (permissive mode)")
         return {"is_road": True, "confidence": 0.5, "class_name": "no_detection_default_road"}
 
     except Exception as e:
-        print(f"❌ Error during road classification: {e}")
+        print(f"[ERROR] Error during road classification: {e}")
         traceback.print_exc()
         # In case of error, default to accepting to avoid blocking valid road images
-        print("🔍 DEBUG: Classification error - defaulting to accept as road (permissive mode)")
+        print("[DEBUG] Classification error - defaulting to accept as road (permissive mode)")
         return {"is_road": True, "confidence": 0.5, "class_name": "error_default_road"}

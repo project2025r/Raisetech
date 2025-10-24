@@ -112,7 +112,7 @@ function Recommendation() {
         setRecommendations(responseRecommendations.data);
         
         // Get all potholes from the most recent image upload
-        const responsePotholes = await axios.get('/api/potholes/recent');
+                const responsePotholes = await axios.get('/api/pavement/potholes/recent');
         console.log('Pothole data from API:', responsePotholes.data);
         
         // Handle both the new and old data structure

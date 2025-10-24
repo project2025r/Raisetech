@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from fastapi import APIRouter, Depends, HTTPException, Query
 import pandas as pd
 import os
 import json
@@ -8,14 +8,22 @@ from botocore.exceptions import ClientError
 from config.db import connect_to_db
 import datetime
 from utils.rbac import get_allowed_roles, create_role_filter, validate_user_role
-from utils.auth_middleware import validate_rbac_access
+from typing import Optional, List
 
 # Import our comprehensive S3-MongoDB integration
 from s3_mongodb_integration import DashboardImageManager, ImageProcessingWorkflow
 
 logger = logging.getLogger(__name__)
 
-dashboard_bp = Blueprint('dashboard', __name__)
+router = APIRouter()
+
+def get_user_role_from_request(user_role: Optional[str] = Query(None)):
+    return user_role
+
+def validate_rbac_access(user_role: str = Depends(get_user_role_from_request)):
+    if user_role and not validate_user_role(user_role):
+        raise HTTPException(status_code=400, detail="Invalid user role")
+    return user_role
 
 def generate_s3_url_for_dashboard(s3_key):
     """
@@ -45,13 +53,8 @@ def generate_s3_url_for_dashboard(s3_key):
     region = os.environ.get('AWS_REGION', 'us-east-1')
     return f"https://{bucket}.s3.{region}.amazonaws.com/{full_s3_key}"
 
-def parse_filters():
+def parse_filters(start_date: Optional[str] = Query(None), end_date: Optional[str] = Query(None), username: Optional[str] = Query(None), user_role: Optional[str] = Query(None)):
     """Helper function to parse filter parameters including RBAC"""
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-    username = request.args.get('username')
-    user_role = request.args.get('user_role')
-    
     # Initialize filters dict
     filters = {}
     
@@ -93,16 +96,15 @@ def parse_filters():
     
     return filters if filters else {}
 
-@dashboard_bp.route('/summary-v2', methods=['GET'])
-@validate_rbac_access
-def get_dashboard_summary_v2():
+@router.get('/summary-v2')
+def get_dashboard_summary_v2(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Enhanced dashboard summary using comprehensive S3-MongoDB integration
     Returns latest detections with proper S3 URLs and GridFS fallback
     """
     try:
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
 
         logger.info(f"Enhanced dashboard summary requested with filters: {query_filter}")
 
@@ -119,10 +121,7 @@ def get_dashboard_summary_v2():
 
             if not dashboard_success:
                 logger.error(f"Failed to get dashboard data: {dashboard_result}")
-                return jsonify({
-                    "success": False,
-                    "message": f"Failed to retrieve dashboard data: {dashboard_result}"
-                }), 500
+                raise HTTPException(status_code=500, detail=f"Failed to retrieve dashboard data: {dashboard_result}")
 
             # Apply RBAC filters to the dashboard data
             logger.info(f"Applying RBAC filters to dashboard data with filters: {query_filter}")
@@ -156,25 +155,19 @@ def get_dashboard_summary_v2():
 
             logger.info(f"✅ Enhanced dashboard data retrieved successfully")
 
-            return jsonify({
+            return {
                 "success": True,
                 "data": filtered_dashboard_data,
                 "message": "Dashboard data retrieved successfully"
-            })
+            }
 
         except Exception as e:
             logger.error(f"Error in comprehensive dashboard workflow: {str(e)}")
-            return jsonify({
-                "success": False,
-                "message": f"Error retrieving dashboard data: {str(e)}"
-            }), 500
+            raise HTTPException(status_code=500, detail=f"Error retrieving dashboard data: {str(e)}")
 
     except Exception as e:
         logger.error(f"Error in dashboard summary v2: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Internal server error: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 def get_video_processing_summary(query_filter=None, limit=20):
     """
@@ -194,16 +187,16 @@ def get_video_processing_summary(query_filter=None, limit=20):
 
         # Build query filter
         video_query = {"status": "completed"}
-        if query_filter:
-            # Apply RBAC filters
-            if 'username' in query_filter:
-                video_query['username'] = query_filter['username']
-            if 'role' in query_filter:
-                video_query['role'] = query_filter['role']
-            # Apply date filters
-            if 'timestamp' in query_filter:
-                video_query['timestamp'] = query_filter['timestamp']
-                logger.info(f"Video query with date filter: {video_query}")
+        # if query_filter:
+        #     # Apply RBAC filters
+        #     if 'username' in query_filter:
+        #         video_query['username'] = query_filter['username']
+        #     if 'role' in query_filter:
+        #         video_query['role'] = query_filter['role']
+        #     # Apply date filters
+        #     if 'timestamp' in query_filter:
+        #         video_query['timestamp'] = query_filter['timestamp']
+        #         logger.info(f"Video query with date filter: {video_query}")
 
         logger.info(f"Final video query: {video_query}")
 
@@ -449,22 +442,18 @@ def calculate_dashboard_summary_stats(dashboard_data):
         'defect_types': len([k for k in dashboard_data.keys() if 'latest' in dashboard_data[k]])
     }
 
-@dashboard_bp.route('/summary', methods=['GET'])
-@validate_rbac_access
-def get_dashboard_summary():
+@router.get('/summary')
+def get_dashboard_summary(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get summary statistics for the dashboard
     """
     db = connect_to_db()
     if db is None:
-        return jsonify({
-            "success": False,
-            "message": "Database connection failed"
-        }), 500
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
     try:
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         # Initialize result container
         dashboard_data = {
@@ -718,19 +707,16 @@ def get_dashboard_summary():
         except Exception as e:
             logger.error(f"Error sorting kerbs: {e}")
         
-        return jsonify({
+        return {
             "success": True,
             "data": dashboard_data
-        })
+        }
     
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching dashboard data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching dashboard data: {str(e)}")
 
-@dashboard_bp.route('/pothole-data', methods=['GET'])
-def get_pothole_data():
+@router.get('/pothole-data')
+def get_pothole_data(filters: dict = Depends(parse_filters)):
     """
     Get all pothole data for analysis and visualization
     """
@@ -739,21 +725,18 @@ def get_pothole_data():
         csv_path = os.path.join('..', 'dashboard', 'potholes_data.csv')
         if os.path.exists(csv_path):
             df = pd.read_csv(csv_path)
-            return jsonify({
+            return {
                 "success": True,
                 "data": df.to_dict(orient='records')
-            })
+            }
         
         # Otherwise, get data from database
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         results = []
         
@@ -823,20 +806,17 @@ def get_pothole_data():
         except Exception as e:
             logger.error(f"Error sorting pothole export results: {e}")
         
-        return jsonify({
+        return {
             "success": True,
             "count": len(results),
             "data": results
-        })
+        }
         
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching pothole data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching pothole data: {str(e)}")
 
-@dashboard_bp.route('/crack-data', methods=['GET'])
-def get_crack_data():
+@router.get('/crack-data')
+def get_crack_data(filters: dict = Depends(parse_filters)):
     """
     Get all crack data for analysis and visualization
     """
@@ -845,21 +825,18 @@ def get_crack_data():
         csv_path = os.path.join('..', 'dashboard', 'crack_data.csv')
         if os.path.exists(csv_path):
             df = pd.read_csv(csv_path)
-            return jsonify({
+            return {
                 "success": True,
                 "data": df.to_dict(orient='records')
-            })
+            }
         
         # Otherwise, get data from database
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         results = []
         
@@ -928,20 +905,17 @@ def get_crack_data():
         except Exception as e:
             logger.error(f"Error sorting crack export results: {e}")
         
-        return jsonify({
+        return {
             "success": True,
             "count": len(results),
             "data": results
-        })
+        }
     
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching crack data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching crack data: {str(e)}")
 
-@dashboard_bp.route('/kerb-data', methods=['GET'])
-def get_kerb_data():
+@router.get('/kerb-data')
+def get_kerb_data(filters: dict = Depends(parse_filters)):
     """
     Get all kerb data for analysis and visualization
     """
@@ -950,21 +924,18 @@ def get_kerb_data():
         csv_path = os.path.join('..', 'dashboard', 'kerb_data.csv')
         if os.path.exists(csv_path):
             df = pd.read_csv(csv_path)
-            return jsonify({
+            return {
                 "success": True,
                 "data": df.to_dict(orient='records')
-            })
+            }
         
         # Get data from database
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         results = []
         
@@ -1034,34 +1005,27 @@ def get_kerb_data():
         except Exception as e:
             logger.error(f"Error sorting kerb export results: {e}")
         
-        return jsonify({
+        return {
             "success": True,
             "count": len(results),
             "data": results
-        })
+        }
     
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching kerb data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching kerb data: {str(e)}")
 
-@dashboard_bp.route('/video-processing-data', methods=['GET'])
-@validate_rbac_access
-def get_video_processing_data():
+@router.get('/video-processing-data')
+def get_video_processing_data(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get processed videos with representative frames for dashboard display
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
 
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
 
         # Add status filter to only get completed videos
         query_filter["status"] = "completed"
@@ -1104,41 +1068,33 @@ def get_video_processing_data():
                 }
                 processed_videos.append(processed_video)
 
-        return jsonify({
+        return {
             "success": True,
             "count": len(processed_videos),
             "videos": processed_videos
-        })
+        }
 
     except Exception as e:
         logger.error(f"Error fetching video processing data: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching video processing data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching video processing data: {str(e)}")
 
-@dashboard_bp.route('/video-processing-export', methods=['GET'])
-@validate_rbac_access
-def export_video_processing_data():
+@router.get('/video-processing-export')
+def export_video_processing_data(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters), video_id: Optional[str] = Query(None), format: str = Query('csv')):
     """
     Export all video processing data as CSV
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
 
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
 
         # Add status filter to only get completed videos
         query_filter["status"] = "completed"
 
         # Check if specific video_id is requested
-        video_id = request.args.get('video_id')
         if video_id:
             from bson import ObjectId
             try:
@@ -1155,7 +1111,7 @@ def export_video_processing_data():
         ))
 
         # Get export format from query parameter
-        export_format = request.args.get('format', 'csv').lower()
+        export_format = format.lower()
 
         if export_format == 'csv':
             # Prepare CSV data with detailed detection information
@@ -1269,11 +1225,11 @@ def export_video_processing_data():
                 csv_data.append(['=' * 50])  # Separator between videos
                 csv_data.append([])
 
-            return jsonify({
+            return {
                 "success": True,
                 "csv_data": csv_data,
                 "count": len(video_docs)
-            })
+            }
 
         elif export_format == 'pdf':
             # Generate PDF with detection tables
@@ -1287,10 +1243,7 @@ def export_video_processing_data():
                 import base64
             except ImportError as e:
                 logger.error(f"ReportLab not available for PDF generation: {e}")
-                return jsonify({
-                    "success": False,
-                    "message": "PDF generation not available. Please install reportlab."
-                }), 500
+                raise HTTPException(status_code=500, detail="PDF generation not available. Please install reportlab.")
 
             # Create PDF buffer
             buffer = BytesIO()
@@ -1466,10 +1419,7 @@ def export_video_processing_data():
                 logger.info("PDF document built successfully")
             except Exception as pdf_build_error:
                 logger.error(f"Error building PDF document: {pdf_build_error}")
-                return jsonify({
-                    "success": False,
-                    "message": f"Error building PDF document: {str(pdf_build_error)}"
-                }), 500
+                raise HTTPException(status_code=500, detail=f"Error building PDF document: {str(pdf_build_error)}")
 
             # Get PDF data and encode as base64
             try:
@@ -1479,33 +1429,23 @@ def export_video_processing_data():
                 logger.info(f"PDF generated successfully, size: {len(pdf_data)} bytes")
             except Exception as pdf_encode_error:
                 logger.error(f"Error encoding PDF data: {pdf_encode_error}")
-                return jsonify({
-                    "success": False,
-                    "message": f"Error encoding PDF data: {str(pdf_encode_error)}"
-                }), 500
+                raise HTTPException(status_code=500, detail=f"Error encoding PDF data: {str(pdf_encode_error)}")
 
-            return jsonify({
+            return {
                 "success": True,
                 "pdf_data": pdf_base64,
                 "count": len(video_docs)
-            })
+            }
 
         else:
-            return jsonify({
-                "success": False,
-                "message": "Invalid export format. Use 'csv' or 'pdf'"
-            }), 400
+            raise HTTPException(status_code=400, detail="Invalid export format. Use 'csv' or 'pdf'")
 
     except Exception as e:
         logger.error(f"Error exporting video processing data: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Error exporting video processing data: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error exporting video processing data: {str(e)}")
 
-@dashboard_bp.route('/image-stats', methods=['GET'])
-@validate_rbac_access
-def get_image_stats():
+@router.get('/image-stats')
+def get_image_stats(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get statistics about all captured images
     """
@@ -1513,13 +1453,10 @@ def get_image_stats():
         db = connect_to_db()
         if db is None:
             logger.error("Database connection failed in get_image_stats")
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
 
         # Get filters
-        query_filter = parse_filters()
+        query_filter = filters
         logger.info(f"Query filter for image stats: {query_filter}")
         
         # Get all images from the database, sorted by timestamp (newest first)
@@ -1878,32 +1815,25 @@ def get_image_stats():
         logger.info(f"Returning {len(all_images[:100])} images for map display")
         logger.info(f"Sample image data: {all_images[0] if all_images else 'No images found'}")
 
-        return jsonify(result)
+        return result
     
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching image statistics: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching image statistics: {str(e)}")
 
-@dashboard_bp.route('/statistics', methods=['GET'])
-@validate_rbac_access
-def get_statistics():
+@router.get('/statistics')
+def get_statistics(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get statistics for different types of issues
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Parse filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         response_data = {
             "issues_by_type": {
@@ -2041,33 +1971,26 @@ def get_statistics():
         # Calculate total issues
         response_data["total_issues"] = pothole_count + crack_count + kerb_count
         
-        return jsonify({
+        return {
             "success": True,
             "data": response_data
-        })
+        }
     
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching statistics: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching statistics: {str(e)}")
 
-@dashboard_bp.route('/issues-by-type', methods=['GET'])
-@validate_rbac_access
-def get_issues_by_type():
+@router.get('/issues-by-type')
+def get_issues_by_type(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get issue counts by type for charts
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Parse filters
-        query_filter = parse_filters()
+        query_filter = filters
         
         # Initialize type counts dictionary
         type_counts = {
@@ -2140,33 +2063,26 @@ def get_issues_by_type():
                 types.append(type_name)
                 counts.append(count)
         
-        return jsonify({
+        return {
             "types": types,
             "counts": counts
-        })
+        }
         
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching issue types: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching issue types: {str(e)}")
 
-@dashboard_bp.route('/weekly-trend', methods=['GET'])
-@validate_rbac_access
-def get_weekly_trend():
+@router.get('/weekly-trend')
+def get_weekly_trend(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
     """
     Get weekly trend data for chart
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Parse filters
-        query_filter = parse_filters()
+        query_filter = filters
         base_query = {}
         
         # Extract username filter if present
@@ -2253,13 +2169,10 @@ def get_weekly_trend():
             # Move to next day
             current_date += datetime.timedelta(days=1)
         
-        return jsonify({
+        return {
             "days": days,
             "issues": issues_by_day
-        })
+        }
         
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching weekly trend: {str(e)}"
-        }), 500 
+        raise HTTPException(status_code=500, detail=f"Error fetching weekly trend: {str(e)}")

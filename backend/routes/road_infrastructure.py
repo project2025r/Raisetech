@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from fastapi import APIRouter, Request, Form, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 import cv2
 import numpy as np
 import base64
@@ -13,14 +14,15 @@ from threading import Lock, Thread
 from datetime import datetime
 import pandas as pd
 from math import radians, cos, sin, asin, sqrt
+from typing import List, Optional
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-road_infrastructure_bp = Blueprint('road_infrastructure', __name__)
+router = APIRouter()
 
-# Global variables  
+# Global variables
 models = None
 processing_lock = Lock()
 current_processing = None
@@ -58,21 +60,21 @@ def calculate_iou(box1, box2):
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
     y2 = min(box1[3], box2[3])
-    
+
     intersection = max(0, x2 - x1) * max(0, y2 - y1)
     box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
     box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
     union = box1_area + box2_area - intersection
-    
+
     return intersection / union if union > 0 else 0
 
 def get_models():
     """Lazy-load models when needed"""
     global models
-    
+
     if models is None:
         logger.info("Loading YOLO models...")
-        
+
         # Log CUDA availability and device info
         logger.info(f"CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
@@ -81,9 +83,9 @@ def get_models():
             logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
             logger.info(f"CUDA device memory allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
             logger.info(f"CUDA device memory cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
-        
+
         models = load_yolo_models()
-        
+
         # Log model device information
         for model_name, model in models.items():
             if model_name == "road_infra":
@@ -99,47 +101,41 @@ def get_models():
                     logger.info(f"Model {model_name} is using device: {device}")
                 except (AttributeError, StopIteration):
                     logger.info(f"Model {model_name} device information not available")
-        
+
         # Get class names from YOLO model
         if 'road_infra' in models:
             yolo_class_names = list(models['road_infra'].names.values())
             models['road_infra_classes'] = yolo_class_names
         else:
             yolo_class_names = []
-        
-        # # Dynamically assign class names for each detection model
-        # for detection_type in models:
-        #     if detection_type == "road_infra":
-        #         models[f"{detection_type}_classes"] = distinct_classes + continuous_classes
-        # logger.info("Models loaded successfully")
 
     return models
 
 def process_video_frame(frame, frame_count, coordinates, selected_classes, models):
     """Process a single video frame and return detections"""
     global tracked_objects, object_id_counter
-    
+
     logger.debug(f"Processing frame {frame_count}")
-    
+
     # Log GPU memory before processing
     if torch.cuda.is_available():
         logger.debug(f"GPU Memory before frame {frame_count}:")
         logger.debug(f"Allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
         logger.debug(f"Cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
-    
+
     start_time = time.time()
     detection_frame = frame.copy()
     current_frame_detections = []
     continuous_frame_flags = {cls: False for cls in continuous_classes}
     all_detections = []
-    
+
     # Run detection with proper dtype handling
     # Ensure image is in the correct format for the model
     if frame.shape[2] == 3:
         inference_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     else:
         inference_frame = frame
-    
+
     try:
         results = models["road_infra"](inference_frame, conf=0.3)
     except RuntimeError as e:
@@ -149,38 +145,38 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
             results = models["road_infra"](inference_frame, conf=0.3, device='cpu')
         else:
             raise e
-    
+
     # Log inference time
     inference_time = time.time() - start_time
     logger.debug(f"Frame {frame_count} inference time: {inference_time:.3f} seconds")
-        
+
     # Use model's class names for mapping
     class_names = models["road_infra_classes"]
-    
+
     # Process detections
     for result in results:
         boxes = result.boxes
         classes = boxes.cls.int().cpu().tolist()
         confidences = boxes.conf.cpu().tolist()
         coords = boxes.xyxy.cpu().numpy()
-        
+
         for box, cls, conf in zip(coords, classes, confidences):
             detection_class = class_names[cls] if cls < len(class_names) else f"Class {cls}"
-            
+
             # Skip if not in selected classes
             if selected_classes and detection_class not in selected_classes:
                 continue
-                
+
             x1, y1, x2, y2 = map(int, box)
             bbox = [x1, y1, x2, y2]
-            
+
             # Add to all detections list for return value
             all_detections.append({
                 'class': detection_class,
                 'bbox': bbox,
                 'confidence': float(conf)
             })
-            
+
             if detection_class in distinct_classes:
                 current_frame_detections.append({
                     'class': detection_class,
@@ -192,15 +188,15 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
                 cv2.rectangle(detection_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
                 cv2.putText(detection_frame, detection_class, (x1, y1 - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-    
+
     # Update tracked objects
     updated_tracked = {}
     used_ids = set()
-    
+
     for det in current_frame_detections:
         best_match_id = None
         best_iou = 0
-        
+
         for obj_id, obj in tracked_objects.items():
             if obj['class'] != det['class']:
                 continue
@@ -208,7 +204,7 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
             if iou > best_iou and iou > iou_threshold:
                 best_iou = iou
                 best_match_id = obj_id
-        
+
         if best_match_id is not None:
             tracked_objects[best_match_id]['bbox'] = det['bbox']
             tracked_objects[best_match_id]['last_seen'] = frame_count
@@ -222,15 +218,15 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
                 'bbox': det['bbox'],
                 'last_seen': frame_count
             }
-    
+
     # Update tracked objects that weren't matched
     for obj_id, obj in tracked_objects.items():
         if obj_id not in used_ids:
             if frame_count - obj['last_seen'] <= max_missing_frames:
                 updated_tracked[obj_id] = obj
-    
+
     tracked_objects = updated_tracked
-    
+
     # Draw tracked objects
     for obj_id, obj in tracked_objects.items():
         if obj['last_seen'] == frame_count and obj['class'] in distinct_classes:
@@ -239,15 +235,15 @@ def process_video_frame(frame, frame_count, coordinates, selected_classes, model
             label = f"{obj['class']} ({obj_id})"
             cv2.putText(detection_frame, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    
+
     # Log GPU memory after processing
     if torch.cuda.is_available():
         logger.debug(f"GPU Memory after frame {frame_count}:")
         logger.debug(f"Allocated: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
         logger.debug(f"Cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
-    
+
     logger.debug(f"Frame {frame_count} processed successfully")
-    
+
     # Return both the processed frame and the detections
     return detection_frame, all_detections
 
@@ -306,24 +302,24 @@ coordinates = [
 df_cleaned = interpolate_coordinates(coordinates)
 
 
-def process_video(video_path, coordinates, selected_classes):
+def process_video(video_path, from_location, to_location, selected_classes):
     """Process video and yield frames"""
     global current_processing, processing_stop_flag
-    
+
     try:
         # Reset stop flag at start of processing
         processing_stop_flag = False
-        
+
         # Get models
         models = get_models()
         if not models:
-            yield json.dumps({"success": False, "message": "Failed to load models"})
+            yield "data: " + json.dumps({"success": False, "message": "Failed to load models"}) + "\n\n"
             return
 
         # Open video
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            yield json.dumps({"success": False, "message": "Could not open video file"})
+            yield "data: " + json.dumps({"success": False, "message": "Could not open video file"}) + "\n\n"
             return
 
         # Get video properties
@@ -332,6 +328,27 @@ def process_video(video_path, coordinates, selected_classes):
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         logger.info(f"Video properties - FPS: {frame_rate}, Total frames: {total_frames}, Resolution: {width}x{height}")
+
+        # --- Location Interpolation Logic ---
+        video_duration = total_frames / frame_rate
+        try:
+            from_lat, from_lon = map(float, from_location.split(','))
+            to_lat, to_lon = map(float, to_location.split(','))
+            start_coord = (from_lat, from_lon)
+            end_coord = (to_lat, to_lon)
+        except (ValueError, AttributeError):
+            yield "data: " + json.dumps({"success": False, "message": "Invalid 'From' or 'To' location format. Expected 'lat,lon'."}) + "\n\n"
+            return
+
+        def get_interpolated_location(current_time):
+            """Calculate interpolated GPS coordinates for a given time."""
+            if current_time > video_duration:
+                return None, "Range exceeded. Please ensure the video and location remain within the defined From and To coordinates."
+
+            fraction = min(current_time / video_duration, 1.0)
+            lat = start_coord[0] + (end_coord[0] - start_coord[0]) * fraction
+            lon = start_coord[1] + (end_coord[1] - start_coord[1]) * fraction
+            return (lat, lon), None
 
         # Create output video writer
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -359,9 +376,17 @@ def process_video(video_path, coordinates, selected_classes):
                 break
 
             frame_count += 1
-            current_second = frame_count // frame_rate
-            matched_row = df_cleaned[df_cleaned["Time"] == current_second]
-            coords = matched_row.iloc[0]["Coordinates"] if not matched_row.empty else (None, None)
+            current_time = frame_count / frame_rate
+            current_second = int(current_time)
+
+            # Get interpolated location for the current time
+            coords, error_msg = get_interpolated_location(current_time)
+            if error_msg:
+                logger.warning(error_msg)
+                yield f"data: {json.dumps({'success': False, 'message': error_msg})}\n\n"
+                processing_stop_flag = True # Stop processing
+                continue
+
 
             detection_frame = frame.copy()
             current_frame_detections = []
@@ -373,7 +398,7 @@ def process_video(video_path, coordinates, selected_classes):
                 inference_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             else:
                 inference_frame = frame
-            
+
             try:
                 results = models["road_infra"](inference_frame, conf=0.3)
             except RuntimeError as e:
@@ -383,19 +408,19 @@ def process_video(video_path, coordinates, selected_classes):
                     results = models["road_infra"](inference_frame, conf=0.3, device='cpu')
                 else:
                     raise e
-            
+
             # Process detections
             for result in results:
                 for box, cls, conf in zip(result.boxes.xyxy, result.boxes.cls, result.boxes.conf):
                     detection_class = models["road_infra"].names[int(cls)]
-                    
+
                     # Skip if not in selected classes
                     if selected_classes and detection_class not in selected_classes:
                         continue
-                
+
                     x1, y1, x2, y2 = map(int, box)
                     bbox = [x1, y1, x2, y2]
-                    
+
                     if detection_class in distinct_classes:
                         current_frame_detections.append({
                             'class': detection_class,
@@ -410,11 +435,11 @@ def process_video(video_path, coordinates, selected_classes):
             # Update tracked objects
             updated_tracked = {}
             used_ids = set()
-            
+
             for det in current_frame_detections:
                 best_match_id = None
                 best_iou = 0
-                
+
                 for obj_id, obj in tracked_objects.items():
                     if obj['class'] != det['class']:
                         continue
@@ -422,7 +447,7 @@ def process_video(video_path, coordinates, selected_classes):
                     if iou > best_iou and iou > iou_threshold:
                         best_iou = iou
                         best_match_id = obj_id
-                
+
                 if best_match_id is not None:
                     tracked_objects[best_match_id]['bbox'] = det['bbox']
                     tracked_objects[best_match_id]['last_seen'] = frame_count
@@ -450,13 +475,13 @@ def process_video(video_path, coordinates, selected_classes):
                         'Class': det['class'],
                         'GPS': coords
                     })
-            
+
             # Update tracked objects that weren't matched
             for obj_id, obj in tracked_objects.items():
                 if obj_id not in used_ids:
                     if frame_count - obj['last_seen'] <= max_missing_frames:
                         updated_tracked[obj_id] = obj
-            
+
             tracked_objects = updated_tracked
 
             # Draw tracked objects
@@ -470,6 +495,7 @@ def process_video(video_path, coordinates, selected_classes):
 
             # Update continuous lengths
             distance = 0
+            matched_row = df_cleaned[df_cleaned["Time"] == current_second]
             if not matched_row.empty:
                 distance = matched_row.iloc[0]["Distance (km)"]
             for cls, detected in continuous_frame_flags.items():
@@ -545,7 +571,7 @@ def process_video(video_path, coordinates, selected_classes):
 
         logger.info("Processing completed successfully")
         yield f"data: {json.dumps(final_data)}\n\n"
-    
+
     except Exception as e:
         logger.error(f"Error during detection: {str(e)}", exc_info=True)
         yield f"data: {json.dumps({'success': False, 'message': str(e)})}\n\n"
@@ -557,109 +583,101 @@ def process_video(video_path, coordinates, selected_classes):
         current_processing = None
         processing_stop_flag = False  # Reset the stop flag
 
-@road_infrastructure_bp.route('/detect', methods=['GET', 'POST'])
-def detect_infrastructure():
+@router.post('/detect')
+async def detect_infrastructure(
+    selectedClasses: str = Form('[]'),
+    from_location: str = Form(None),
+    to_location: str = Form(None),
+    video: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None)
+):
     """API endpoint to detect road infrastructure elements"""
     global current_processing
     global processing_thread
-    
-    if request.method == 'GET':
-        logger.info("Received GET request for SSE connection")
-        if current_processing is None:
-            return jsonify({"success": False, "message": "No video processing in progress"}), 400
-        return Response(stream_with_context(current_processing), mimetype='text/event-stream')
 
     logger.info("Received detection request")
-    
-    # Get common parameters
-    coordinates = request.form.get('coordinates', 'Not Available')
-    selected_classes = request.form.get('selectedClasses', '[]')
-    selected_classes = json.loads(selected_classes)
-    
-    logger.info(f"Processing with coordinates: {coordinates}")
+
+    selected_classes = json.loads(selectedClasses)
+
+    logger.info(f"Processing with From: {from_location}, To: {to_location}")
     logger.info(f"Selected classes: {selected_classes}")
-    
+
     try:
         # Check if we have video data
-        if 'video' in request.files and request.files['video']:
+        if video:
             # Process video input
-            video_file = request.files['video']
-            logger.info(f"Processing video input: {video_file.filename}")
+            if not from_location or not to_location:
+                raise HTTPException(status_code=400, detail="Please provide both 'From' and 'To' locations for video processing.")
 
-            # Validate video file
-            is_valid, error_message = validate_upload_file(video_file, 'video')
-            if not is_valid:
-                logger.warning(f"Video validation failed: {error_message}")
-                return jsonify({"success": False, "message": error_message}), 400
+            logger.info(f"Processing video input: {video.filename}")
 
             # Save video temporarily
             temp_video_path = os.path.join(os.path.dirname(__file__), "temp_video.mp4")
             logger.info(f"Saving video to temporary path: {temp_video_path}")
-            video_file.save(temp_video_path)
-            
+            with open(temp_video_path, "wb") as buffer:
+                buffer.write(await video.read())
+
             # Start processing in a separate thread
             with processing_lock:
                 if processing_thread is not None and processing_thread.is_alive():
-                    return jsonify({"success": False, "message": "Another media is being processed"}), 400
+                    raise HTTPException(status_code=400, detail="Another media is being processed")
                 def target():
                     global current_processing
-                    current_processing = process_video(temp_video_path, coordinates, selected_classes)
+                    current_processing = process_video(temp_video_path, from_location, to_location, selected_classes)
                 processing_thread = Thread(target=target)
                 processing_thread.start()
-                
-            return jsonify({"success": True, "message": "Video processing started"})
-            
-        # Check if we have image data
-        elif 'image' in request.files and request.files['image']:
-            # Process image input
-            image_file = request.files['image']
-            logger.info(f"Processing image input: {image_file.filename}")
 
-            # Validate image file
-            is_valid, error_message = validate_upload_file(image_file, 'image')
-            if not is_valid:
-                logger.warning(f"Image validation failed: {error_message}")
-                return jsonify({"success": False, "message": error_message}), 400
+            return {"success": True, "message": "Video processing started"}
+
+        # Check if we have image data
+        elif image:
+            # Process image input
+            logger.info(f"Processing image input: {image.filename}")
 
             # Save image temporarily
             temp_image_path = os.path.join(os.path.dirname(__file__), "temp_image.jpg")
             logger.info(f"Saving image to temporary path: {temp_image_path}")
-            image_file.save(temp_image_path)
+            with open(temp_image_path, "wb") as buffer:
+                buffer.write(await image.read())
 
             # Read the image
             frame = cv2.imread(temp_image_path)
             if frame is None:
-                return jsonify({"success": False, "message": "Could not read image file"}), 400
-                
+                raise HTTPException(status_code=400, detail="Could not read image file")
+
             # Process the image
             models = get_models()
             frame_count = 0
-            results, detections = process_video_frame(frame, frame_count, coordinates, selected_classes, models)
-            
+            results, detections = process_video_frame(frame, frame_count, from_location, selected_classes, models)
+
             # Encode the processed image
             _, buffer = cv2.imencode('.jpg', results)
             img_str = base64.b64encode(buffer).decode('utf-8')
-            
+
             # Return the processed image and detections
-            return jsonify({
+            return {
                 "success": True,
                 "message": "Image processed successfully",
                 "frame": f"data:image/jpeg;base64,{img_str}",
                 "detections": detections
-            })
-            
+            }
+
         else:
             logger.error("No media data provided")
-            return jsonify({
-                "success": False,
-                "message": "No media data provided"
-            }), 400
+            raise HTTPException(status_code=400, detail="No media data provided")
 
     except Exception as e:
         logger.error(f"Error during processing: {str(e)}", exc_info=True)
-        return jsonify({"success": False, "message": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@road_infrastructure_bp.route('/data', methods=['GET'])
+@router.get('/detect')
+async def get_detect_stream():
+    logger.info("Received GET request for SSE connection")
+    if current_processing is None:
+        raise HTTPException(status_code=400, detail="No video processing in progress")
+    return StreamingResponse(current_processing, media_type='text/event-stream')
+
+@router.get('/data')
 def get_infrastructure_data():
     """
     API endpoint to retrieve infrastructure data from DB
@@ -707,10 +725,10 @@ def get_infrastructure_data():
             "longitude": 103.9238
         }
     ]
-    
-    return jsonify(sample_data)
 
-@road_infrastructure_bp.route('/stop_processing', methods=['POST'])
+    return sample_data
+
+@router.post('/stop_processing')
 def stop_processing():
     """API endpoint to stop video processing"""
     global processing_stop_flag
@@ -718,13 +736,13 @@ def stop_processing():
     global current_processing
     processing_stop_flag = True
     if processing_thread is not None:
-        processing_thread.join(timeout=10)  # Wait up to 10 seconds for thread to finish
+        # In async context, we can't block with join. The flag should be sufficient.
         processing_thread = None
     current_processing = None
-    return jsonify({"success": True, "message": "Stop signal sent"})
+    return {"success": True, "message": "Stop signal sent"}
 
-@road_infrastructure_bp.route('/status', methods=['GET'])
+@router.get('/status')
 def get_processing_status():
     global processing_thread
     status = "processing" if processing_thread is not None and processing_thread.is_alive() else "idle"
-    return jsonify({"status": status})
+    return {"status": status}

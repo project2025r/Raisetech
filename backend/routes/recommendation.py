@@ -1,11 +1,34 @@
-from flask import Blueprint, request, jsonify
+from fastapi import APIRouter, Body, HTTPException
+from typing import List, Dict, Optional
 import json
 import pandas as pd
 import os
 import math
 from config.db import connect_to_db
+from pydantic import BaseModel
 
-recommendation_bp = Blueprint('recommendation', __name__)
+router = APIRouter()
+
+class DefectPayload(BaseModel):
+    defect_type: str
+    area_cm2: Optional[float] = None
+    depth_cm: Optional[float] = None
+    volume: Optional[float] = None
+
+class AutoPotholePayload(BaseModel):
+    potholeData: Optional[List[Dict]] = None
+    imageId: Optional[str] = None
+
+class AnalyzePayload(BaseModel):
+    selectedMaterials: List[str]
+    selectedEquipment: List[str]
+    laborCounts: Dict[str, int]
+    potholeCount: int
+    avgPotholeVolume: float
+    roadLength: float
+
+# --- Pydantic Models ---
+# Pydantic models are defined above
 
 # Load constants from the original code
 MATERIAL_EQUIPMENT_MAP = {
@@ -118,29 +141,16 @@ POTHOLE_EQUIPMENT_OPTIONS = [
 
 # Define the new pothole recommendations function
 def get_pothole_recommendations(pothole_data):
-    """
-    Generate automatic recommendations for pothole repair based on the average volume
-    of potholes detected and compute total cost as cost per pothole multiplied by the
-    number of potholes.
-    """
-    print(f"Received pothole data: {pothole_data}")
-    print(f"Number of potholes received: {len(pothole_data)}")
-    
     if not pothole_data:
         return None
 
-    # Calculate average pothole volume (in cm³) and number of potholes.
-    # Handle potential different field names (volume vs Volume)
-    avg_volume = 0
     total_volume = 0
     pothole_count = len(pothole_data)
     
     for pothole in pothole_data:
-        # Try different possible field names
         volume = 0
         if isinstance(pothole, dict):
             volume = pothole.get("volume", pothole.get("Volume", 0))
-            # Convert string values to float if necessary
             if isinstance(volume, str):
                 try:
                     volume = float(volume)
@@ -148,15 +158,11 @@ def get_pothole_recommendations(pothole_data):
                     volume = 0
         total_volume += volume
     
-    if pothole_count > 0:
-        avg_volume = total_volume / pothole_count
+    avg_volume = total_volume / pothole_count if pothole_count > 0 else 0
     
-    print(f"Total volume: {total_volume}, Average volume: {avg_volume}, Pothole count: {pothole_count}")
-    
-    # Define recommendations based on pothole size.
     if avg_volume < 1000:
         pothole_type = "Small Pothole"
-        cost_range = (1400, 1600)  # INR per pothole
+        cost_range = (1400, 1600)
         recommendations = {
             "potholeType": pothole_type,
             "materialsRequired": "Mixes (cold/hot) for immediate use, Tack Coat & Bitumen Emulsion",
@@ -174,7 +180,7 @@ def get_pothole_recommendations(pothole_data):
         }
     elif avg_volume < 10000:
         pothole_type = "Medium Pothole"
-        cost_range = (2700, 3000)  # INR per pothole
+        cost_range = (2700, 3000)
         recommendations = {
             "potholeType": pothole_type,
             "materialsRequired": "Hot Mix Asphalt, Bitumen Emulsion, Open-graded/dense-graded premix",
@@ -192,7 +198,7 @@ def get_pothole_recommendations(pothole_data):
         }
     else:
         pothole_type = "Large Pothole"
-        cost_range = (3750, 4150)  # INR per pothole
+        cost_range = (3750, 4150)
         recommendations = {
             "potholeType": pothole_type,
             "materialsRequired": "Hot Mix Asphalt, Reinforced Patching, Prime Coat, Tack Coat",
@@ -213,43 +219,33 @@ def get_pothole_recommendations(pothole_data):
 
 def analyze_repair(selected_materials, selected_equipment, labor_counts,
                   pothole_count, avg_pothole_volume, road_length):
-    """
-    Calculates repair estimates based on pothole volume and user selections,
-    using the cost estimation rubric with realistic dummy values in INR.
-
-    Pothole category determination:
-      - Small: volume < 1000 cm³
-      - Medium: 1000 cm³ ≤ volume < 10000 cm³
-      - Large: volume ≥ 10000 cm³
-    """
-
     if avg_pothole_volume < 1000:
         category = "Small"
-        base_material_cost = 700  # INR per pothole (material)
-        base_equipment_cost = 350  # INR per pothole (equipment)
-        base_labor_cost = 450  # INR per pothole (labor)
-        base_time_per_pothole = 20  # minutes per pothole
-        daily_equip_cost = 50000  # INR per additional day for equipment rental
+        base_material_cost = 700
+        base_equipment_cost = 350
+        base_labor_cost = 450
+        base_time_per_pothole = 20
+        daily_equip_cost = 50000
         recommended_materials = 2
         recommended_labor_total = 3.5
         recommended_equipment = 1
     elif avg_pothole_volume < 10000:
         category = "Medium"
-        base_material_cost = 1350  # INR per pothole (material)
-        base_equipment_cost = 700  # INR per pothole (equipment)
-        base_labor_cost = 800  # INR per pothole (labor)
-        base_time_per_pothole = 35  # minutes per pothole
-        daily_equip_cost = 65000  # INR per additional day for equipment rental
+        base_material_cost = 1350
+        base_equipment_cost = 700
+        base_labor_cost = 800
+        base_time_per_pothole = 35
+        daily_equip_cost = 65000
         recommended_materials = 2
         recommended_labor_total = 7
         recommended_equipment = 1
     else:
         category = "Large"
-        base_material_cost = 2000  # INR per pothole (material)
-        base_equipment_cost = 1050  # INR per pothole (equipment)
-        base_labor_cost = 900  # INR per pothole (labor)
-        base_time_per_pothole = 50  # minutes per pothole
-        daily_equip_cost = 80000  # INR per additional day for equipment rental
+        base_material_cost = 2000
+        base_equipment_cost = 1050
+        base_labor_cost = 900
+        base_time_per_pothole = 50
+        daily_equip_cost = 80000
         recommended_materials = 2
         recommended_labor_total = 4
         recommended_equipment = 1
@@ -298,31 +294,23 @@ def analyze_repair(selected_materials, selected_equipment, labor_counts,
     }
 
 def get_pothole_recommendations_by_dimensions(area_cm2, depth_cm, volume):
-    """
-    Generate recommendations for pothole repair based on dimensions
-    """
-    # Base repair time and cost calculations
-    base_repair_hours = 0.5  # Base time for small potholes
-    base_cost_per_m2 = 50  # Base cost in dollars per square meter
-    
-    # Convert cm² to m²
+    base_repair_hours = 0.5
+    base_cost_per_m2 = 50
     area_m2 = area_cm2 / 10000
     
-    # Area-based scaling for repair time
-    if area_cm2 < 1000:  # Small pothole
+    if area_cm2 < 1000:
         repair_time = base_repair_hours
         repair_method = "Patch with cold mix asphalt"
         urgency = "Low"
-    elif area_cm2 < 5000:  # Medium pothole
+    elif area_cm2 < 5000:
         repair_time = base_repair_hours * 2
         repair_method = "Remove damaged material and fill with hot mix asphalt"
         urgency = "Medium"
-    else:  # Large pothole
+    else:
         repair_time = base_repair_hours * 4
         repair_method = "Full-depth patching with hot mix asphalt"
         urgency = "High"
     
-    # Depth-based scaling for materials needed and equipment
     if depth_cm < 3:
         material_amount = "Minimal"
         equipment = ["Hand Tools", "Compactor"]
@@ -333,10 +321,8 @@ def get_pothole_recommendations_by_dimensions(area_cm2, depth_cm, volume):
         material_amount = "Substantial"
         equipment = ["Jackhammer", "Hand Tools", "Compactor", "Asphalt Roller"]
     
-    # Cost estimation based on area and depth
     estimated_cost = area_m2 * base_cost_per_m2 * (1 + (depth_cm / 10))
     
-    # Safety risk assessment
     if depth_cm > 5 and area_cm2 > 2000:
         safety_risk = "High - Risk to vehicles and cyclists"
     elif depth_cm > 3 or area_cm2 > 1000:
@@ -355,35 +341,19 @@ def get_pothole_recommendations_by_dimensions(area_cm2, depth_cm, volume):
     }
 
 def estimate_cost_for_pothole(area_cm2, depth_cm):
-    """
-    Estimate repair cost for a pothole based on area and depth
-    """
-    # Convert cm² to m²
     area_m2 = area_cm2 / 10000
-    
-    # Base rates
-    base_cost_per_m2 = 50  # Base cost in dollars per square meter
-    labor_rate_per_hour = 35  # Labor cost per hour
-    
-    # Calculate material cost
+    base_cost_per_m2 = 50
+    labor_rate_per_hour = 35
     material_cost = area_m2 * base_cost_per_m2 * (1 + (depth_cm / 10))
-    
-    # Estimate labor hours
-    labor_hours = 0.5  # Base time
+    labor_hours = 0.5
     if area_cm2 > 1000:
         labor_hours = 1.0
     if area_cm2 > 5000:
         labor_hours = 2.0
     if depth_cm > 5:
         labor_hours *= 1.5
-    
-    # Calculate labor cost
     labor_cost = labor_hours * labor_rate_per_hour
-    
-    # Equipment cost (simplified)
     equipment_cost = labor_hours * 20
-    
-    # Total cost
     total_cost = material_cost + labor_cost + equipment_cost
     
     return {
@@ -395,12 +365,8 @@ def estimate_cost_for_pothole(area_cm2, depth_cm):
     }
 
 def analyze_repair_defect(defect_type, area_cm2=None, depth_cm=None, volume=None):
-    """
-    Generate repair recommendations based on defect type and dimensions
-    """
     materials = MATERIAL_EQUIPMENT_MAP.get(defect_type, {}).get("materials", [])
     equipment = MATERIAL_EQUIPMENT_MAP.get(defect_type, {}).get("equipment", [])
-    
     equipment_details = {equip: EQUIPMENT_OPTIONS.get(equip, "No description available") for equip in equipment}
     
     if defect_type == "Pothole" and area_cm2 and depth_cm:
@@ -416,7 +382,6 @@ def analyze_repair_defect(defect_type, area_cm2=None, depth_cm=None, volume=None
             "cost_breakdown": cost_estimate
         }
     else:
-        # Generic recommendations for cracks
         repair_method = "Clean and seal cracks"
         if defect_type == "Alligator Crack":
             repair_method = "Remove and replace affected area with new asphalt"
@@ -436,215 +401,79 @@ def analyze_repair_defect(defect_type, area_cm2=None, depth_cm=None, volume=None
             "urgency": urgency
         }
 
-@recommendation_bp.route('/defect', methods=['POST'])
-def get_repair_recommendation():
-    """
-    API endpoint to get repair recommendations for detected defects
-    """
-    data = request.json
-    
-    if not data:
-        return jsonify({
-            "success": False,
-            "message": "No data provided"
-        }), 400
-    
-    defect_type = data.get('defect_type')
-    area_cm2 = data.get('area_cm2')
-    depth_cm = data.get('depth_cm')
-    volume = data.get('volume')
-    
-    if not defect_type:
-        return jsonify({
-            "success": False,
-            "message": "Defect type is required"
-        }), 400
-    
-    # Convert to float if string values are provided
-    if area_cm2 and isinstance(area_cm2, str):
-        try:
-            area_cm2 = float(area_cm2)
-        except ValueError:
-            area_cm2 = None
-    
-    if depth_cm and isinstance(depth_cm, str):
-        try:
-            depth_cm = float(depth_cm)
-        except ValueError:
-            depth_cm = None
-    
-    if volume and isinstance(volume, str):
-        try:
-            volume = float(volume)
-        except ValueError:
-            volume = None
-    
+@router.post('/defect')
+def get_repair_recommendation(payload: DefectPayload):
     try:
-        recommendations = analyze_repair_defect(defect_type, area_cm2, depth_cm, volume)
-        
-        return jsonify({
-            "success": True,
-            "recommendations": recommendations
-        })
-    
+        recommendations = analyze_repair_defect(payload.defect_type, payload.area_cm2, payload.depth_cm, payload.volume)
+        return {"success": True, "recommendations": recommendations}
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error generating recommendations: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error generating recommendations: {str(e)}")
 
-@recommendation_bp.route('/auto', methods=['POST'])
-def auto_pothole_recommendations():
-    """
-    API endpoint to get automatic recommendations for potholes
-    """
-    data = request.json
-    
-    if not data:
-        return jsonify({
-            "success": False,
-            "message": "No data provided"
-        }), 400
-    
+@router.post('/auto')
+def auto_pothole_recommendations(payload: AutoPotholePayload):
     db = connect_to_db()
     if db is None:
-        return jsonify({
-            "success": False,
-            "message": "Failed to connect to database"
-        }), 500
+        raise HTTPException(status_code=500, detail="Failed to connect to database")
     
     try:
         pothole_data = []
-        
-        # Check if specific pothole data was provided
-        if 'potholeData' in data and data['potholeData']:
-            pothole_data = data.get('potholeData', [])
-        
-        # Check if an image ID was provided to get potholes from a specific image
-        elif 'imageId' in data and data['imageId']:
-            image_id = data['imageId']
-            
-            # Try to find the image in the pothole_images collection
-            image = db.pothole_images.find_one({"image_id": image_id})
+        if payload.potholeData:
+            pothole_data = payload.potholeData
+        elif payload.imageId:
+            image = db.pothole_images.find_one({"image_id": payload.imageId})
             if image and "potholes" in image:
                 pothole_data = image["potholes"]
-        
-        # If neither specific pothole data nor image ID was provided, get the most recent potholes
         else:
-            # First try to get from the new data model
             latest_image = db.pothole_images.find_one({}, sort=[("timestamp", -1)])
-            
             if latest_image and "potholes" in latest_image:
                 pothole_data = latest_image["potholes"]
             else:
-                # Fall back to old data model
-                # Get the most recent timestamp
                 latest_pothole = db.potholes.find_one({}, {"timestamp": 1}, sort=[("timestamp", -1)])
-                
                 if latest_pothole:
                     latest_timestamp = latest_pothole["timestamp"]
-                    
-                    # Get all potholes with that timestamp (assumed to be from the same image)
                     pothole_data = list(db.potholes.find({"timestamp": latest_timestamp}))
         
         if not pothole_data:
-            return jsonify({
-                "success": False,
-                "message": "No pothole data found"
-            }), 404
+            raise HTTPException(status_code=404, detail="No pothole data found")
         
         recommendations = get_pothole_recommendations(pothole_data)
         
         if not recommendations:
-            return jsonify({
-                "success": False,
-                "message": "Could not generate recommendations from the provided data"
-            }), 500
+            raise HTTPException(status_code=500, detail="Could not generate recommendations from the provided data")
         
-        return jsonify({
-            "success": True,
-            "recommendations": recommendations
-        })
-    
+        return {"success": True, "recommendations": recommendations}
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error generating recommendations: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error generating recommendations: {str(e)}")
 
-@recommendation_bp.route('/analyze', methods=['POST'])
-def analyze_pothole_repair():
-    """
-    API endpoint to analyze manual repair parameters for potholes
-    """
-    data = request.json
-    
-    if not data:
-        return jsonify({
-            "success": False,
-            "message": "No data provided"
-        }), 400
-    
+@router.post('/analyze')
+def analyze_pothole_repair(payload: AnalyzePayload):
     try:
-        selected_materials = data.get('selectedMaterials', [])
-        selected_equipment = data.get('selectedEquipment', [])
-        labor_counts = data.get('laborCounts', {})
-        pothole_count = data.get('potholeCount', 0)
-        avg_pothole_volume = data.get('avgPotholeVolume', 0)
-        road_length = data.get('roadLength', 0)
-        
-        if not selected_materials or pothole_count == 0:
-            return jsonify({
-                "success": False,
-                "message": "Missing required parameters"
-            }), 400
-        
         results = analyze_repair(
-            selected_materials, 
-            selected_equipment, 
-            labor_counts, 
-            pothole_count, 
-            avg_pothole_volume, 
-            road_length
+            payload.selectedMaterials, 
+            payload.selectedEquipment, 
+            payload.laborCounts, 
+            payload.potholeCount, 
+            payload.avgPotholeVolume, 
+            payload.roadLength
         )
-        
-        return jsonify({
-            "success": True,
-            "results": results
-        })
-    
+        return {"success": True, "results": results}
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error analyzing repair: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error analyzing repair: {str(e)}")
 
-@recommendation_bp.route('/list', methods=['GET'])
+@router.get('/list')
 def list_recommendations():
-    """
-    API endpoint to list all repair recommendations
-    """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
+            raise HTTPException(status_code=500, detail="Failed to connect to database")
         
-        # Get recommendations from database
         recommendations = list(db.recommendations.find())
         
-        # Convert ObjectId to string for JSON serialization
         for rec in recommendations:
             if '_id' in rec:
                 rec['_id'] = str(rec['_id'])
-                rec['id'] = str(rec['_id'])  # Add id field for frontend compatibility
+                rec['id'] = str(rec['_id'])
         
-        return jsonify(recommendations)
-    
+        return recommendations
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving recommendations: {str(e)}"
-        }), 500 
+        raise HTTPException(status_code=500, detail=f"Error retrieving recommendations: {str(e)}")

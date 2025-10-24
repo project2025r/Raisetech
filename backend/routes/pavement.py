@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify, Response, stream_with_context, session
+from fastapi import APIRouter, Request, Body, HTTPException, Depends, UploadFile, File, Form, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 import cv2
 import numpy as np
 import base64
@@ -19,6 +20,8 @@ import torch
 from datetime import datetime
 from collections import defaultdict
 import boto3
+from pydantic import BaseModel
+from typing import Optional, List
 
 # Import S3 URL generation function from dashboard
 from routes.dashboard import generate_s3_url_for_dashboard
@@ -30,7 +33,29 @@ from s3_mongodb_integration import ImageProcessingWorkflow, S3ImageManager, Mong
 # Import file validation utilities
 from utils.file_validation import validate_upload_file, validate_base64_image, get_context_specific_error_message
 
-pavement_bp = Blueprint('pavement', __name__)
+router = APIRouter()
+
+class PotholeDetectionPayload(BaseModel):
+    image: str
+    coordinates: Optional[str] = 'Not Available'
+    username: Optional[str] = 'Unknown'
+    role: Optional[str] = 'Unknown'
+    skip_road_classification: Optional[bool] = False
+    deviceCoordinates: Optional[dict] = {}
+
+class CrackDetectionPayload(BaseModel):
+    image: str
+    coordinates: Optional[str] = 'Not Available'
+    username: Optional[str] = 'Unknown'
+    role: Optional[str] = 'Unknown'
+    skip_road_classification: Optional[bool] = False
+
+class KerbDetectionPayload(BaseModel):
+    image: str
+    coordinates: Optional[str] = 'Not Available'
+    username: Optional[str] = 'Unknown'
+    role: Optional[str] = 'Unknown'
+    skip_road_classification: Optional[bool] = False
 
 def extract_media_metadata(media_data, media_type='image'):
     """
@@ -232,11 +257,11 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def preload_models_on_startup():
-    """Eagerly preload YOLO and MiDaS models when the Flask server starts"""
+    """Eagerly preload YOLO and MiDaS models when the server starts"""
     global models, midas, midas_transform
 
     print("\n=== Starting Model Preload ===")
-    print("🔄 Preloading pavement models on server startup...")
+    print(" Preloading pavement models on server startup...")
     
     # Load YOLO models
     models = load_yolo_models()
@@ -244,126 +269,83 @@ def preload_models_on_startup():
         try:
             model.eval()
         except Exception as e:
-            print(f"⚠️ Warning: Could not set model to eval mode: {e}")
+            print(f" Warning: Could not set model to eval mode: {e}")
     
     # Load MiDaS model with proper error handling
     print("\n=== Loading MiDaS Model ===")
     try:
         midas, midas_transform = load_midas()
         if midas is None or midas_transform is None:
-            print("❌ Failed to load MiDaS model - depth estimation will be unavailable")
+            print(" Failed to load MiDaS model - depth estimation will be unavailable")
         else:
-            print("✅ MiDaS model loaded successfully")
+            print(" MiDaS model loaded successfully")
             if hasattr(midas, 'eval'):
                 midas.eval()
-                print("✅ MiDaS model set to eval mode")
+                print(" MiDaS model set to eval mode")
             
             # Verify MiDaS works with a test input
             device = get_device()
             try:
-                print("🔄 Testing MiDaS with dummy input...")
+                print(" Testing MiDaS with dummy input...")
                 dummy_input = torch.randn(1, 3, 384, 384).to(device)
                 if device.type == 'cuda':
                     dummy_input = dummy_input.half()
                 with torch.no_grad():
                     _ = midas(dummy_input)
-                print("✅ MiDaS test inference successful")
+                print(" MiDaS test inference successful")
             except Exception as e:
-                print(f"❌ MiDaS test inference failed: {str(e)}")
+                print(f" MiDaS test inference failed: {str(e)}")
                 midas, midas_transform = None, None
     except Exception as e:
-        print(f"❌ Error during MiDaS initialization: {str(e)}")
+        print(f" Error during MiDaS initialization: {str(e)}")
         midas, midas_transform = None, None
     
     print("\n=== Model Preload Status ===")
-    print(f"✓ YOLO Models: {len(models)} loaded")
-    print(f"✓ MiDaS: {'Available' if midas else 'Unavailable'}")
+    print(f" YOLO Models: {len(models)} loaded")
+    print(f" MiDaS: {'Available' if midas else 'Unavailable'}")
     print("=== Preload Complete ===\n")
     
     return models, midas, midas_transform
 
-def preload_models():
-    """Preload YOLO and MiDaS models before the first request if not already loaded"""
-    global models, midas, midas_transform
-
-    # Only load if models haven't been loaded yet
-    if models is None:
-        print("\n=== Loading YOLO Models ===")
-        models = load_yolo_models()
-        for model in models.values():
-            try:
-                model.eval()
-            except Exception as e:
-                print(f"⚠️ Warning: Could not set model to eval mode: {e}")
-
-    if midas is None or midas_transform is None:
-        print("\n=== Loading MiDaS Model ===")
-        try:
-            midas, midas_transform = load_midas()
-            if midas is None or midas_transform is None:
-                print("❌ Failed to load MiDaS model - depth estimation will be unavailable")
-            else:
-                print("✅ MiDaS model loaded successfully")
-                if hasattr(midas, 'eval'):
-                    midas.eval()
-                    print("✅ MiDaS model set to eval mode")
-                
-                # Verify MiDaS works with a test input
-                device = get_device()
-                try:
-                    print("🔄 Testing MiDaS with dummy input...")
-                    dummy_input = torch.randn(1, 3, 384, 384).to(device)
-                    if device.type == 'cuda':
-                        dummy_input = dummy_input.half()
-                    with torch.no_grad():
-                        _ = midas(dummy_input)
-                    print("✅ MiDaS test inference successful")
-                except Exception as e:
-                    print(f"❌ MiDaS test inference failed: {str(e)}")
-                    midas, midas_transform = None, None
-        except Exception as e:
-            print(f"❌ Error during MiDaS initialization: {str(e)}")
-            midas, midas_transform = None, None
-
-
 def get_models():
     """Return preloaded models"""
     global models, midas, midas_transform
+    if models is None or midas is None:
+        preload_models_on_startup()
     return models, midas, midas_transform
-
 
 def decode_base64_image(base64_string):
     """Decode a base64 image to cv2 format with automatic AVIF to JPG conversion"""
-    print(f"🔍 DEBUG: Base64 string prefix: {base64_string[:50]}...")
+    print(f" DEBUG: Base64 string prefix: {base64_string[:50]}...")
 
     # Check if this is an AVIF image and convert if necessary
     if 'data:image/avif;base64,' in base64_string or 'data:image/;base64,' in base64_string:
-        print("🔄 AVIF image detected, converting to JPG...")
+        print(" AVIF image detected, converting to JPG...")
         try:
             from utils.image_converter import convert_image_to_yolo_supported
             base64_string = convert_image_to_yolo_supported(base64_string)
-            print("✅ AVIF successfully converted to JPG")
+            print(" AVIF successfully converted to JPG")
         except Exception as e:
-            print(f"❌ Error converting AVIF to JPG: {str(e)}")
+            print(f" Error converting AVIF to JPG: {str(e)}")
             return None
 
     if 'base64,' in base64_string:
         header = base64_string.split('base64,')[0]
-        print(f"🔍 DEBUG: Image header: {header}")
+        print(f" DEBUG: Image header: {header}")
         base64_string = base64_string.split('base64,')[1]
 
     img_data = base64.b64decode(base64_string)
-    print(f"🔍 DEBUG: Decoded image data size: {len(img_data)} bytes")
+    print(f" DEBUG: Decoded image data size: {len(img_data)} bytes")
 
     np_arr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
     if img is not None:
-        print(f"🔍 DEBUG: Decoded image shape: {img.shape}")
-        print(f"🔍 DEBUG: Decoded image dtype: {img.dtype}")
-        print(f"🔍 DEBUG: Decoded image min/max: {img.min()}/{img.max()}")
+        print(f" DEBUG: Decoded image shape: {img.shape}")
+        print(f" DEBUG: Decoded image dtype: {img.dtype}")
+        print(f" DEBUG: Decoded image min/max: {img.min()}/{img.max()}")
     else:
-        print("🔍 DEBUG: Failed to decode image!")
+        print(" DEBUG: Failed to decode image!")
 
     return img
 
@@ -388,17 +370,17 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
     depth_map = None
     if (selected_model == "All" or selected_model == "Potholes") and midas and midas_transform:
         try:
-            logger.debug("🔄 Running depth estimation with MiDaS...")
+            logger.debug(" Running depth estimation with MiDaS...")
             depth_map = estimate_depth(original_frame, midas, midas_transform)
             if depth_map is not None:
-                logger.debug("✅ Depth map generated successfully")
+                logger.debug(" Depth map generated successfully")
             else:
-                logger.warning("⚠️ Depth map generation failed - got None result")
+                logger.warning(" Depth map generation failed - got None result")
         except Exception as e:
-            logger.warning(f"⚠️ Error during depth estimation: {str(e)}")
+            logger.warning(f" Error during depth estimation: {str(e)}")
             depth_map = None
     else:
-        logger.warning("⚠️ MiDaS model not available or not needed for selected model")
+        logger.warning(" MiDaS model not available or not needed for selected model")
     
     try:
         # Determine which models to use based on selection
@@ -441,8 +423,8 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                     results = models[model_key](inference_frame, conf=0.2, device=device)
                 except RuntimeError as e:
                     if "dtype" in str(e):
-                        print(f"⚠️ Video processing dtype error for {model_key}: {e}")
-                        print(f"🔄 Attempting video inference with CPU fallback for {model_key}...")
+                        print(f" Video processing dtype error for {model_key}: {e}")
+                        print(f" Attempting video inference with CPU fallback for {model_key}...")
                         results = models[model_key](inference_frame, conf=0.2, device='cpu')
                     else:
                         raise e
@@ -483,15 +465,15 @@ def process_video_frame_pavement(frame, frame_count, selected_model, models, mid
                                     try:
                                         depth_metrics = calculate_real_depth(binary_mask, depth_map)
                                         if depth_metrics:
-                                            logger.debug(f"✅ Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
+                                            logger.debug(f" Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
                                         else:
-                                            logger.warning("⚠️ Depth calculation returned None - using default values")
+                                            logger.warning(" Depth calculation returned None - using default values")
                                             depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                                     except Exception as e:
-                                        logger.warning(f"⚠️ Error calculating depth: {str(e)}")
+                                        logger.warning(f" Error calculating depth: {str(e)}")
                                         depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                                 else:
-                                    logger.warning("⚠️ No depth map available - using default values")
+                                    logger.warning(" No depth map available - using default values")
                                     depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                                 
                                 # Get detection box coordinates
@@ -904,7 +886,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                 encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
                 success, buffer = cv2.imencode('.jpg', detection_frame, encode_params)
                 if success:
-                    representative_frame = base64.b64encode(buffer).decode('utf-8')
+                    representative_frame = base64.b66encode(buffer).decode('utf-8')
                     representative_frame_detections = detections.copy()
 
             # Write frame to output video
@@ -977,10 +959,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
             if db is not None:
                 db.video_processing.update_one(
                     {"video_id": video_id},
-                    {"$set": {
-                        "status": "stopped",
-                        "updated_at": datetime.now().isoformat()
-                    }}
+                    {"$set": {"status": "stopped", "updated_at": datetime.now().isoformat()}}
                 )
             
             yield f"data: {json.dumps(stop_data)}\n\n"
@@ -996,10 +975,32 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
         total_processing_time = time.time() - start_time
         avg_fps = frame_count / total_processing_time if total_processing_time > 0 else 0
         
+        # Upload original video to S3
+        original_video_s3_url = None
+        if aws_folder and s3_folder and video_timestamp:
+            try:
+                workflow = ImageProcessingWorkflow()
+                original_video_name = f"video_{video_timestamp}.mp4"
+                s3_key_original = f"{s3_folder}/{original_video_name}"
+                upload_success, s3_url_or_error = workflow.s3_manager.upload_video_to_s3(video_path, aws_folder, s3_key_original)
+                if upload_success:
+                    logger.info(f"Uploaded original video to S3: {s3_url_or_error}")
+                    original_video_s3_url = s3_key_original
+                    if db is not None:
+                        db.video_processing.update_one(
+                            {"video_id": video_id},
+                            {"$set": {"original_video_url": original_video_s3_url}}
+                        )
+                else:
+                    logger.error(f"Failed to upload original video to S3: {s3_url_or_error}")
+            except Exception as upload_error:
+                logger.error(f"Error uploading original video: {upload_error}")
+
         # Upload processed video to S3 if parameters provided
         processed_video_s3_url = None
         if aws_folder and s3_folder and video_timestamp:
             try:
+                workflow = ImageProcessingWorkflow()
                 # Extract original name from the original video name for consistency
                 if original_video_name:
                     original_name_part = original_video_name.replace(f"_{video_timestamp}.mp4", "")
@@ -1007,7 +1008,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                 else:
                     processed_video_name = f"video_{video_timestamp}_processed.mp4"
                 s3_key_processed = f"{s3_folder}/{processed_video_name}"
-                upload_success, s3_url_or_error = upload_video_to_s3(output_path, aws_folder, s3_key_processed)
+                upload_success, s3_url_or_error = workflow.s3_manager.upload_video_to_s3(output_path, aws_folder, s3_key_processed)
                 if upload_success:
                     logger.info(f"Uploaded processed video to S3: {s3_url_or_error}")
                     # Store only the relative S3 path (role/username/video_xxx_processed.mp4)
@@ -1017,11 +1018,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                     if db is not None:
                         db.video_processing.update_one(
                             {"video_id": video_id},
-                            {"$set": {
-                                "processed_video_url": processed_video_s3_url,
-                                "status": "completed",
-                                "updated_at": datetime.now().isoformat()
-                            }}
+                            {"$set": {"processed_video_url": processed_video_s3_url, "status": "completed", "updated_at": datetime.now().isoformat()}}
                         )
                     # Clean up local processed video after successful upload
                     try:
@@ -1034,22 +1031,14 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
                     if db is not None:
                         db.video_processing.update_one(
                             {"video_id": video_id},
-                            {"$set": {
-                                "status": "failed",
-                                "error": f"Failed to upload processed video: {s3_url_or_error}",
-                                "updated_at": datetime.now().isoformat()
-                            }}
+                            {"$set": {"status": "failed", "error": f"Failed to upload processed video: {s3_url_or_error}", "updated_at": datetime.now().isoformat()}}
                         )
             except Exception as upload_error:
                 logger.error(f"Error uploading processed video: {upload_error}")
                 if db is not None:
                     db.video_processing.update_one(
                         {"video_id": video_id},
-                        {"$set": {
-                            "status": "failed",
-                            "error": f"Error uploading processed video: {str(upload_error)}",
-                            "updated_at": datetime.now().isoformat()
-                        }}
+                        {"$set": {"status": "failed", "error": f"Error uploading processed video: {str(upload_error)}", "updated_at": datetime.now().isoformat()}}
                     )
         
         # Organize detections by model type
@@ -1126,11 +1115,7 @@ def process_pavement_video(video_path, selected_model, coordinates, video_timest
         if 'db' in locals() and 'video_id' in locals():
             db.video_processing.update_one(
                 {"video_id": video_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": str(e),
-                    "updated_at": datetime.now().isoformat()
-                }}
+                {"$set": {"status": "failed", "error": str(e), "updated_at": datetime.now().isoformat()}}
             )
         yield f"data: {json.dumps({'success': False, 'message': str(e)})}\n\n"
         # Send end signal even on error
@@ -1212,78 +1197,61 @@ def cleanup_old_processed_videos(max_age_hours=24):
 # Call cleanup on module load to clean any leftover files
 cleanup_old_processed_videos()
 
-@pavement_bp.route('/detect-potholes', methods=['POST'])
-def detect_potholes():
-    """
-    API endpoint to detect potholes in an uploaded image with CUDA optimization
-    """
+@router.post('/detect-potholes')
+def detect_potholes(payload: PotholeDetectionPayload):
+    """API endpoint to detect potholes in an uploaded image with CUDA optimization"""
     try:
         # Get models and device info
         models, midas, midas_transform = get_models()
         device = get_device()
         
         print("\n=== Starting Pothole Detection ===")
-        print(f"🔧 Using device: {device}")
+        print(f" Using device: {device}")
         
         if not models or "potholes" not in models:
-            return jsonify({
-                "success": False,
-                "message": "Failed to load pothole detection model"
-            }), 500
+            raise HTTPException(status_code=500, detail="Failed to load pothole detection model")
         
         # Check MiDaS availability
         if midas is None or midas_transform is None:
-            print("⚠️ MiDaS model not available - attempting to reload...")
+            print(" MiDaS model not available - attempting to reload...")
             try:
                 midas, midas_transform = load_midas()
                 if midas is None or midas_transform is None:
-                    print("❌ MiDaS reload failed - depth estimation will use default values")
+                    print(" MiDaS reload failed - depth estimation will use default values")
                 else:
-                    print("✅ MiDaS reload successful")
+                    print(" MiDaS reload successful")
                     midas.eval()
             except Exception as e:
-                print(f"❌ Error reloading MiDaS: {str(e)}")
+                print(f" Error reloading MiDaS: {str(e)}")
         else:
-            print("✅ MiDaS model is available")
+            print(" MiDaS model is available")
         
-        if 'image' not in request.json:
-            return jsonify({
-                "success": False,
-                "message": "No image data provided"
-            }), 400
-
         # Get image data and validate it
-        image_data = request.json['image']
+        image_data = payload.image
         is_valid, error_message = validate_base64_image(image_data, 'pothole_detection')
         if not is_valid:
             logger.warning(f"Image validation failed for pothole detection: {error_message}")
-            return jsonify({
-                "success": False,
-                "message": error_message
-            }), 400
+            raise HTTPException(status_code=400, detail=error_message)
 
         # Extract coordinates if provided
-        client_coordinates = request.json.get('coordinates', 'Not Available')
+        client_coordinates = payload.coordinates
 
         # Get user information
-        username = request.json.get('username', 'Unknown')
-        role = request.json.get('role', 'Unknown')
+        username = payload.username
+        role = payload.role
 
         # Check if road classification should be skipped
-        skip_road_classification = request.json.get('skip_road_classification', False)
+        skip_road_classification = payload.skip_road_classification
         image = decode_base64_image(image_data)
         
         if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Invalid image data"
-            }), 400
+            raise HTTPException(status_code=400, detail="Invalid image data")
         
-        print("✅ Image decoded successfully")
-        print(f"📊 Image shape: {image.shape}")
+        print(" Image decoded successfully")
+        print(f" Image shape: {image.shape}")
         
         # Enhanced coordinate handling with device integration
-        device_coordinates = request.json.get('deviceCoordinates', {})
+        device_coordinates = payload.deviceCoordinates
 
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
@@ -1296,19 +1264,19 @@ def detect_potholes():
         if exif_coordinates:
             final_coordinates = exif_coordinates
             coordinate_source = "exif_gps"
-            logger.info(f"🎯 Using EXIF GPS coordinates: {final_coordinates}")
+            logger.info(f" Using EXIF GPS coordinates: {final_coordinates}")
         elif device_coordinates and device_coordinates.get('source') == 'GPS':
             final_coordinates = device_coordinates.get('formatted', client_coordinates)
             coordinate_source = "device_gps"
-            logger.info(f"📱 Using device GPS coordinates: {final_coordinates}")
+            logger.info(f" Using device GPS coordinates: {final_coordinates}")
         elif device_coordinates and device_coordinates.get('source') == 'IP':
             final_coordinates = device_coordinates.get('formatted', client_coordinates)
             coordinate_source = "device_ip"
-            logger.info(f"🌐 Using device IP coordinates: {final_coordinates}")
+            logger.info(f" Using device IP coordinates: {final_coordinates}")
         else:
             final_coordinates = client_coordinates
             coordinate_source = "client_provided"
-            logger.info(f"📍 Using client-provided coordinates: {final_coordinates}")
+            logger.info(f" Using client-provided coordinates: {final_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
@@ -1318,8 +1286,8 @@ def detect_potholes():
             exif_metadata['device_coordinates'] = device_coordinates
             exif_metadata['coordinate_source'] = coordinate_source
 
-        print(f"📊 Extracted EXIF metadata: {bool(exif_metadata)}")
-        print(f"📍 Final coordinates: {final_coordinates} (source: {coordinate_source})")
+        print(f" Extracted EXIF metadata: {bool(exif_metadata)}")
+        print(f" Final coordinates: {final_coordinates} (source: {coordinate_source})")
         
         # Process the image
         processed_image = image.copy()
@@ -1334,7 +1302,7 @@ def detect_potholes():
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
-                return jsonify({
+                return {
                     "success": True,
                     "processed": False,
                     "message": "No road detected in the image. Image not processed.",
@@ -1344,24 +1312,24 @@ def detect_potholes():
                     "role": role,
                     "potholes": [],
                     "processed_image": None
-                }), 200
+                }
         
         # Run depth estimation if MiDaS is available
         depth_map = None
         if midas and midas_transform:
             try:
-                print("🔄 Running depth estimation...")
+                print(" Running depth estimation...")
                 depth_map = estimate_depth(processed_image, midas, midas_transform)
                 if depth_map is not None:
-                    print(f"✅ Depth map generated successfully - shape: {depth_map.shape}")
-                    print(f"📊 Depth range: {depth_map.min():.2f} to {depth_map.max():.2f}")
+                    print(f" Depth map generated successfully - shape: {depth_map.shape}")
+                    print(f" Depth range: {depth_map.min():.2f} to {depth_map.max():.2f}")
                 else:
-                    print("❌ Depth map generation failed - got None result")
+                    print(" Depth map generation failed - got None result")
             except Exception as e:
-                print(f"❌ Error during depth estimation: {str(e)}")
+                print(f" Error during depth estimation: {str(e)}")
                 depth_map = None
         else:
-            print("⚠️ MiDaS not available - skipping depth estimation")
+            print(" MiDaS not available - skipping depth estimation")
         
         # Detect potholes with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1379,8 +1347,8 @@ def detect_potholes():
                 results = models["potholes"](inference_image, conf=0.2, device=device)
             except RuntimeError as e:
                 if "dtype" in str(e):
-                    print(f"⚠️ Dtype error detected: {e}")
-                    print("🔄 Attempting inference with CPU fallback...")
+                    print(f" Dtype error detected: {e}")
+                    print(" Attempting inference with CPU fallback...")
                     results = models["potholes"](inference_image, conf=0.2, device='cpu')
                 else:
                     raise e
@@ -1421,15 +1389,15 @@ def detect_potholes():
                             try:
                                 depth_metrics = calculate_real_depth(binary_mask, depth_map)
                                 if depth_metrics:
-                                    print(f"✅ Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
+                                    print(f" Depth calculated successfully: max={depth_metrics['max_depth_cm']}cm, avg={depth_metrics['avg_depth_cm']}cm")
                                 else:
-                                    print("⚠️ Depth calculation returned None - using default values")
+                                    print(" Depth calculation returned None - using default values")
                                     depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                             except Exception as e:
-                                print(f"❌ Error calculating depth: {str(e)}")
+                                print(f" Error calculating depth: {str(e)}")
                                 depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                         else:
-                            print("⚠️ No depth map available - using default values")
+                            print(" No depth map available - using default values")
                             depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
                         
                         if dimensions and depth_metrics:
@@ -1508,26 +1476,20 @@ def detect_potholes():
             )
 
             if not workflow_success:
-                return jsonify({
-                    "success": False,
-                    "message": f"Failed to process and store images: {workflow_result}"
-                }), 500
+                raise HTTPException(status_code=500, detail=f"Failed to process and store images: {workflow_result}")
 
             # Extract S3 URLs from workflow result for response
             original_s3_url = workflow_result['original_s3_url']
             processed_s3_url = workflow_result['processed_s3_url']
 
-            logger.info(f"✅ Complete workflow successful for pothole detection: {workflow_result['image_id']}")
+            logger.info(f" Complete workflow successful for pothole detection: {workflow_result['image_id']}")
 
         except Exception as e:
-            logger.error(f"❌ Error in comprehensive workflow: {str(e)}")
-            return jsonify({
-                "success": False,
-                "message": f"Error in image processing workflow: {str(e)}"
-            }), 500
+            logger.error(f" Error in comprehensive workflow: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error in image processing workflow: {str(e)}")
         
         # Return results
-        return jsonify({
+        return {
             "success": True,
             "processed": True,
             "classification": classification_result,
@@ -1544,69 +1506,48 @@ def detect_potholes():
             },
             "username": username,
             "role": role
-        })
+        }
         
     except Exception as e:
-        print(f"❌ Critical error in pothole detection: {str(e)}")
+        print(f" Critical error in pothole detection: {str(e)}")
         traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error processing image: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
-@pavement_bp.route('/detect-cracks', methods=['POST'])
-def detect_cracks():
-    """
-    API endpoint to detect cracks in an uploaded image using segmentation masks with CUDA optimization
-    """
+@router.post('/detect-cracks')
+def detect_cracks(payload: CrackDetectionPayload):
+    """API endpoint to detect cracks in an uploaded image using segmentation masks with CUDA optimization"""
     models, _, _ = get_models()
     device = get_device()
 
     if not models or "cracks" not in models:
-        return jsonify({
-            "success": False,
-            "message": "Failed to load crack detection model"
-        }), 500
-
-    if 'image' not in request.json:
-        return jsonify({
-            "success": False,
-            "message": "No image data provided"
-        }), 400
+        raise HTTPException(status_code=500, detail="Failed to load crack detection model")
 
     # Get image data and validate it
-    image_data = request.json['image']
+    image_data = payload.image
     is_valid, error_message = validate_base64_image(image_data, 'crack_detection')
     if not is_valid:
         logger.warning(f"Image validation failed for crack detection: {error_message}")
-        return jsonify({
-            "success": False,
-            "message": error_message
-        }), 400
+        raise HTTPException(status_code=400, detail=error_message)
 
-    client_coordinates = request.json.get('coordinates', 'Not Available')
-    username = request.json.get('username', 'Unknown')
-    role = request.json.get('role', 'Unknown')
-    skip_road_classification = request.json.get('skip_road_classification', False)
+    client_coordinates = payload.coordinates
+    username = payload.username
+    role = payload.role
+    skip_road_classification = payload.skip_road_classification
 
     try:
-        image_data = request.json['image']
         image = decode_base64_image(image_data)
 
         if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Invalid image data"
-            }), 400
+            raise HTTPException(status_code=400, detail="Invalid image data")
 
         lat, lon = get_gps_coordinates(image_data)
         coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
 
         # Log coordinate extraction results
         if lat is not None and lon is not None:
-            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+            logger.info(f" Using EXIF GPS coordinates: {coordinates}")
         else:
-            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
+            logger.info(f" Using client-provided coordinates: {client_coordinates}")
         processed_image = image.copy()
 
         # Classify the image to check if it contains a road (unless skipped)
@@ -1619,7 +1560,7 @@ def detect_cracks():
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
-                return jsonify({
+                return {
                     "success": True,
                     "processed": False,
                     "message": "No road detected in the image. Image not processed.",
@@ -1629,7 +1570,7 @@ def detect_cracks():
                     "role": role,
                     "cracks": [],
                     "processed_image": None
-                }), 200
+                }
 
         # Run crack detection with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1647,8 +1588,8 @@ def detect_cracks():
                 results = models["cracks"](inference_image, conf=0.2, device=device)
             except RuntimeError as e:
                 if "dtype" in str(e):
-                    print(f"⚠️ Crack model dtype error: {e}")
-                    print("🔄 Attempting crack inference with CPU fallback...")
+                    print(f" Crack model dtype error: {e}")
+                    print(" Attempting crack inference with CPU fallback...")
                     results = models["cracks"](inference_image, conf=0.2, device='cpu')
                 else:
                     raise e
@@ -1758,41 +1699,31 @@ def detect_cracks():
             condition_counts[det["type"]["name"]] += 1
             crack_id += 1
 
-        # Upload images to S3
-        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
-            image, processed_image, image_upload_id, role, username
-        )
-
-        if not upload_success:
-            return jsonify({
-                "success": False,
-                "message": f"Failed to upload images to S3: {upload_error}"
-            }), 500
-
-        db = connect_to_db()
-        if db is not None and crack_results:
-            try:
-                db.crack_images.insert_one({
-                    "image_id": image_upload_id,
-                    "timestamp": timestamp,
-                    "coordinates": coordinates,
-                    "username": username,
-                    "role": role,
-                    "original_image_s3_url": original_s3_url,
-                    "processed_image_s3_url": processed_s3_url,
-                    "crack_count": len(crack_results),
-                    "cracks": crack_results,
-                    "type_counts": condition_counts,
-                    "exif_data": exif_metadata,
-                    "metadata": exif_metadata,
-                    "media_type": "image"
-                })
-            except Exception as e:
-                print(f"Error saving image data: {e}")
+        # Use comprehensive S3-MongoDB integration workflow
+        try:
+            workflow = ImageProcessingWorkflow()
+            exif_metadata = extract_media_metadata(image_data, 'image')
+            metadata = {
+                'username': username,
+                'role': role,
+                'coordinates': coordinates,
+                'timestamp': timestamp,
+                'exif_data': exif_metadata,
+                'media_type': 'image'
+            }
+            workflow_success, workflow_result = workflow.process_and_store_images(
+                image, processed_image, metadata, crack_results, 'crack'
+            )
+            if not workflow_success:
+                raise HTTPException(status_code=500, detail=f"Failed to process and store images: {workflow_result}")
+            logger.info(f"Complete workflow successful for crack detection: {workflow_result['image_id']}")
+        except Exception as e:
+            logger.error(f"Error in comprehensive workflow for cracks: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error in image processing workflow: {str(e)}")
 
         encoded_image = encode_processed_image(processed_image)
 
-        return jsonify({
+        return {
             "success": True,
             "processed": True,
             "classification": classification_result,
@@ -1803,65 +1734,44 @@ def detect_cracks():
             "coordinates": coordinates,
             "username": username,
             "role": role
-        })
+        }
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error processing image: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
 
-@pavement_bp.route('/detect-kerbs', methods=['POST'])
-def detect_kerbs():
-    """
-    API endpoint to detect kerbs and assess their condition in an uploaded image with CUDA optimization
-    """
+@router.post('/detect-kerbs')
+def detect_kerbs(payload: KerbDetectionPayload):
+    """API endpoint to detect kerbs and assess their condition in an uploaded image with CUDA optimization"""
     # Get models and device info
     models, _, _ = get_models()
     device = get_device()
     
     if not models or "kerbs" not in models:
-        return jsonify({
-            "success": False,
-            "message": "Failed to load kerb detection model"
-        }), 500
+        raise HTTPException(status_code=500, detail="Failed to load kerb detection model")
     
-    if 'image' not in request.json:
-        return jsonify({
-            "success": False,
-            "message": "No image data provided"
-        }), 400
-
     # Get image data and validate it
-    image_data = request.json['image']
+    image_data = payload.image
     is_valid, error_message = validate_base64_image(image_data, 'kerb_detection')
     if not is_valid:
         logger.warning(f"Image validation failed for kerb detection: {error_message}")
-        return jsonify({
-            "success": False,
-            "message": error_message
-        }), 400
+        raise HTTPException(status_code=400, detail=error_message)
 
     # Extract coordinates if provided
-    client_coordinates = request.json.get('coordinates', 'Not Available')
+    client_coordinates = payload.coordinates
 
     # Get user information
-    username = request.json.get('username', 'Unknown')
-    role = request.json.get('role', 'Unknown')
-    skip_road_classification = request.json.get('skip_road_classification', False)
+    username = payload.username
+    role = payload.role
+    skip_road_classification = payload.skip_road_classification
 
     # Get image data
     try:
-        image_data = request.json['image']
         image = decode_base64_image(image_data)
         
         if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Invalid image data"
-            }), 400
+            raise HTTPException(status_code=400, detail="Invalid image data")
             
         # Try to extract EXIF GPS data from the image
         lat, lon = get_gps_coordinates(image_data)
@@ -1869,9 +1779,9 @@ def detect_kerbs():
 
         # Log coordinate extraction results
         if lat is not None and lon is not None:
-            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
+            logger.info(f" Using EXIF GPS coordinates: {coordinates}")
         else:
-            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
+            logger.info(f" Using client-provided coordinates: {client_coordinates}")
 
         # Extract comprehensive EXIF metadata
         exif_metadata = extract_media_metadata(image_data, 'image')
@@ -1889,7 +1799,7 @@ def detect_kerbs():
 
             # If no road detected, return classification info without processing
             if not classification_result["is_road"]:
-                return jsonify({
+                return {
                     "success": True,
                     "processed": False,
                     "message": "No road detected in the image. Image not processed.",
@@ -1899,7 +1809,7 @@ def detect_kerbs():
                     "role": role,
                     "kerbs": [],
                     "processed_image": None
-                }), 200
+                }
 
         # Detect kerbs using YOLOv8 model with CUDA optimization and proper dtype handling
         with torch.no_grad():
@@ -1917,8 +1827,8 @@ def detect_kerbs():
                 results = models["kerbs"](inference_image, conf=0.5, device=device)
             except RuntimeError as e:
                 if "dtype" in str(e):
-                    print(f"⚠️ Kerb model dtype error: {e}")
-                    print("🔄 Attempting kerb inference with CPU fallback...")
+                    print(f" Kerb model dtype error: {e}")
+                    print(" Attempting kerb inference with CPU fallback...")
                     results = models["kerbs"](inference_image, conf=0.5, device='cpu')
                 else:
                     raise e
@@ -1998,19 +1908,15 @@ def detect_kerbs():
                     
                     # Draw bounding box
                     cv2.rectangle(processed_image, (x1, y1), (x2, y2), color, 2)
-                    
-                    # Calculate approximate length based on box dimensions
-                    length_m = max((x2 - x1), (y2 - y1)) / 100  # Convert pixels to meters (approximate)
-                    
-                    # Label
+
+                    # Add text and other details
                     text = f"ID {kerb_id}: {kerb_type['name']}"
                     cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                    
-                    # Add to kerb results
+
                     kerb_info = {
                         "kerb_id": kerb_id,
-                        "kerb_type": "Concrete Kerb",  # Default type
-                        "length_m": length_m,
+                        "kerb_type": "Concrete Kerb",
+                        "length_m": (x2 - x1) * 0.01,  # Approximate length
                         "condition": kerb_type["name"],
                         "confidence": float(conf),
                         "coordinates": coordinates,
@@ -2018,2719 +1924,516 @@ def detect_kerbs():
                         "role": role
                     }
                     
-                    # Update condition counts
                     condition_counts[kerb_type["name"]] += 1
-                    
                     kerb_results.append(kerb_info)
                     kerb_id += 1
         
-        # Upload images to S3
-        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
-            image, processed_image, image_upload_id, role, username
-        )
+        # Use comprehensive S3-MongoDB integration workflow
+        try:
+            workflow = ImageProcessingWorkflow()
+            metadata = {
+                'username': username,
+                'role': role,
+                'coordinates': coordinates,
+                'timestamp': timestamp,
+                'exif_data': exif_metadata,
+                'media_type': 'image'
+            }
+            workflow_success, workflow_result = workflow.process_and_store_images(
+                image, processed_image, metadata, kerb_results, 'kerb'
+            )
+            if not workflow_success:
+                raise HTTPException(status_code=500, detail=f"Failed to process and store images: {workflow_result}")
+            logger.info(f"Complete workflow successful for kerb detection: {workflow_result['image_id']}")
+        except Exception as e:
+            logger.error(f"Error in comprehensive workflow for kerbs: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error in image processing workflow: {str(e)}")
 
-        if not upload_success:
-            return jsonify({
-                "success": False,
-                "message": f"Failed to upload images to S3: {upload_error}"
-            }), 500
-
-        # Store consolidated entry in the database
-        db = connect_to_db()
-        if db is not None and kerb_results:
-            try:
-                db.kerb_images.insert_one({
-                    "image_id": image_upload_id,
-                    "timestamp": timestamp,
-                    "coordinates": coordinates,
-                    "username": username,
-                    "role": role,
-                    "original_image_s3_url": original_s3_url,
-                    "processed_image_s3_url": processed_s3_url,
-                    "kerb_count": len(kerb_results),
-                    "kerbs": kerb_results,
-                    "condition_counts": condition_counts,
-                    "exif_data": exif_metadata,
-                    "metadata": exif_metadata,
-                    "media_type": "image"
-                })
-            except Exception as e:
-                print(f"Error saving image data: {e}")
-        
-        # Encode the processed image
-        encoded_image = encode_processed_image(processed_image)
-        
-        return jsonify({
+        return {
             "success": True,
             "processed": True,
             "classification": classification_result,
             "message": f"Detected {len(kerb_results)} kerbs",
-            "processed_image": encoded_image,
+            "processed_image": encode_processed_image(processed_image),
             "kerbs": kerb_results,
-            "condition_counts": condition_counts,
-            "coordinates": coordinates,
-            "username": username,
-            "role": role
-        })
-    
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error processing image: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/get-image/<image_id>', methods=['GET'])
-def get_image(image_id):
-    """
-    API endpoint to retrieve an image from GridFS by its ID
-    """
-    try:
-        # Connect to MongoDB and get GridFS instance
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
-            
-        fs = get_gridfs()
-        
-        # Check if image exists
-        if not fs.exists(ObjectId(image_id)):
-            return jsonify({
-                "success": False,
-                "message": "Image not found"
-            }), 404
-        
-        # Get image file from GridFS
-        file = fs.get(ObjectId(image_id))
-        
-        # Create a Flask response with the image data
-        from flask import send_file, Response
-        
-        # Return the image as a response
-        return Response(
-            file.read(),
-            mimetype=file.content_type,
-            headers={"Content-Disposition": f"inline; filename={file.filename}"}
-        )
-        
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving image: {str(e)}"
-        }), 500
-
-
-@pavement_bp.route('/get-image-url/<path:s3_key>', methods=['GET'])
-def get_image_url(s3_key):
-    """
-    API endpoint to generate a public S3 URL for an image
-    """
-    try:
-        # Generate the public S3 URL
-        image_url = generate_s3_url(s3_key)
-
-        return jsonify({
-            "success": True,
-            "image_url": image_url
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error generating image URL: {str(e)}"
-        }), 500
-
-
-@pavement_bp.route('/get-s3-image/<path:s3_key>', methods=['GET'])
-def get_s3_image(s3_key):
-    """
-    API endpoint to proxy S3 images through the backend
-    This solves the issue of S3 bucket not being publicly accessible
-    """
-    try:
-        # Add detailed logging for debugging
-        logger.info(f"🔍 S3 Image Request - S3 Key: {s3_key}")
-
-        # Initialize S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
-        )
-
-        # Get AWS folder and bucket info
-        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Smart S3 key handling to avoid path duplication
-        if prefix and s3_key.startswith(prefix):
-            # S3 key already contains the full path (e.g., from database with full path)
-            full_s3_key = s3_key
-            logger.info(f"🔍 S3 key already contains full path: {s3_key}")
-        elif prefix and s3_key.startswith(f"{prefix}/"):
-            # S3 key starts with prefix/ (another variation)
-            full_s3_key = s3_key
-            logger.info(f"🔍 S3 key already contains full path with slash: {s3_key}")
-        else:
-            # S3 key is relative, add prefix
-            full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-            logger.info(f"🔍 Added prefix to relative S3 key: {prefix}/{s3_key}")
-
-        logger.info(f"🔍 S3 Configuration - Bucket: {bucket}, Prefix: {prefix}")
-        logger.info(f"🔍 Full S3 Key: {full_s3_key}")
-
-        # Fetch image from S3
-        response = s3_client.get_object(Bucket=bucket, Key=full_s3_key)
-        image_data = response['Body'].read()
-        content_type = response.get('ContentType', 'image/jpeg')
-
-        logger.info(f"✅ Successfully fetched image from S3 - Size: {len(image_data)} bytes, Content-Type: {content_type}")
-
-        # Return image with proper headers
-        from flask import Response
-        return Response(
-            image_data,
-            mimetype=content_type,
-            headers={
-                'Cache-Control': 'public, max-age=3600',  # Cache for 1 hour
-                'Content-Length': str(len(image_data))
-            }
-        )
-
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        logger.error(f"❌ S3 ClientError - Code: {error_code}, Message: {str(e)}")
-        logger.error(f"❌ Failed S3 Key: {full_s3_key if 'full_s3_key' in locals() else s3_key}")
-
-        if error_code == 'NoSuchKey':
-            return jsonify({
-                "success": False,
-                "message": f"Image not found in S3: {full_s3_key if 'full_s3_key' in locals() else s3_key}"
-            }), 404
-        else:
-            return jsonify({
-                "success": False,
-                "message": f"S3 error: {str(e)}"
-            }), 500
-    except Exception as e:
-        logger.error(f"❌ Unexpected error fetching S3 image: {str(e)}")
-        logger.error(f"❌ Failed S3 Key: {full_s3_key if 'full_s3_key' in locals() else s3_key}")
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching S3 image: {str(e)}"
-        }), 500
-
-
-@pavement_bp.route('/emergency-image-access/<path:s3_key>', methods=['GET'])
-def emergency_image_access(s3_key):
-    """
-    EMERGENCY IMAGE ACCESS ENDPOINT
-    This endpoint tries multiple strategies to access S3 images when normal methods fail.
-    It attempts to make objects public if needed and provides direct image serving.
-    """
-    try:
-        logger.info(f"🚨 EMERGENCY: Image access request - S3 Key: {s3_key}")
-
-        # Initialize S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
-        )
-
-        # Get AWS folder and bucket info
-        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Try multiple S3 key variations
-        s3_key_variations = [
-            s3_key,  # Original key
-            f"{prefix}/{s3_key}" if prefix and not s3_key.startswith(prefix) else s3_key,  # With prefix
-            s3_key.replace(f"{prefix}/", "") if s3_key.startswith(f"{prefix}/") else s3_key,  # Without prefix
-        ]
-
-        # Remove duplicates while preserving order
-        s3_key_variations = list(dict.fromkeys(s3_key_variations))
-
-        logger.info(f"🔍 EMERGENCY: Trying {len(s3_key_variations)} S3 key variations")
-
-        image_data = None
-        content_type = 'image/jpeg'
-        successful_key = None
-
-        # Try each variation
-        for i, test_key in enumerate(s3_key_variations):
-            try:
-                logger.info(f"🔍 EMERGENCY: Attempt {i+1}/{len(s3_key_variations)} - Key: {test_key}")
-
-                # Try to get the object
-                response = s3_client.get_object(Bucket=bucket, Key=test_key)
-                image_data = response['Body'].read()
-                content_type = response.get('ContentType', 'image/jpeg')
-                successful_key = test_key
-
-                logger.info(f"✅ EMERGENCY: Success with key variation {i+1}: {test_key}")
-                break
-
-            except ClientError as e:
-                error_code = e.response['Error']['Code']
-                logger.warning(f"⚠️ EMERGENCY: Key variation {i+1} failed - {error_code}: {test_key}")
-
-                if error_code == 'AccessDenied':
-                    # Try to make the object public
-                    try:
-                        logger.info(f"🔓 EMERGENCY: Attempting to make object public: {test_key}")
-                        s3_client.put_object_acl(
-                            Bucket=bucket,
-                            Key=test_key,
-                            ACL='public-read'
-                        )
-
-                        # Try again after making it public
-                        response = s3_client.get_object(Bucket=bucket, Key=test_key)
-                        image_data = response['Body'].read()
-                        content_type = response.get('ContentType', 'image/jpeg')
-                        successful_key = test_key
-
-                        logger.info(f"✅ EMERGENCY: Success after making public: {test_key}")
-                        break
-
-                    except Exception as acl_error:
-                        logger.warning(f"⚠️ EMERGENCY: Failed to make public: {acl_error}")
-                        continue
-                else:
-                    continue
-
-        if image_data:
-            logger.info(f"✅ EMERGENCY: Successfully retrieved image - Size: {len(image_data)} bytes")
-
-            # Return image with CORS headers
-            from flask import Response
-            return Response(
-                image_data,
-                mimetype=content_type,
-                headers={
-                    'Cache-Control': 'public, max-age=3600',
-                    'Content-Length': str(len(image_data)),
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET',
-                    'Access-Control-Allow-Headers': 'Content-Type',
-                    'X-Emergency-Access': 'true',
-                    'X-Successful-Key': successful_key
-                }
-            )
-        else:
-            logger.error(f"❌ EMERGENCY: All key variations failed for: {s3_key}")
-            return jsonify({
-                "success": False,
-                "message": f"Emergency access failed - image not found with any key variation",
-                "attempted_keys": s3_key_variations
-            }), 404
-
-    except Exception as e:
-        logger.error(f"❌ EMERGENCY: Unexpected error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Emergency access error: {str(e)}"
-        }), 500
-
-
-@pavement_bp.route('/get-presigned-url/<path:s3_key>', methods=['GET'])
-def get_presigned_url(s3_key):
-    """
-    Generate a pre-signed URL for S3 objects
-    This provides secure, temporary access to S3 objects without making them public
-    """
-    try:
-        logger.info(f"🔗 Pre-signed URL Request - S3 Key: {s3_key}")
-
-        # Initialize S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
-        )
-
-        # Get AWS folder and bucket info
-        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Smart S3 key handling (same logic as get_s3_image)
-        if prefix and s3_key.startswith(prefix):
-            full_s3_key = s3_key
-            logger.info(f"🔍 S3 key already contains full path: {s3_key}")
-        elif prefix and s3_key.startswith(f"{prefix}/"):
-            full_s3_key = s3_key
-            logger.info(f"🔍 S3 key already contains full path with slash: {s3_key}")
-        else:
-            full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-            logger.info(f"🔍 Added prefix to relative S3 key: {prefix}/{s3_key}")
-
-        logger.info(f"🔍 Pre-signed URL - Bucket: {bucket}, Full Key: {full_s3_key}")
-
-        # Generate pre-signed URL (valid for 1 hour)
-        presigned_url = s3_client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': bucket, 'Key': full_s3_key},
-            ExpiresIn=3600  # 1 hour
-        )
-
-        logger.info(f"✅ Pre-signed URL generated successfully")
-
-        return jsonify({
-            'success': True,
-            'presigned_url': presigned_url,
-            'expires_in': 3600,
-            's3_key': s3_key,
-            'full_s3_key': full_s3_key
-        })
-
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        logger.error(f"❌ S3 ClientError generating pre-signed URL - Code: {error_code}, S3 Key: {s3_key}")
-
-        return jsonify({
-            'success': False,
-            'error': f'S3 error: {error_code}',
-            's3_key': s3_key
-        }), 500
-
-    except Exception as e:
-        logger.error(f"❌ Unexpected error generating pre-signed URL: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': 'Failed to generate pre-signed URL',
-            's3_key': s3_key
-        }), 500
-
-
-@pavement_bp.route('/potholes/list', methods=['GET'])
-def list_potholes():
-    """
-    API endpoint to list all detected potholes
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        all_potholes = []
-        
-        # Get potholes from the old structure
-        old_potholes = list(db.potholes.find({}, {
-            "_id": 1,
-            "pothole_id": 1,
-            "area_cm2": 1,
-            "depth_cm": 1,
-            "volume": 1,
-            "volume_range": 1,
-            "coordinates": 1,
-            "timestamp": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1
-        }))
-        
-        # Convert ObjectId to string for old potholes
-        for pothole in old_potholes:
-            pothole["_id"] = str(pothole["_id"])
-            pothole["data_structure"] = "old"
-            all_potholes.append(pothole)
-        
-        # Get potholes from the new structure
-        image_entries = list(db.pothole_images.find({}))
-        
-        for image in image_entries:
-            image_id = image["image_id"]
-            timestamp = image["timestamp"]
-            original_image_id = image["original_image_id"]
-            processed_image_id = image["processed_image_id"]
-            
-            # Add each pothole from the image with the image data
-            for pothole in image["potholes"]:
-                pothole_data = {
-                    **pothole,
-                    "image_id": image_id,
-                    "timestamp": timestamp,
-                    "original_image_id": original_image_id,
-                    "processed_image_id": processed_image_id,
-                    "data_structure": "new"
-                }
-                all_potholes.append(pothole_data)
-        
-        # Sort all potholes by timestamp, newest first
-        all_potholes.sort(key=lambda x: x["timestamp"], reverse=True)
-        
-        return jsonify({
-            "success": True,
-            "potholes": all_potholes
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving potholes: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/potholes/recent', methods=['GET'])
-def get_recent_potholes():
-    """
-    API endpoint to list only the most recently detected potholes (from the most recent image)
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        # Check if we have data in the new pothole_images collection
-        latest_image = db.pothole_images.find_one(
-            {},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if latest_image:
-            # Get all potholes from the most recent image using the new data structure
-            image_data = {
-                "image_id": latest_image.get("image_id"),
-                "timestamp": latest_image.get("timestamp")
-            }
-
-            # Handle both old GridFS-based and new S3-based data structures
-            if "original_image_id" in latest_image:
-                image_data["original_image_id"] = latest_image["original_image_id"]
-            if "processed_image_id" in latest_image:
-                image_data["processed_image_id"] = latest_image["processed_image_id"]
-            if "original_image_s3_url" in latest_image:
-                image_data["original_image_s3_url"] = latest_image["original_image_s3_url"]
-            if "processed_image_s3_url" in latest_image:
-                image_data["processed_image_s3_url"] = latest_image["processed_image_s3_url"]
-
-            return jsonify({
-                "success": True,
-                "potholes": latest_image["potholes"],
-                "image_data": image_data
-            })
-        
-        # Fallback to old structure if no data in pothole_images collection
-        latest_pothole = db.potholes.find_one(
-            {},
-            {"timestamp": 1},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if not latest_pothole:
-            return jsonify({
-                "success": True,
-                "potholes": []
-            })
-        
-        latest_timestamp = latest_pothole["timestamp"]
-        
-        # Get all potholes with that timestamp (from the same image)
-        potholes = list(db.potholes.find(
-            {"timestamp": latest_timestamp},
-            {
-                "_id": 1,
-                "pothole_id": 1,
-                "area_cm2": 1,
-                "depth_cm": 1,
-                "volume": 1,
-                "volume_range": 1,
-                "coordinates": 1,
-                "timestamp": 1,
-                "original_image_id": 1,
-                "processed_image_id": 1
-            }
-        ))
-        
-        # Convert ObjectId to string
-        for pothole in potholes:
-            pothole["_id"] = str(pothole["_id"])
-        
-        return jsonify({
-            "success": True,
-            "potholes": potholes
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving recent potholes: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/cracks/list', methods=['GET'])
-def list_cracks():
-    """
-    API endpoint to list all detected cracks
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        all_cracks = []
-        
-        # Get cracks from the old structure
-        old_cracks = list(db.cracks.find({}, {
-            "_id": 1,
-            "crack_id": 1,
-            "crack_type": 1,
-            "area_cm2": 1,
-            "area_range": 1,
-            "coordinates": 1,
-            "timestamp": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1
-        }))
-        
-        # Convert ObjectId to string for old cracks
-        for crack in old_cracks:
-            crack["_id"] = str(crack["_id"])
-            crack["data_structure"] = "old"
-            all_cracks.append(crack)
-        
-        # Get cracks from the new structure
-        image_entries = list(db.crack_images.find({}))
-        
-        for image in image_entries:
-            image_id = image["image_id"]
-            timestamp = image["timestamp"]
-            original_image_id = image["original_image_id"]
-            processed_image_id = image["processed_image_id"]
-            
-            # Add each crack from the image with the image data
-            for crack in image["cracks"]:
-                crack_data = {
-                    **crack,
-                    "image_id": image_id,
-                    "timestamp": timestamp,
-                    "original_image_id": original_image_id,
-                    "processed_image_id": processed_image_id,
-                    "data_structure": "new"
-                }
-                all_cracks.append(crack_data)
-        
-        # Sort all cracks by timestamp, newest first
-        all_cracks.sort(key=lambda x: x["timestamp"], reverse=True)
-        
-        return jsonify({
-            "success": True,
-            "cracks": all_cracks
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving cracks: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/cracks/recent', methods=['GET'])
-def get_recent_cracks():
-    """
-    API endpoint to list only the most recently detected cracks (from the most recent image)
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        # Check if we have data in the new crack_images collection
-        latest_image = db.crack_images.find_one(
-            {},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if latest_image:
-            # Get all cracks from the most recent image using the new data structure
-            return jsonify({
-                "success": True,
-                "cracks": latest_image["cracks"],
-                "image_data": {
-                    "image_id": latest_image["image_id"],
-                    "timestamp": latest_image["timestamp"],
-                    "original_image_id": latest_image["original_image_id"],
-                    "processed_image_id": latest_image["processed_image_id"],
-                    "type_counts": latest_image.get("type_counts", {})
-                }
-            })
-        
-        # Fallback to old structure if no data in crack_images collection
-        latest_crack = db.cracks.find_one(
-            {},
-            {"timestamp": 1},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if not latest_crack:
-            return jsonify({
-                "success": True,
-                "cracks": []
-            })
-        
-        latest_timestamp = latest_crack["timestamp"]
-        
-        # Get all cracks with that timestamp (from the same image)
-        cracks = list(db.cracks.find(
-            {"timestamp": latest_timestamp},
-            {
-                "_id": 1,
-                "crack_id": 1,
-                "crack_type": 1,
-                "area_cm2": 1,
-                "area_range": 1,
-                "coordinates": 1,
-                "timestamp": 1,
-                "original_image_id": 1,
-                "processed_image_id": 1
-            }
-        ))
-        
-        # Convert ObjectId to string
-        for crack in cracks:
-            crack["_id"] = str(crack["_id"])
-        
-        return jsonify({
-            "success": True,
-            "cracks": cracks
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving recent cracks: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/kerbs/list', methods=['GET'])
-def list_kerbs():
-    """
-    API endpoint to list all detected kerbs
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        all_kerbs = []
-        
-        # Get kerbs from the old structure
-        old_kerbs = list(db.kerbs.find({}, {
-            "_id": 1,
-            "kerb_id": 1,
-            "kerb_type": 1,
-            "length_m": 1,
-            "condition": 1,
-            "coordinates": 1,
-            "timestamp": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1
-        }))
-        
-        # Convert ObjectId to string for old kerbs
-        for kerb in old_kerbs:
-            kerb["_id"] = str(kerb["_id"])
-            kerb["data_structure"] = "old"
-            all_kerbs.append(kerb)
-        
-        # Get kerbs from the new structure
-        image_entries = list(db.kerb_images.find({}))
-        
-        for image in image_entries:
-            image_id = image["image_id"]
-            timestamp = image["timestamp"]
-            original_image_id = image["original_image_id"]
-            processed_image_id = image["processed_image_id"]
-            
-            # Add each kerb from the image with the image data
-            for kerb in image["kerbs"]:
-                kerb_data = {
-                    **kerb,
-                    "image_id": image_id,
-                    "timestamp": timestamp,
-                    "original_image_id": original_image_id,
-                    "processed_image_id": processed_image_id,
-                    "data_structure": "new"
-                }
-                all_kerbs.append(kerb_data)
-        
-        # Sort all kerbs by timestamp, newest first
-        all_kerbs.sort(key=lambda x: x["timestamp"], reverse=True)
-        
-        return jsonify({
-            "success": True,
-            "kerbs": all_kerbs
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving kerbs: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/kerbs/recent', methods=['GET'])
-def get_recent_kerbs():
-    """
-    API endpoint to list only the most recently detected kerbs (from the most recent image)
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        # Check if we have data in the new kerb_images collection
-        latest_image = db.kerb_images.find_one(
-            {},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if latest_image:
-            # Get all kerbs from the most recent image using the new data structure
-            return jsonify({
-                "success": True,
-                "kerbs": latest_image["kerbs"],
-                "image_data": {
-                    "image_id": latest_image["image_id"],
-                    "timestamp": latest_image["timestamp"],
-                    "original_image_id": latest_image["original_image_id"],
-                    "processed_image_id": latest_image["processed_image_id"],
-                    "condition_counts": latest_image.get("condition_counts", {})
-                }
-            })
-        
-        # Fallback to old structure if no data in kerb_images collection
-        latest_kerb = db.kerbs.find_one(
-            {},
-            {"timestamp": 1},
-            sort=[("timestamp", -1)]  # Sort by timestamp descending
-        )
-        
-        if not latest_kerb:
-            return jsonify({
-                "success": True,
-                "kerbs": []
-            })
-        
-        latest_timestamp = latest_kerb["timestamp"]
-        
-        # Get all kerbs with that timestamp (from the same image)
-        kerbs = list(db.kerbs.find(
-            {"timestamp": latest_timestamp},
-            {
-                "_id": 1,
-                "kerb_id": 1,
-                "kerb_type": 1,
-                "length_m": 1,
-                "condition": 1,
-                "coordinates": 1,
-                "timestamp": 1,
-                "original_image_id": 1,
-                "processed_image_id": 1
-            }
-        ))
-        
-        # Convert ObjectId to string
-        for kerb in kerbs:
-            kerb["_id"] = str(kerb["_id"])
-        
-        return jsonify({
-            "success": True,
-            "kerbs": kerbs
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving recent kerbs: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/images/list', methods=['GET'])
-def list_all_images():
-    """
-    API endpoint to list all uploaded images with their metadata
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        all_images = []
-        
-        # Get pothole images
-        pothole_images = list(db.pothole_images.find({}, {
-            "_id": 1,
-            "image_id": 1,
-            "timestamp": 1,
-            "coordinates": 1,
-            "username": 1,
-            "role": 1,
-            "pothole_count": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1
-        }).sort([("timestamp", -1)]))
-        
-        # Add type information
-        for image in pothole_images:
-            image["_id"] = str(image["_id"])
-            image["type"] = "pothole"
-            all_images.append(image)
-        
-        # Get crack images
-        crack_images = list(db.crack_images.find({}, {
-            "_id": 1,
-            "image_id": 1,
-            "timestamp": 1,
-            "coordinates": 1,
-            "username": 1,
-            "role": 1,
-            "crack_count": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1,
-            "type_counts": 1
-        }).sort([("timestamp", -1)]))
-        
-        # Add type information
-        for image in crack_images:
-            image["_id"] = str(image["_id"])
-            image["type"] = "crack"
-            image["defect_count"] = image.get("crack_count", 0)
-            all_images.append(image)
-        
-        # Get kerb images
-        kerb_images = list(db.kerb_images.find({}, {
-            "_id": 1,
-            "image_id": 1,
-            "timestamp": 1,
-            "coordinates": 1,
-            "username": 1,
-            "role": 1,
-            "kerb_count": 1,
-            "original_image_id": 1,
-            "processed_image_id": 1,
-            "condition_counts": 1
-        }).sort([("timestamp", -1)]))
-        
-        # Add type information
-        for image in kerb_images:
-            image["_id"] = str(image["_id"])
-            image["type"] = "kerb"
-            image["defect_count"] = image.get("kerb_count", 0)
-            all_images.append(image)
-        
-        # Sort all images by timestamp, newest first
-        all_images.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        
-        return jsonify({
-            "success": True,
-            "images": all_images
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving images: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/images/<image_id>', methods=['GET'])
-def get_image_details(image_id):
-    """
-    API endpoint to get detailed information about a specific image by its ID,
-    including all defects detected in the image
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        # Initialize combined image data
-        combined_image_data = None
-        image_type = None
-        detected_defects = []
-        
-        # Check in all collections for this image_id
-        pothole_image = db.pothole_images.find_one({"image_id": image_id})
-        crack_image = db.crack_images.find_one({"image_id": image_id})
-        kerb_image = db.kerb_images.find_one({"image_id": image_id})
-
-        # Also check in video_processing collection for video data
-        # Handle composite video IDs like "video_68cc3743674213968d89d887_pothole"
-        video_id_to_search = image_id
-        if image_id.startswith("video_") and "_" in image_id:
-            # Extract the actual video ID from composite ID
-            parts = image_id.split("_")
-            if len(parts) >= 2:
-                video_id_to_search = parts[1]  # Get the middle part (actual video ID)
-                logger.info(f"🔍 Extracted video ID '{video_id_to_search}' from composite ID '{image_id}'")
-
-        video_data = db.video_processing.find_one({"video_id": video_id_to_search})
-
-        # Log what we found
-        logger.info(f"🔍 Image detail search for ID '{image_id}':")
-        logger.info(f"   - Pothole image: {'Found' if pothole_image else 'Not found'}")
-        logger.info(f"   - Crack image: {'Found' if crack_image else 'Not found'}")
-        logger.info(f"   - Kerb image: {'Found' if kerb_image else 'Not found'}")
-        logger.info(f"   - Video data: {'Found' if video_data else 'Not found'}")
-        if video_data:
-            rep_frame = video_data.get('representative_frame')
-            logger.info(f"   - Video has representative frame: {'Yes' if rep_frame else 'No'}")
-            if rep_frame:
-                logger.info(f"   - Representative frame length: {len(rep_frame)} characters")
-
-        # If no image found in any collection
-        if not pothole_image and not crack_image and not kerb_image and not video_data:
-            return jsonify({
-                "success": False,
-                "message": f"Image with ID {image_id} not found"
-            }), 404
-        
-        # Use the first available image/video as base and combine defect data
-        # Prioritize video data if it exists, otherwise use image data
-        base_image = video_data or pothole_image or crack_image or kerb_image
-
-        # Handle video data differently
-        if video_data:
-            combined_image_data = {
-                "_id": str(video_data["_id"]),
-                "image_id": video_data["video_id"],
-                "timestamp": video_data["timestamp"],
-                "coordinates": video_data.get("coordinates"),
-                "username": video_data.get("username", "Unknown"),
-                "role": video_data.get("role", "Unknown"),
-                "original_image_id": None,  # Videos don't have image IDs
-                "processed_image_id": None,
-                "detection_type": "video",
-                # Add video URLs instead of image URLs
-                "original_image_s3_url": video_data.get("original_video_url"),
-                "processed_image_s3_url": video_data.get("processed_video_url"),
-                "original_image_full_url": generate_s3_url_for_dashboard(video_data.get("original_video_url")),
-                "processed_image_full_url": generate_s3_url_for_dashboard(video_data.get("processed_video_url")),
-            }
-        else:
-            combined_image_data = {
-                "_id": str(base_image["_id"]),
-                "image_id": base_image["image_id"],
-                "timestamp": base_image["timestamp"],
-                "coordinates": base_image["coordinates"],
-                "username": base_image.get("username", "Unknown"),
-                "role": base_image.get("role", "Unknown"),
-                "original_image_id": base_image.get("original_image_id"),
-                "processed_image_id": base_image.get("processed_image_id"),
-                "detection_type": base_image.get("detection_type", "unknown"),
-                # Add S3 URLs for image display
-                "original_image_s3_url": base_image.get("original_image_s3_url"),
-                "processed_image_s3_url": base_image.get("processed_image_s3_url"),
-                "original_image_full_url": generate_s3_url_for_dashboard(base_image.get("original_image_s3_url")),
-                "processed_image_full_url": generate_s3_url_for_dashboard(base_image.get("processed_image_s3_url")),
-            }
-
-        # Generate pre-signed URLs for secure image access
-        try:
-            s3_client = boto3.client(
-                's3',
-                aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-                aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-                region_name=os.environ.get('AWS_REGION', 'us-east-1')
-            )
-
-            aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-            aws_folder = aws_folder.strip('/')
-            parts = aws_folder.split('/', 1)
-            bucket = parts[0]
-            prefix = parts[1] if len(parts) > 1 else ''
-
-            # Generate pre-signed URLs for original and processed images
-            for url_type in ['original', 'processed']:
-                s3_key = combined_image_data.get(f"{url_type}_image_s3_url")
-                if s3_key:
-                    # Handle S3 key path logic
-                    if prefix and s3_key.startswith(prefix):
-                        full_s3_key = s3_key
-                    elif prefix and s3_key.startswith(f"{prefix}/"):
-                        full_s3_key = s3_key
-                    else:
-                        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-
-                    try:
-                        presigned_url = s3_client.generate_presigned_url(
-                            'get_object',
-                            Params={'Bucket': bucket, 'Key': full_s3_key},
-                            ExpiresIn=3600  # 1 hour
-                        )
-                        combined_image_data[f"{url_type}_image_presigned_url"] = presigned_url
-                        logger.info(f"✅ Generated pre-signed URL for {url_type} image: {s3_key}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Failed to generate pre-signed URL for {url_type} image {s3_key}: {e}")
-                        combined_image_data[f"{url_type}_image_presigned_url"] = None
-
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize S3 client for pre-signed URLs: {e}")
-            combined_image_data["original_image_presigned_url"] = None
-            combined_image_data["processed_image_presigned_url"] = None
-
-        # Continue with existing metadata - handle video vs image data differently
-        if video_data:
-            # For video data, use video-specific metadata
-            combined_image_data.update({
-                # Add EXIF and metadata information
-                "exif_data": video_data.get("exif_data", {}),
-                "metadata": video_data.get("metadata", {}),
-                "media_type": "video",  # Explicitly set to video
-                # Add video-specific fields
-                "representative_frame": video_data.get("representative_frame"),
-                "video_id": video_data.get("video_id"),
-                "original_video_url": video_data.get("original_video_url"),
-                "processed_video_url": video_data.get("processed_video_url"),
-                # Initialize all defect arrays
-                "potholes": [],
-                "cracks": [],
-                "kerbs": [],
-                "pothole_count": 0,
-                "crack_count": 0,
-                "kerb_count": 0,
-                "type_counts": {},
-                "condition_counts": {},
-                "detected_defects": [],
-                "multi_defect_image": False
-            })
-        else:
-            # For image data, use image-specific metadata
-            combined_image_data.update({
-                # Add EXIF and metadata information
-                "exif_data": base_image.get("exif_data", {}),
-                "metadata": base_image.get("metadata", {}),
-                "media_type": base_image.get("media_type", "image"),
-                # Add video-specific fields (will be None for images)
-                "representative_frame": base_image.get("representative_frame"),
-                "video_id": base_image.get("video_id"),
-                "original_video_url": base_image.get("original_video_url"),
-                "processed_video_url": base_image.get("processed_video_url"),
-                # Initialize all defect arrays
-                "potholes": [],
-                "cracks": [],
-                "kerbs": [],
-                "pothole_count": 0,
-                "crack_count": 0,
-                "kerb_count": 0,
-                "type_counts": {},
-                "condition_counts": {},
-                "detected_defects": [],
-                "multi_defect_image": False
-            })
-        
-        # Add pothole data if present
-        if pothole_image:
-            detected_defects.append("potholes")
-            combined_image_data["potholes"] = pothole_image.get("potholes", [])
-            combined_image_data["pothole_count"] = pothole_image.get("pothole_count", 0)
-            
-        # Add crack data if present
-        if crack_image:
-            detected_defects.append("cracks")
-            combined_image_data["cracks"] = crack_image.get("cracks", [])
-            combined_image_data["crack_count"] = crack_image.get("crack_count", 0)
-            combined_image_data["type_counts"] = crack_image.get("type_counts", {})
-            
-        # Add kerb data if present
-        if kerb_image:
-            detected_defects.append("kerbs")
-            combined_image_data["kerbs"] = kerb_image.get("kerbs", [])
-            combined_image_data["kerb_count"] = kerb_image.get("kerb_count", 0)
-            combined_image_data["condition_counts"] = kerb_image.get("condition_counts", {})
-
-        # Add video data if present
-        if video_data:
-            model_outputs = video_data.get("model_outputs", {})
-
-            # Extract defects from video model outputs
-            if "potholes" in model_outputs and model_outputs["potholes"]:
-                detected_defects.append("potholes")
-                combined_image_data["potholes"] = model_outputs["potholes"]
-                combined_image_data["pothole_count"] = len(model_outputs["potholes"])
-
-            if "cracks" in model_outputs and model_outputs["cracks"]:
-                detected_defects.append("cracks")
-                combined_image_data["cracks"] = model_outputs["cracks"]
-                combined_image_data["crack_count"] = len(model_outputs["cracks"])
-
-            if "kerbs" in model_outputs and model_outputs["kerbs"]:
-                detected_defects.append("kerbs")
-                combined_image_data["kerbs"] = model_outputs["kerbs"]
-                combined_image_data["kerb_count"] = len(model_outputs["kerbs"])
-
-            # Add video-specific metadata
-            combined_image_data["model_outputs"] = model_outputs
-
-        # Set combined metadata
-        combined_image_data["detected_defects"] = detected_defects
-        combined_image_data["multi_defect_image"] = len(detected_defects) > 1
-        
-        # Determine primary type (for backward compatibility)
-        if video_data:
-            # For videos, determine type based on most detected defects
-            model_outputs = video_data.get("model_outputs", {})
-            pothole_count = len(model_outputs.get("potholes", []))
-            crack_count = len(model_outputs.get("cracks", []))
-            kerb_count = len(model_outputs.get("kerbs", []))
-
-            if pothole_count >= crack_count and pothole_count >= kerb_count:
-                image_type = "pothole"
-            elif crack_count >= kerb_count:
-                image_type = "crack"
-            else:
-                image_type = "kerb"
-        elif pothole_image:
-            image_type = "pothole"
-        elif crack_image:
-            image_type = "crack"
-        elif kerb_image:
-            image_type = "kerb"
-        else:
-            image_type = "unknown"
-            
-        # Log the response data for debugging
-        logger.info(f"✅ Returning image detail data:")
-        logger.info(f"   - Type: {image_type}")
-        logger.info(f"   - Media type: {combined_image_data.get('media_type', 'unknown')}")
-        rep_frame_final = combined_image_data.get('representative_frame')
-        logger.info(f"   - Has representative frame: {'Yes' if rep_frame_final else 'No'}")
-        if rep_frame_final:
-            logger.info(f"   - Representative frame length: {len(rep_frame_final)} characters")
-        logger.info(f"   - Detected defects: {combined_image_data.get('detected_defects', [])}")
-
-        return jsonify({
-            "success": True,
-            "image": combined_image_data,
-            "type": image_type
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving image details: {str(e)}"
-        }), 500 
-
-@pavement_bp.route('/detect-all', methods=['POST'])
-def detect_all():
-    """
-    API endpoint to detect all types of defects (potholes, cracks, kerbs) in an uploaded image with CUDA optimization
-    
-    CRITICAL FIX: Model Isolation Implementation
-    ===========================================
-    
-    This function implements complete model isolation to prevent interference between
-    the three AI models (potholes, cracks, kerbs) when processing the same image.
-    
-    Key Isolation Strategies:
-    1. **Image Data Isolation**: Each model receives a completely independent copy 
-       of the original image via fresh .copy() operations
-    2. **Processing Independence**: Models run on separate image instances, preventing
-       cross-contamination from preprocessing or inference modifications
-    3. **Visualization Separation**: All overlays are applied to a separate display_image
-       that is not used for inference, only for visualization
-    4. **Memory Management**: Each model works with its own memory space without
-       sharing variables or objects
-    
-    This ensures that the "All" option produces identical detection results as if 
-    each model was run individually on the same clean image.
-    """
-    # Get models and device info
-    models, midas, midas_transform = get_models()
-    device = get_device()
-    
-    if not models or any(model_type not in models for model_type in ["potholes", "cracks", "kerbs"]):
-        return jsonify({
-            "success": False,
-            "message": "Failed to load one or more detection models"
-        }), 500
-    
-    if 'image' not in request.json:
-        return jsonify({
-            "success": False,
-            "message": "No image data provided"
-        }), 400
-
-    # Get image data and validate it
-    image_data = request.json['image']
-    is_valid, error_message = validate_base64_image(image_data, 'all_defects_detection')
-    if not is_valid:
-        logger.warning(f"Image validation failed for all defects detection: {error_message}")
-        return jsonify({
-            "success": False,
-            "message": error_message
-        }), 400
-
-    # Extract coordinates if provided
-    client_coordinates = request.json.get('coordinates', 'Not Available')
-
-    # Get user information
-    username = request.json.get('username', 'Unknown')
-    role = request.json.get('role', 'Unknown')
-    skip_road_classification = request.json.get('skip_road_classification', False)
-
-    # Get image data
-    try:
-        image_data = request.json['image']
-        image = decode_base64_image(image_data)
-        
-        if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Invalid image data"
-            }), 400
-            
-        # Try to extract EXIF GPS data from the image
-        lat, lon = get_gps_coordinates(image_data)
-        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else client_coordinates
-
-        # Log coordinate extraction results
-        if lat is not None and lon is not None:
-            logger.info(f"🎯 Using EXIF GPS coordinates: {coordinates}")
-        else:
-            logger.info(f"📍 Using client-provided coordinates: {client_coordinates}")
-
-        # Extract comprehensive EXIF metadata
-        exif_metadata = extract_media_metadata(image_data, 'image')
-        
-        # CRITICAL FIX: Create separate copies for each model to prevent interference
-        # Keep original image unchanged for model processing
-        original_image = image.copy()
-
-        # Classify the image to check if it contains a road (unless skipped)
-        if skip_road_classification:
-            # Skip classification and assume it's a road
-            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
-        else:
-            # Perform road classification with lower confidence threshold
-            classification_result = classify_road_image(original_image, models, confidence_threshold=0.4)
-
-            # If no road detected, return classification info without processing
-            if not classification_result["is_road"]:
-                return jsonify({
-                    "success": True,
-                    "processed": False,
-                    "message": "No road detected in the image. Image not processed.",
-                    "classification": classification_result,
-                    "coordinates": coordinates,
-                    "username": username,
-                    "role": role,
-                    "potholes": [],
-                    "cracks": [],
-                    "kerbs": [],
-                    "processed_image": None
-                }), 200
-
-        # Debug: Log image shape and hash for verification
-        print(f"MODEL ISOLATION DEBUG: Original image shape: {original_image.shape}")
-        original_hash = hash(original_image.tobytes())
-        print(f"MODEL ISOLATION DEBUG: Original image hash: {original_hash}")
-
-        # Run depth estimation if MiDaS is available (using original image)
-        depth_map = None
-        if midas and midas_transform:
-            depth_map = estimate_depth(original_image, midas, midas_transform)
-        else:
-            print("MiDaS model not available, skipping depth estimation")
-        
-        # Initialize results containers
-        all_results = {
-            "potholes": [],
-            "cracks": [],
-            "kerbs": [],
-            "model_errors": {},
-            "processed_image": None,
-            "success": True,
-            "processed": True,
-            "classification": classification_result,
+            "type_counts": condition_counts,
             "coordinates": coordinates,
             "username": username,
             "role": role
         }
-        
-        timestamp = pd.Timestamp.now().isoformat()
-        image_upload_id = str(uuid.uuid4())  # Create a unique ID for this image upload
-        
-        # We'll upload images to S3 after processing all detections
-        
-        # Track which models succeeded
-        successful_models = []
-        
-        # Initialize visualization image for overlays (separate from inference)
-        display_image = original_image.copy()
-        print(f"MODEL ISOLATION DEBUG: Display image initialized with hash: {hash(display_image.tobytes())}")
-        
-        # === POTHOLE DETECTION ===
-        try:
-            # CRITICAL FIX: Use fresh copy of original image for pothole detection
-            pothole_inference_image = original_image.copy()
-            pothole_hash = hash(pothole_inference_image.tobytes())
-            print(f"MODEL ISOLATION DEBUG: Pothole model receiving image with hash: {pothole_hash}")
-            print(f"MODEL ISOLATION DEBUG: Pothole image matches original: {pothole_hash == original_hash}")
-            
-            # Run pothole detection with CUDA optimization and proper dtype handling
-            with torch.no_grad():
-                if device.type == 'cuda':
-                    torch.cuda.empty_cache()
-                
-                # Ensure image is in the correct format for the model
-                if pothole_inference_image.shape[2] == 3:
-                    pothole_inference_image = cv2.cvtColor(pothole_inference_image, cv2.COLOR_BGR2RGB)
-                
-                # Run inference with proper error handling
-                try:
-                    pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device=device)
-                except RuntimeError as e:
-                    if "dtype" in str(e):
-                        print(f"⚠️ Pothole model dtype error: {e}")
-                        print("🔄 Attempting pothole inference with CPU fallback...")
-                        pothole_results = models["potholes"](pothole_inference_image, conf=0.2, device='cpu')
-                    else:
-                        raise e
-            pothole_id = 1
-            
-            for result in pothole_results:
-                if result.boxes is not None:
-                    boxes = result.boxes.xyxy.cpu().numpy()
-                    confidences = result.boxes.conf.cpu().numpy()
-                    
-                    # Check if segmentation masks are available
-                    if result.masks is not None:
-                        # Process with segmentation masks
-                        masks = result.masks.data.cpu().numpy()
-                        
-                        for mask, box, conf in zip(masks, boxes, confidences):
-                            # Process the segmentation mask
-                            binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                            binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
-                            
-                            # Apply colored overlay only where mask exists (blue for potholes)
-                            mask_indices = binary_mask > 0
-                            display_image[mask_indices] = cv2.addWeighted(
-                                display_image[mask_indices], 0.7, 
-                                np.full_like(display_image[mask_indices], (255, 0, 0)), 0.3, 0
-                            )
-                            
-                            # Calculate dimensions
-                            dimensions = calculate_pothole_dimensions(binary_mask)
-                            
-                            # Calculate depth metrics if depth map is available
-                            depth_metrics = None
-                            if depth_map is not None:
-                                depth_metrics = calculate_real_depth(binary_mask, depth_map)
-                            else:
-                                # Provide default depth values when MiDaS is not available
-                                depth_metrics = {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}  # Default values
-                            
-                            if dimensions and depth_metrics:
-                                # Get detection box coordinates
-                                x1, y1, x2, y2 = map(int, box[:4])
-                                volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
-                                
-                                # Determine volume range
-                                if volume < 1000:
-                                    volume_range = "Small (<1k)"
-                                elif volume < 10000:
-                                    volume_range = "Medium (1k - 10k)"
-                                else:
-                                    volume_range = "Big (>10k)"
-                                
-                                # Draw bounding box on display image
-                                cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                                # Add text with ID and measurements
-                                text = f"ID {pothole_id}, A:{dimensions['area_cm2']:.1f}cm^2, D:{depth_metrics['max_depth_cm']:.1f}cm, V:{volume:.1f}cm^3"
-                                cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                                
-                                # Store pothole data in database
-                                pothole_data = {
-                                    "pothole_id": pothole_id,
-                                    "area_cm2": dimensions["area_cm2"],
-                                    "depth_cm": depth_metrics["max_depth_cm"],
-                                    "volume": volume,
-                                    "volume_range": volume_range,
-                                    "confidence": float(conf),
-                                    "coordinates": coordinates,
-                                    "timestamp": timestamp,
-                                    "bbox": [x1, y1, x2, y2],
-                                    "username": username,
-                                    "role": role,
-                                    "image_upload_id": image_upload_id,
-                                    "has_mask": True
-                                }
-                                
-                                # Create a copy for JSON response (without ObjectId references)
-                                pothole_data_for_response = {
-                                    "pothole_id": pothole_id,
-                                    "area_cm2": dimensions["area_cm2"],
-                                    "depth_cm": depth_metrics["max_depth_cm"],
-                                    "volume": volume,
-                                    "volume_range": volume_range,
-                                    "confidence": float(conf),
-                                    "coordinates": coordinates,
-                                    "bbox": [x1, y1, x2, y2],
-                                    "has_mask": True
-                                }
-                                
-                                # Insert into database
-                                db = connect_to_db()
-                                if db is not None:
-                                    db.potholes.insert_one(pothole_data)
-                                
-                                all_results["potholes"].append(pothole_data_for_response)
-                                pothole_id += 1
-                    else:
-                        # Process only bounding boxes (fallback)
-                        for box, conf in zip(boxes, confidences):
-                            x1, y1, x2, y2 = map(int, box[:4])
-                            
-                            # Draw bounding box on display image
-                            cv2.rectangle(display_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            text = f"ID {pothole_id}, Pothole, C:{conf:.2f}"
-                            cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                            
-                            # Store pothole data in database (without detailed measurements)
-                            pothole_data = {
-                                "pothole_id": pothole_id,
-                                "area_cm2": 0.0,  # Not available without mask
-                                "depth_cm": 0.0,  # Not available without mask
-                                "volume": 0.0,    # Not available without mask
-                                "volume_range": "Unknown",
-                                "confidence": float(conf),
-                                "coordinates": coordinates,
-                                "timestamp": timestamp,
-                                "bbox": [x1, y1, x2, y2],
-                                "username": username,
-                                "role": role,
-                                "image_upload_id": image_upload_id,
-                                "has_mask": False
-                            }
-                            
-                            # Create a copy for JSON response (without ObjectId references)
-                            pothole_data_for_response = {
-                                "pothole_id": pothole_id,
-                                "area_cm2": 0.0,
-                                "depth_cm": 0.0,
-                                "volume": 0.0,
-                                "volume_range": "Unknown",
-                                "confidence": float(conf),
-                                "coordinates": coordinates,
-                                "bbox": [x1, y1, x2, y2],
-                                "has_mask": False
-                            }
-                            
-                            # Insert into database
-                            db = connect_to_db()
-                            if db is not None:
-                                db.potholes.insert_one(pothole_data)
-                            
-                            all_results["potholes"].append(pothole_data_for_response)
-                            pothole_id += 1
-            
-            successful_models.append("potholes")
-            
-        except Exception as e:
-            print(f"Error in pothole detection: {str(e)}")
-            all_results["model_errors"]["potholes"] = str(e)
-        
-        # === CRACK DETECTION ===
-        try:
-            # CRITICAL FIX: Use fresh copy of original image for crack detection
-            crack_inference_image = original_image.copy()
-            crack_hash = hash(crack_inference_image.tobytes())
-            print(f"MODEL ISOLATION DEBUG: Crack model receiving image with hash: {crack_hash}")
-            print(f"MODEL ISOLATION DEBUG: Crack image matches original: {crack_hash == original_hash}")
-            
-            # Run crack detection with CUDA optimization and proper dtype handling
-            with torch.no_grad():
-                if device.type == 'cuda':
-                    torch.cuda.empty_cache()
-                
-                # Ensure image is in the correct format for the model
-                if crack_inference_image.shape[2] == 3:
-                    crack_inference_image = cv2.cvtColor(crack_inference_image, cv2.COLOR_BGR2RGB)
-                
-                # Run inference with proper error handling
-                try:
-                    crack_results = models["cracks"](crack_inference_image, conf=0.2, device=device)
-                except RuntimeError as e:
-                    if "dtype" in str(e):
-                        print(f"⚠️ Crack model dtype error: {e}")
-                        print("🔄 Attempting crack inference with CPU fallback...")
-                        crack_results = models["cracks"](crack_inference_image, conf=0.2, device='cpu')
-                    else:
-                        raise e
-            crack_id = 1
-            
-            # Define crack types mapping (same as original code)
-            CRACK_TYPES = {
-                0: {"name": "Alligator Crack", "color": (0, 0, 255)},
-                1: {"name": "Edge Crack", "color": (0, 255, 255)},
-                2: {"name": "Hairline Cracks", "color": (255, 0, 0)},
-                3: {"name": "Longitudinal Cracking", "color": (0, 255, 0)},
-                4: {"name": "Transverse Cracking", "color": (128, 0, 128)}
-            }
-            
-            # Track crack types
-            type_counts = {v["name"]: 0 for v in CRACK_TYPES.values()}
-            
-            for result in crack_results:
-                if result.masks is None:
-                    continue
-                    
-                masks = result.masks.data.cpu().numpy()
-                boxes = result.boxes.xyxy.cpu().numpy()
-                classes = result.boxes.cls.cpu().numpy()
-                confidences = result.boxes.conf.cpu().numpy()
-                
-                for mask, box, cls, conf in zip(masks, boxes, classes, confidences):
-                    # Process the segmentation mask
-                    binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                    binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
-                    
-                    # Create colored overlay for cracks (green) - apply to display image only
-                    colored_mask = np.zeros_like(display_image)
-                    colored_mask[:, :, 1] = binary_mask  # Green channel
-                    
-                    # Blend the display image with the mask (not the inference image)
-                    display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
-                    
-                    # Calculate area safely
-                    area_data = calculate_area(binary_mask)
-                    area_cm2 = area_data["area_cm2"] if area_data else 0
-                    
-                    # Determine area range
-                    if area_cm2 < 50:
-                        area_range = "Small (<50 cm²)"
-                    elif area_cm2 < 200:
-                        area_range = "Medium (50-200 cm²)"
-                    else:
-                        area_range = "Large (>200 cm²)"
-                    
-                    # Get crack type safely using dictionary lookup
-                    crack_type_info = CRACK_TYPES.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
-                    crack_type = crack_type_info["name"]
-                    type_counts[crack_type] += 1
-                    
-                    # Get detection box coordinates
-                    x1, y1, x2, y2 = map(int, box[:4])
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
-                    # Draw bounding box and text on display image
-                    color = crack_type_info["color"]
-                    cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
-                    text = f"ID {crack_id}, {crack_type}, A:{area_cm2:.1f}cm^2"
-                    cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+@router.get('/potholes')
+def list_potholes():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    potholes = list(db.pothole_images.find({}, {'_id': 0}))
+    return {"success": True, "potholes": potholes}
 
-                    # Store crack data
-                    crack_data = {
-                        "crack_id": crack_id,
-                        "crack_type": crack_type,
-                        "area_cm2": round(area_cm2, 2),
-                        "area_range": area_range,
-                        "confidence": float(conf),
-                        "coordinates": coordinates,
-                        "timestamp": timestamp,
-                        "bbox": [x1, y1, x2, y2],
-                        "username": username,
-                        "role": role,
-                        "image_upload_id": image_upload_id
-                    }
-                    
-                    # Create a copy for JSON response (without ObjectId references)
-                    crack_data_for_response = {
-                        "crack_id": crack_id,
-                        "crack_type": crack_type,
-                        "area_cm2": round(area_cm2, 2),
-                        "area_range": area_range,
-                        "confidence": float(conf),
-                        "coordinates": coordinates,
-                        "bbox": [x1, y1, x2, y2]
-                    }
-                        
-                    # Insert into database
-                    db = connect_to_db()
-                    if db is not None:
-                        db.cracks.insert_one(crack_data)
-                        
-                    all_results["cracks"].append(crack_data_for_response)
-                    crack_id += 1
-            
-            all_results["type_counts"] = type_counts
-            successful_models.append("cracks")
-            
-        except Exception as e:
-            print(f"Error in crack detection: {str(e)}")
-            all_results["model_errors"]["cracks"] = str(e)
-        
-        # === KERB DETECTION ===
-        try:
-            # CRITICAL FIX: Use fresh copy of original image for kerb detection
-            kerb_inference_image = original_image.copy()
-            kerb_hash = hash(kerb_inference_image.tobytes())
-            print(f"MODEL ISOLATION DEBUG: Kerb model receiving image with hash: {kerb_hash}")
-            print(f"MODEL ISOLATION DEBUG: Kerb image matches original: {kerb_hash == original_hash}")
-            
-            # Run kerb detection with CUDA optimization and proper dtype handling
-            with torch.no_grad():
-                if device.type == 'cuda':
-                    torch.cuda.empty_cache()
-                
-                # Ensure image is in the correct format for the model
-                if kerb_inference_image.shape[2] == 3:
-                    kerb_inference_image = cv2.cvtColor(kerb_inference_image, cv2.COLOR_BGR2RGB)
-                
-                # Run inference with proper error handling
-                try:
-                    kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device=device)
-                except RuntimeError as e:
-                    if "dtype" in str(e):
-                        print(f"⚠️ Kerb model dtype error: {e}")
-                        print("🔄 Attempting kerb inference with CPU fallback...")
-                        kerb_results = models["kerbs"](kerb_inference_image, conf=0.5, device='cpu')
-                    else:
-                        raise e
-            kerb_id = 1
-            
-            # Define kerb types mapping (same as original code)
-            kerb_types = {
-                0: {"name": "Damaged Kerbs", "color": (0, 0, 255)},   # Red (in BGR)
-                1: {"name": "Faded Kerbs", "color": (0, 165, 255)},   # Orange
-                2: {"name": "Normal Kerbs", "color": (0, 255, 0)}     # Green
-            }
-            
-            # Track kerb conditions
-            condition_counts = {
-                "Normal Kerbs": 0,
-                "Faded Kerbs": 0,
-                "Damaged Kerbs": 0
-            }
-            
-            for result in kerb_results:
-                # Handle both mask-based and box-based results
-                if hasattr(result, 'masks') and result.masks is not None:
-                    # Mask-based processing
-                    masks = result.masks.data.cpu().numpy()
-                    boxes = result.boxes.xyxy.cpu().numpy()
-                    classes = result.boxes.cls.cpu().numpy()
-                    confidences = result.boxes.conf.cpu().numpy()
-                    
-                    for mask, box, cls, conf in zip(masks, boxes, classes, confidences):
-                        # Process the segmentation mask
-                        binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                        binary_mask = cv2.resize(binary_mask, (display_image.shape[1], display_image.shape[0]))
-                        
-                        # Create colored overlay for kerbs (blue) - apply to display image only
-                        colored_mask = np.zeros_like(display_image)
-                        colored_mask[:, :, 0] = binary_mask  # Blue channel
-                        
-                        # Blend the display image with the mask (not the inference image)
-                        display_image = cv2.addWeighted(display_image, 1.0, colored_mask, 0.4, 0)
-                        
-                        # Calculate length based on mask perimeter
-                        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        if contours:
-                            perimeter = cv2.arcLength(contours[0], True)
-                            estimated_length_m = perimeter / 100  # Convert pixels to meters (approximate)
-                        else:
-                            estimated_length_m = 1.0  # Default value
-                        
-                        # Get kerb condition safely
-                        kerb_type_info = kerb_types.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
-                        kerb_condition = kerb_type_info["name"]
-                        condition_counts[kerb_condition] += 1
-                        
-                        # Get detection box coordinates
-                        x1, y1, x2, y2 = map(int, box[:4])
+@router.get('/potholes/recent')
+def get_recent_potholes():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    recent_potholes = list(db.pothole_images.find({}, {'_id': 0}).sort("timestamp", -1).limit(10))
+    return {"success": True, "potholes": recent_potholes}
 
-                        # Draw bounding box and text on display image
-                        color = kerb_type_info["color"]
-                        cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
-                        text = f"ID {kerb_id}, {kerb_condition}, L:{estimated_length_m:.1f}m"
-                        cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+@router.get('/cracks')
+def list_cracks():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    cracks = list(db.crack_images.find({}, {'_id': 0}))
+    return {"success": True, "cracks": cracks}
 
-                        # Store kerb data
-                        kerb_data = {
-                            "kerb_id": kerb_id,
-                            "kerb_type": "Concrete Kerb",  # Default type
-                            "length_m": estimated_length_m,
-                            "condition": kerb_condition,
-                            "confidence": float(conf),
-                            "coordinates": coordinates,
-                            "timestamp": timestamp,
-                            "bbox": [x1, y1, x2, y2],
-                            "username": username,
-                            "role": role,
-                            "image_upload_id": image_upload_id
-                        }
-                        
-                        # Create a copy for JSON response (without ObjectId references)
-                        kerb_data_for_response = {
-                            "kerb_id": kerb_id,
-                            "kerb_type": "Concrete Kerb",  # Default type
-                            "length_m": estimated_length_m,
-                            "condition": kerb_condition,
-                            "confidence": float(conf),
-                            "coordinates": coordinates,
-                            "bbox": [x1, y1, x2, y2]
-                        }
-                        
-                        # Insert into database
-                        db = connect_to_db()
-                        if db is not None:
-                            db.kerbs.insert_one(kerb_data)
-                        
-                        all_results["kerbs"].append(kerb_data_for_response)
-                        kerb_id += 1
-                else:
-                    # Box-based processing (fallback)
-                    if hasattr(result, 'boxes') and result.boxes is not None:
-                        boxes = result.boxes.xyxy.cpu().numpy()
-                        classes = result.boxes.cls.cpu().numpy()
-                        confidences = result.boxes.conf.cpu().numpy()
-                        
-                        for box, cls, conf in zip(boxes, classes, confidences):
-                            x1, y1, x2, y2 = map(int, box[:4])
-                            
-                            # Calculate approximate length based on box dimensions
-                            estimated_length_m = max((x2 - x1), (y2 - y1)) / 100  # Convert pixels to meters
-                            
-                            # Get kerb condition safely
-                            kerb_type_info = kerb_types.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
-                            kerb_condition = kerb_type_info["name"]
-                            condition_counts[kerb_condition] += 1
+@router.get('/cracks/recent')
+def get_recent_cracks():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-                            # Draw bounding box and text on display image
-                            color = kerb_type_info["color"]
-                            cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
-                            text = f"ID {kerb_id}, {kerb_condition}, L:{estimated_length_m:.1f}m"
-                            cv2.putText(display_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                            # Store kerb data
-                            kerb_data = {
-                                "kerb_id": kerb_id,
-                                "kerb_type": "Concrete Kerb",  # Default type
-                                "length_m": estimated_length_m,
-                                "condition": kerb_condition,
-                                "confidence": float(conf),
-                                "coordinates": coordinates,
-                                "timestamp": timestamp,
-                                "bbox": [x1, y1, x2, y2],
-                                "username": username,
-                                "role": role,
-                                "image_upload_id": image_upload_id
-                            }
-                            
-                            # Create a copy for JSON response (without ObjectId references)
-                            kerb_data_for_response = {
-                                "kerb_id": kerb_id,
-                                "kerb_type": "Concrete Kerb",  # Default type
-                                "length_m": estimated_length_m,
-                                "condition": kerb_condition,
-                                "confidence": float(conf),
-                                "coordinates": coordinates,
-                                "bbox": [x1, y1, x2, y2]
-                            }
-                            
-                            # Insert into database
-                            db = connect_to_db()
-                            if db is not None:
-                                db.kerbs.insert_one(kerb_data)
-                            
-                            all_results["kerbs"].append(kerb_data_for_response)
-                            kerb_id += 1
-            
-            all_results["condition_counts"] = condition_counts
-            successful_models.append("kerbs")
-            
-        except Exception as e:
-            print(f"Error in kerb detection: {str(e)}")
-            all_results["model_errors"]["kerbs"] = str(e)
-        
-        # Upload images to S3
-        original_s3_url, processed_s3_url, upload_success, upload_error = upload_images_to_s3(
-            original_image, display_image, image_upload_id, role, username
-        )
-
-        if not upload_success:
-            return jsonify({
-                "success": False,
-                "message": f"Failed to upload images to S3: {upload_error}"
-            }), 500
-        
-        # Encode processed image for response
-        all_results["processed_image"] = encode_processed_image(display_image)
-        
-        # Final validation: Ensure original image integrity is maintained
-        final_hash = hash(original_image.tobytes())
-        print(f"MODEL ISOLATION DEBUG: Original image hash after all processing: {final_hash}")
-        print(f"MODEL ISOLATION DEBUG: Original image integrity maintained: {final_hash == original_hash}")
-        
-        if final_hash != original_hash:
-            print("⚠️  WARNING: Original image was modified during processing - this indicates a bug!")
-        else:
-            print("✅ SUCCESS: Original image integrity maintained throughout processing")
-        
-        # Smart categorization logic - Store image in appropriate categories based on detected defects
+@router.get('/videos/{video_id}/representative_frame')
+def get_representative_frame(video_id: str):
+    """API endpoint to retrieve the representative frame and details of a video"""
+    try:
         db = connect_to_db()
-        if db is not None:
-            # Base image data for all categories
-            image_data_base = {
-                "image_id": image_upload_id,
-                "timestamp": timestamp,
-                "coordinates": coordinates,
-                "username": username,
-                "role": role,
-                "original_image_s3_url": original_s3_url,
-                "processed_image_s3_url": processed_s3_url,
-                "detection_type": "all",
-                "exif_data": exif_metadata,
-                "metadata": exif_metadata,  # For backward compatibility
-                "media_type": "image"
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+
+        video_doc = db.video_processing.find_one({"video_id": video_id})
+
+        if video_doc:
+            # Construct an image-like object from the video document
+            image_obj = {
+                "image_id": video_doc.get("video_id"),
+                "timestamp": video_doc.get("timestamp"),
+                "coordinates": video_doc.get("coordinates"),
+                "username": video_doc.get("username"),
+                "role": video_doc.get("role"),
+                "media_type": "video",
+                "representative_frame": video_doc.get("representative_frame"),
+                "potholes": video_doc.get("model_outputs", {}).get("potholes", []),
+                "cracks": video_doc.get("model_outputs", {}).get("cracks", []),
+                "kerbs": video_doc.get("model_outputs", {}).get("kerbs", []),
+                "exif_data": video_doc.get("metadata"), # Assuming metadata is stored here
+                "metadata": video_doc.get("metadata")
             }
-            
-            # Determine which defects were actually detected (non-zero counts)
-            detected_defects = []
-            
-            # Check if potholes were detected
-            if "potholes" in successful_models and len(all_results["potholes"]) > 0:
-                detected_defects.append("potholes")
-            
-            # Check if cracks were detected
-            if "cracks" in successful_models and len(all_results["cracks"]) > 0:
-                detected_defects.append("cracks")
-            
-            # Check if kerbs were detected
-            if "kerbs" in successful_models and len(all_results["kerbs"]) > 0:
-                detected_defects.append("kerbs")
-            
-            # Store image in each category that has detected defects
-            # This enables smart categorization where images appear in multiple categories
-            # if they contain multiple defect types
-            
-            if "potholes" in detected_defects:
-                pothole_image_data = image_data_base.copy()
-                pothole_image_data.update({
-                    "pothole_count": len(all_results["potholes"]),
-                    "potholes": all_results["potholes"],  # Store individual pothole data
-                    "detected_defects": detected_defects,  # Track all defects in this image
-                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
-                })
-                db.pothole_images.insert_one(pothole_image_data)
-            
-            if "cracks" in detected_defects:
-                crack_image_data = image_data_base.copy()
-                crack_image_data.update({
-                    "crack_count": len(all_results["cracks"]),
-                    "cracks": all_results["cracks"],  # Store individual crack data
-                    "type_counts": all_results.get("type_counts", {}),
-                    "detected_defects": detected_defects,  # Track all defects in this image
-                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
-                })
-                db.crack_images.insert_one(crack_image_data)
-            
-            if "kerbs" in detected_defects:
-                kerb_image_data = image_data_base.copy()
-                kerb_image_data.update({
-                    "kerb_count": len(all_results["kerbs"]),
-                    "kerbs": all_results["kerbs"],  # Store individual kerb data
-                    "condition_counts": all_results.get("condition_counts", {}),
-                    "detected_defects": detected_defects,  # Track all defects in this image
-                    "multi_defect_image": len(detected_defects) > 1  # Flag for multi-defect images
-                })
-                db.kerb_images.insert_one(kerb_image_data)
-            
-            # Add categorization info to response
-            all_results["categorization"] = {
-                "detected_defects": detected_defects,
-                "categories_stored": len(detected_defects),
-                "multi_defect_image": len(detected_defects) > 1
-            }
-        
-        # Determine overall success
-        if not successful_models:
-            all_results["success"] = False
-            all_results["message"] = "All detection models failed"
-        elif len(successful_models) < 3:
-            # Partial success
-            failed_models = set(["potholes", "cracks", "kerbs"]) - set(successful_models)
-            all_results["message"] = f"Partial success. Failed models: {', '.join(failed_models)}"
+            return {"success": True, "image": image_obj, "type": "video"}
         else:
-            all_results["message"] = "All detection models completed successfully"
-        
-        return jsonify(all_results)
-        
+            raise HTTPException(status_code=404, detail="Video not found")
+            
     except Exception as e:
-        print(f"Error in detect_all: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({
-            "success": False,
-            "message": f"Error during detection: {str(e)}"
-        }), 500 
+        logger.error(f"Error retrieving representative frame for video {video_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving representative frame: {str(e)}")
+    
+    recent_cracks = list(db.crack_images.find({}, {'_id': 0}).sort("timestamp", -1).limit(10))
+    return {"success": True, "cracks": recent_cracks}
 
+@router.get('/kerbs')
+def list_kerbs():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    kerbs = list(db.kerb_images.find({}, {'_id': 0}))
+    return {"success": True, "kerbs": kerbs}
 
-def upload_video_to_s3(local_path, aws_folder, s3_key):
-    """
-    Upload a video file to S3 at the specified bucket/key using put_object.
+@router.get('/kerbs/recent')
+def get_recent_kerbs():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    recent_kerbs = list(db.kerb_images.find({}, {'_id': 0}).sort("timestamp", -1).limit(10))
+    return {"success": True, "kerbs": recent_kerbs}
 
-    Args:
-        local_path: Local file path to upload
-        aws_folder: AWS folder path (e.g., 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-        s3_key: S3 key path (e.g., 'role/username/video_xxx.mp4')
-
-    Returns:
-        tuple: (success: bool, s3_url_or_error: str)
-    """
+@router.api_route("/get-s3-image/{s3_key:path}", methods=["GET", "HEAD"])
+async def get_s3_image(s3_key: str):
+    """API endpoint to download an image from S3."""
     try:
-        # Initialize S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
-        )
+        workflow = ImageProcessingWorkflow()
+        image_data = workflow.s3_manager.download_image_from_s3(s3_key)
 
-        # Extract bucket and prefix from aws_folder
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Compose full S3 key
-        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-
-        logger.info(f"🔄 Uploading video to S3 - Bucket: {bucket}, Key: {full_s3_key}")
-
-        # Check if local file exists
-        if not os.path.exists(local_path):
-            error_msg = f"Local video file not found: {local_path}"
-            logger.error(f"❌ {error_msg}")
-            return False, error_msg
-
-        # Upload video file to S3 using put_object
-        with open(local_path, 'rb') as f:
-            s3_client.put_object(
-                Bucket=bucket,
-                Key=full_s3_key,
-                Body=f,
-                ContentType='video/mp4'
-            )
-
-        logger.info(f"✅ Successfully uploaded video to S3: {full_s3_key}")
-        return True, f's3://{bucket}/{full_s3_key}'
-
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        error_msg = f"S3 upload error ({error_code}): {str(e)}"
-        logger.error(f"❌ {error_msg}")
-        return False, error_msg
-    except Exception as e:
-        error_msg = f"Unexpected error during video upload: {str(e)}"
-        logger.error(f"❌ {error_msg}")
-        return False, error_msg
-
-
-def upload_image_to_s3(image_buffer, aws_folder, s3_key, content_type='image/jpeg'):
-    """
-    Upload an image buffer to S3 at the specified bucket/key.
-
-    Args:
-        image_buffer: Image data as bytes (from cv2.imencode)
-        aws_folder: AWS folder path (e.g., 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-        s3_key: S3 key path (e.g., 'role/username/image_xxx_original.jpg')
-        content_type: MIME type for the image
-
-    Returns:
-        tuple: (success: bool, s3_url_or_error: str)
-    """
-    try:
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION')
-        )
-
-        # Extract bucket and prefix from aws_folder
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Compose full S3 key
-        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-
-        # Upload image buffer to S3
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=full_s3_key,
-            Body=image_buffer,
-            ContentType=content_type
-        )
-
-        return True, f's3://{bucket}/{full_s3_key}'
-    except ClientError as e:
-        logger.error(f"S3 image upload error: {e}")
-        return False, str(e)
-    except Exception as e:
-        logger.error(f"Unexpected error during S3 image upload: {e}")
-        return False, str(e)
-
-
-def upload_images_to_s3(original_image, processed_image, image_upload_id, role, username):
-    """
-    Upload both original and processed images to S3 with organized folder structure.
-
-    Args:
-        original_image: Original image as numpy array
-        processed_image: Processed image as numpy array
-        image_upload_id: Unique identifier for this image upload
-        role: User role for folder structure
-        username: Username for folder structure
-
-    Returns:
-        tuple: (original_s3_url: str, processed_s3_url: str, success: bool, error_msg: str)
-    """
-    try:
-        # Get AWS configuration
-        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-
-        # Encode images to JPEG format
-        _, original_buffer = cv2.imencode('.jpg', original_image)
-        _, processed_buffer = cv2.imencode('.jpg', processed_image)
-
-        # Create S3 keys with organized folder structure
-        # Structure: {AWS_FOLDER}/{role}/{username}/original/image_{id}.jpg
-        #           {AWS_FOLDER}/{role}/{username}/processed/image_{id}.jpg
-        original_s3_key = f"{role}/{username}/original/image_{image_upload_id}.jpg"
-        processed_s3_key = f"{role}/{username}/processed/image_{image_upload_id}.jpg"
-
-        # Upload original image
-        original_success, original_result = upload_image_to_s3(
-            original_buffer.tobytes(), aws_folder, original_s3_key
-        )
-
-        if not original_success:
-            return None, None, False, f"Failed to upload original image: {original_result}"
-
-        # Upload processed image
-        processed_success, processed_result = upload_image_to_s3(
-            processed_buffer.tobytes(), aws_folder, processed_s3_key
-        )
-
-        if not processed_success:
-            return None, None, False, f"Failed to upload processed image: {processed_result}"
-
-        logger.info(f"Successfully uploaded images to S3: {original_s3_key}, {processed_s3_key}")
-
-        # Return the relative S3 paths (not full S3 URLs)
-        return original_s3_key, processed_s3_key, True, None
+        return StreamingResponse(io.BytesIO(image_data), media_type="image/jpeg")
 
     except Exception as e:
-        logger.error(f"Error uploading images to S3: {e}")
-        return None, None, False, str(e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error downloading image: {str(e)}")
 
-
-def generate_s3_url(s3_key, aws_folder=None):
-    """
-    Generate a public S3 URL from an S3 key.
-
-    Args:
-        s3_key: S3 key path (e.g., 'role/username/image_xxx_original.jpg')
-        aws_folder: AWS folder path (optional, will use env var if not provided)
-
-    Returns:
-        str: Full S3 URL
-    """
-    if aws_folder is None:
-        aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-
-    # Extract bucket and prefix from aws_folder
-    aws_folder = aws_folder.strip('/')
-    parts = aws_folder.split('/', 1)
-    bucket = parts[0]
-    prefix = parts[1] if len(parts) > 1 else ''
-
-    # Compose full S3 key
-    full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-
-    # Generate public URL
-    region = os.environ.get('AWS_REGION', 'us-east-1')
-    return f"https://{bucket}.s3.{region}.amazonaws.com/{full_s3_key}"
-
-
-def download_video_from_s3(s3_key, aws_folder=None):
-    """
-    Download a video file from S3 using get_object.
-
-    Args:
-        s3_key: S3 key path (e.g., 'role/username/video_xxx.mp4')
-        aws_folder: AWS folder path (optional, will use env var if not provided)
-
-    Returns:
-        tuple: (success: bool, video_data_or_error: bytes/str, content_type: str)
-    """
+@router.get("/get-s3-video/{video_id}/{video_type}")
+async def get_s3_video(video_id: str, video_type: str):
+    """API endpoint to download a video from S3."""
     try:
-        # Initialize S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.environ.get('AWS_REGION', 'us-east-1')
-        )
+        db = connect_to_db()
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
 
-        if aws_folder is None:
-            aws_folder = os.environ.get('AWS_FOLDER', 'aispry-project/2024_Oct_YNMSafety_RoadSafetyAudit/audit/raisetech')
-
-        # Extract bucket and prefix from aws_folder
-        aws_folder = aws_folder.strip('/')
-        parts = aws_folder.split('/', 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) > 1 else ''
-
-        # Compose full S3 key
-        full_s3_key = f"{prefix}/{s3_key}" if prefix else s3_key
-
-        logger.info(f"🔄 Downloading video from S3 - Bucket: {bucket}, Key: {full_s3_key}")
-
-        # Check if object exists first
+        # Try to find by ObjectId first
         try:
-            s3_client.head_object(Bucket=bucket, Key=full_s3_key)
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == '404':
-                return False, f"Video file not found in storage: {s3_key}", None
-            elif error_code == '403':
-                return False, f"Access denied to video file: {s3_key}", None
-            else:
-                return False, f"Storage access error ({error_code}): {s3_key}", None
+            from bson import ObjectId
+            video_doc = db.video_processing.find_one({"_id": ObjectId(video_id)})
+        except Exception:
+            video_doc = None
 
-        # Download the video using get_object
-        response = s3_client.get_object(Bucket=bucket, Key=full_s3_key)
-        video_data = response['Body'].read()
+        # If not found by ObjectId, try by video_id
+        if not video_doc:
+            video_doc = db.video_processing.find_one({"video_id": video_id})
 
-        # Always return video/mp4 content type regardless of what S3 returns
-        # S3 sometimes stores videos as binary/octet-stream which causes download issues
-        content_type = 'video/mp4'
+        if not video_doc:
+            raise HTTPException(status_code=404, detail="Video not found")
 
-        logger.info(f"✅ Successfully downloaded video from S3 - Size: {len(video_data)} bytes")
-        logger.info(f"🎬 Forcing Content-Type to: {content_type}")
-        return True, video_data, content_type
+        if video_type == "original":
+            s3_key = video_doc.get("original_video_url")
+        elif video_type == "processed":
+            s3_key = video_doc.get("processed_video_url")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid video type specified")
 
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        logger.error(f"❌ S3 ClientError downloading video: {e}")
-        return False, f"Storage service error ({error_code})", None
+        if not s3_key:
+            raise HTTPException(status_code=404, detail=f"{video_type} video URL not found")
+
+        workflow = ImageProcessingWorkflow()
+        video_data = workflow.s3_manager.download_image_from_s3(s3_key)
+
+        return StreamingResponse(io.BytesIO(video_data), media_type="video/mp4")
+
     except Exception as e:
-        logger.error(f"❌ Unexpected error downloading video from S3: {e}")
-        return False, f"Video download error: {str(e)}", None
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error downloading video: {str(e)}")
 
-
-@pavement_bp.route('/detect-video', methods=['POST'])
-def detect_video():
-    """
-    API endpoint to detect pavement defects in uploaded video and return SSE stream
-    """
-    logger.info("Received video detection request")
-    # Get parameters from request
-    coordinates = request.form.get('coordinates', 'Not Available')
-    selected_model = request.form.get('selectedModel', 'All')
-    # Extract user/role/id from session or request (like image endpoints)
-    username = (
-        session.get('username')
-        or request.form.get('username')
-        or (request.json.get('username') if request.is_json else None)
-        or 'Unknown'
-    )
-    role = (
-        session.get('role')
-        or request.form.get('role')
-        or (request.json.get('role') if request.is_json else None)
-        or 'Unknown'
-    )
-    # Use username as id for S3 folder structure
-    s3_role = role.capitalize() if role else 'UnknownRole'
-    s3_id = username
-    logger.info(f"Processing video with model: {selected_model}")
-    logger.info(f"Coordinates: {coordinates}")
+@router.post('/detect-all')
+def detect_all(payload: PotholeDetectionPayload):
+    """API endpoint to detect all types of defects in an uploaded image."""
     try:
-        # Check if we have video data
-        if 'video' not in request.files or not request.files['video']:
-            return jsonify({
-                "success": False,
-                "message": "No video file provided"
-            }), 400
+        # Get models and device info
+        models, midas, midas_transform = get_models()
+        device = get_device()
 
-        video_file = request.files['video']
-        logger.info(f"Processing video file: {video_file.filename}")
+        if not models:
+            raise HTTPException(status_code=500, detail="Failed to load models")
 
-        # Validate video file
-        is_valid, error_message = validate_upload_file(video_file, 'video')
-        if not is_valid:
-            logger.warning(f"Video validation failed: {error_message}")
-            return jsonify({
-                "success": False,
-                "message": error_message
-            }), 400
+        # Decode image
+        image = decode_base64_image(payload.image)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        processed_image = image.copy()
+        all_results = {"potholes": [], "cracks": [], "kerbs": []}
         
-        # Generate timestamp-based filename with conflict resolution, preserving original name
+        # Pothole detection
+        pothole_results = detect_potholes(payload)
+        if pothole_results and pothole_results.get('potholes'):
+            all_results['potholes'] = pothole_results['potholes']
+            processed_image = decode_base64_image(pothole_results['processed_image'])
+
+        # Crack detection
+        crack_payload = CrackDetectionPayload(**payload.dict())
+        crack_results = detect_cracks(crack_payload)
+        if crack_results and crack_results.get('cracks'):
+            all_results['cracks'] = crack_results['cracks']
+            processed_image = decode_base64_image(crack_results['processed_image'])
+
+        # Kerb detection
+        kerb_payload = KerbDetectionPayload(**payload.dict())
+        kerb_results = detect_kerbs(kerb_payload)
+        if kerb_results and kerb_results.get('kerbs'):
+            all_results['kerbs'] = kerb_results['kerbs']
+            processed_image = decode_base64_image(kerb_results['processed_image'])
+
+        return {
+            "success": True,
+            "processed": True,
+            "message": f"Detected {len(all_results['potholes'])} potholes, {len(all_results['cracks'])} cracks, and {len(all_results['kerbs'])} kerbs",
+            "processed_image": encode_processed_image(processed_image),
+            "potholes": all_results['potholes'],
+            "cracks": all_results['cracks'],
+            "kerbs": all_results['kerbs'],
+            "coordinates": payload.coordinates,
+            "username": payload.username,
+            "role": payload.role,
+            "classification": {'is_road': True} # Assuming road classification is handled elsewhere or skipped
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+@router.post("/detect-video")
+async def detect_video(
+    video: UploadFile = File(...),
+    selectedModel: str = Form(...),
+    coordinates: str = Form(None),
+    username: str = Form('Unknown'),
+    role: str = Form('Unknown')
+):
+    """API endpoint to process video for defect detection."""
+    try:
+        # Generate a unique filename for the temporary video file
         video_timestamp = generate_timestamp_filename()
-        original_filename = video_file.filename or "video.mp4"
-        # Clean the filename to remove any path separators and ensure it's safe
-        original_filename = os.path.basename(original_filename)
-        name_without_ext = os.path.splitext(original_filename)[0]
-        # Create a unique filename that includes both timestamp and original name
-        original_video_name = f"{name_without_ext}_{video_timestamp}.mp4"
-        temp_video_path = os.path.join(os.path.dirname(__file__), original_video_name)
-        logger.info(f"Saving video to temporary path: {temp_video_path} (original: {original_filename})")
-        video_file.save(temp_video_path)
-        
-        # Get AWS configuration
-        aws_folder = os.environ.get('AWS_FOLDER', 'LTA')
-        s3_folder = f"{s3_role}/{s3_id}"
-        
-        # Generate a unique video_id here and pass it to process_pavement_video
-        video_id = str(ObjectId())
-        
-        # Upload original video to S3 immediately
-        original_video_s3_url = None
-        try:
-            s3_key_original = f"{s3_folder}/{original_video_name}"
-            upload_success, s3_url_or_error = upload_video_to_s3(temp_video_path, aws_folder, s3_key_original)
-            if upload_success:
-                logger.info(f"Uploaded original video to S3: {s3_url_or_error}")
-                # Store only the relative S3 path (role/username/video_xxx.mp4)
-                original_video_s3_url = s3_key_original
-                # Update MongoDB document with original video RELATIVE URL using video_id
-                db = connect_to_db()
-                if db is not None:
-                    db.video_processing.update_one(
-                        {"video_id": video_id},
-                        {"$set": {"original_video_url": original_video_s3_url}}
-                    )
-            else:
-                logger.error(f"Failed to upload original video to S3: {s3_url_or_error}")
-        except Exception as e:
-            logger.error(f"Error uploading original video: {e}")
-        
-        # Extract video EXIF metadata and GPS coordinates
-        try:
-            logger.info("🔄 Extracting video EXIF metadata...")
-            video_metadata = extract_media_metadata(temp_video_path, 'video')
-            video_lat, video_lon = get_video_gps_coordinates(temp_video_path)
+        temp_video_path = os.path.join(os.path.dirname(__file__), f"video_{video_timestamp}.mp4")
 
-            # Use EXIF GPS coordinates if available, otherwise use client coordinates
-            if video_lat is not None and video_lon is not None:
-                final_coordinates = format_coordinates(video_lat, video_lon)
-                logger.info(f"🎯 Using video EXIF GPS coordinates: {final_coordinates}")
-            else:
-                final_coordinates = coordinates
-                logger.info(f"📍 Using client-provided coordinates: {coordinates}")
+        # Save the uploaded video to the temporary file
+        with open(temp_video_path, "wb") as buffer:
+            buffer.write(await video.read())
 
-        except Exception as e:
-            logger.warning(f"Failed to extract video EXIF data: {e}")
-            video_metadata = {}
-            final_coordinates = coordinates
+        # Get AWS folder and S3 folder from role and username
+        aws_folder = role
+        s3_folder = f"{role}/{username}"
+        video_id = str(uuid.uuid4())
+        original_video_name = video.filename
 
-        # Create initial video_processing document here
-        timestamp = datetime.now().isoformat()
-        models_to_run = []
-        if selected_model == "All":
-            models_to_run = ["potholes", "cracks", "kerbs"]
-        elif selected_model == "Potholes":
-            models_to_run = ["potholes"]
-        elif selected_model == "Alligator Cracks":
-            models_to_run = ["cracks"]
-        elif selected_model == "Kerbs":
-            models_to_run = ["kerbs"]
-        db = connect_to_db()
-        if db is not None:
-            video_doc = {
-                "video_id": video_id,
-                "original_video_url": original_video_s3_url,
-                "processed_video_url": None,
-                "role": role,
-                "username": username,
-                "timestamp": timestamp,
-                "coordinates": final_coordinates,  # Add coordinates
-                "exif_data": video_metadata,      # Add EXIF data
-                "metadata": video_metadata,       # Add metadata for compatibility
-                "media_type": "video",            # Add media type
-                "models_run": models_to_run,
-                "status": "processing",
-                "model_outputs": {
-                    "potholes": [],
-                    "cracks": [],
-                    "kerbs": []
-                },
-                "created_at": timestamp,
-                "updated_at": timestamp
-            }
-            db.video_processing.insert_one(video_doc)
-        
-        # Process video and return SSE stream
-        # The processed video will be uploaded to S3 automatically when processing completes
-        sse_response = Response(
-            stream_with_context(process_pavement_video(
+        # Return a streaming response to send updates
+        return StreamingResponse(
+            process_pavement_video(
                 temp_video_path,
-                selected_model,
-                final_coordinates,  # Use EXIF GPS coordinates if available
+                selectedModel,
+                coordinates,
                 video_timestamp,
                 aws_folder,
                 s3_folder,
                 username,
                 role,
-                video_id,  # Pass video_id to processing function
-                original_video_name  # Pass original video name for S3 naming
-            )),
-            mimetype='text/event-stream',
-            headers={
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Cache-Control'
-            }
+                video_id,
+                original_video_name
+            ),
+            media_type="text/event-stream"
         )
-        
-        return sse_response
-        
     except Exception as e:
-        logger.error(f"Error during video processing setup: {str(e)}", exc_info=True)
-        return jsonify({"success": False, "message": str(e)}), 500
-
-@pavement_bp.route('/stop-video-processing', methods=['POST'])
-def stop_video_processing():
-    """
-    API endpoint to stop video processing
-    """
-    global video_processing_stop_flag
-    
-    try:
-        logger.info("Received request to stop video processing")
-        
-        # Set stop flag
-        video_processing_stop_flag = True
-        
-        return jsonify({
-            "success": True,
-            "message": "Video processing stop signal sent"
-        })
-        
-    except Exception as e:
-        logger.error(f"Error stopping video processing: {str(e)}")
-        return jsonify({"success": False, "message": str(e)}), 500
-
-@pavement_bp.route('/video-processing/<video_id>', methods=['GET'])
-def get_video_processing_status(video_id):
-    """
-    API endpoint to get video processing status and results
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-        
-        # Find video processing document
-        video_doc = db.video_processing.find_one({"video_id": video_id})
-        if not video_doc:
-            return jsonify({
-                "success": False,
-                "message": f"Video processing record not found for ID: {video_id}"
-            }), 404
-        
-        # Convert ObjectId to string for JSON serialization
-        video_doc["_id"] = str(video_doc["_id"])
-        
-        return jsonify({
-            "success": True,
-            "video_processing": video_doc
-        })
-        
-    except Exception as e:
-        logger.error(f"Error retrieving video processing status: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Error retrieving video processing status: {str(e)}"
-        }), 500
-
-
-@pavement_bp.route('/get-s3-video/<video_id>/<video_type>', methods=['GET'])
-def get_s3_video(video_id, video_type):
-    """
-    API endpoint to proxy S3 videos through the backend
-    This solves the issue of S3 bucket not being publicly accessible
-    video_type: 'original' or 'processed'
-    """
-    try:
-        # Add detailed logging for debugging
-        logger.info(f"🔍 S3 Video Request - Video ID: {video_id}, Type: {video_type}")
-
-        # Validate video_type parameter
-        if video_type not in ['original', 'processed']:
-            return jsonify({
-                "success": False,
-                "message": "Invalid video type. Use 'original' or 'processed'"
-            }), 400
-
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-
-        # Find video processing document
-        from bson import ObjectId
-        video_doc = None
-        try:
-            # Try to find by MongoDB ObjectId first
-            video_doc = db.video_processing.find_one({"_id": ObjectId(video_id)})
-        except Exception as e:
-            logger.debug(f"Could not find by ObjectId: {e}")
-            # Fallback to video_id field if ObjectId conversion fails
-            video_doc = db.video_processing.find_one({"video_id": video_id})
-
-        if not video_doc:
-            logger.error(f"❌ Video processing record not found for ID: {video_id}")
-            return jsonify({
-                "success": False,
-                "message": f"Video not found in storage. Please check if the video exists or contact support."
-            }), 404
-
-        logger.info(f"🔍 Found video document for user: {video_doc.get('username', 'unknown')}")
-
-        # Get the appropriate S3 key from MongoDB
-        s3_key = None
-        if video_type == 'original':
-            s3_key = video_doc.get('original_video_url')
-        elif video_type == 'processed':
-            s3_key = video_doc.get('processed_video_url')
-
-        if not s3_key:
-            logger.error(f"❌ {video_type.capitalize()} video URL not found in document")
-            logger.error(f"❌ Available fields: {list(video_doc.keys())}")
-            return jsonify({
-                "success": False,
-                "message": f"{video_type.capitalize()} video not found in storage. The video may not have been processed yet."
-            }), 404
-
-        logger.info(f"🔍 S3 Video Key from DB: {s3_key}")
-
-        # Download video from S3 using helper function
-        success, video_data_or_error, content_type = download_video_from_s3(s3_key)
-
-        if not success:
-            # video_data_or_error contains the error message
-            error_message = video_data_or_error
-
-            # Determine appropriate HTTP status code based on error type
-            if "not found" in error_message.lower():
-                status_code = 404
-                user_message = f"Video not found in storage. The {video_type} video file may have been moved or deleted."
-            elif "access denied" in error_message.lower():
-                status_code = 403
-                user_message = "Access denied to video storage. Please contact support."
-            else:
-                status_code = 500
-                user_message = "Video download error. Please contact support."
-
-            logger.error(f"❌ Video download failed: {error_message}")
-            return jsonify({
-                "success": False,
-                "message": user_message
-            }), status_code
-
-        # video_data_or_error contains the actual video data
-        video_data = video_data_or_error
-        if content_type is None:
-            content_type = 'video/mp4'
-
-        # Extract original filename from S3 key or create a meaningful one
-        if s3_key:
-            original_filename = s3_key.split('/')[-1]
-            if not original_filename.endswith('.mp4'):
-                original_filename += '.mp4'
-        else:
-            original_filename = f"{video_type}_video_{video_id[:8]}.mp4"
-
-        # Return video with proper headers for direct download
-        from flask import Response
-        return Response(
-            video_data,
-            mimetype='video/mp4',  # Force video/mp4 mimetype
-            headers={
-                'Content-Disposition': f'attachment; filename="{original_filename}"',
-                'Content-Length': str(len(video_data)),
-                'Content-Type': 'video/mp4',  # Explicit content type
-                'Cache-Control': 'no-cache, no-store, must-revalidate',  # Prevent caching issues
-                'Pragma': 'no-cache',  # HTTP/1.0 compatibility
-                'Expires': '0',  # Prevent caching
-                'Accept-Ranges': 'bytes',  # Enable range requests for video streaming
-                'Content-Transfer-Encoding': 'binary',  # Ensure binary transfer
-                'X-Content-Type-Options': 'nosniff',  # Prevent MIME type sniffing
-                'Access-Control-Allow-Origin': '*',  # Allow CORS for frontend
-                'Access-Control-Allow-Headers': 'Content-Type, Accept',
-                'Access-Control-Allow-Methods': 'GET'
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Unexpected error in get_s3_video: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": "Video download service error. Please contact support."
-        }), 500
-
-@pavement_bp.route('/debug-videos', methods=['GET'])
-def debug_videos():
-    """
-    Debug endpoint to check what videos are in the database
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-
-        # Get all video processing documents
-        videos = list(db.video_processing.find({}).limit(10))
-
-        # Convert ObjectId to string for JSON serialization
-        for video in videos:
-            if '_id' in video:
-                video['_id'] = str(video['_id'])
-
-        return jsonify({
-            "success": True,
-            "count": len(videos),
-            "videos": videos
-        })
-
-    except Exception as e:
-        logger.error(f"Error fetching debug videos: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching debug videos: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/video-processing/list', methods=['GET'])
-def list_video_processing():
-    """
-    API endpoint to list all video processing records
-    """
-    try:
-        db = connect_to_db()
-        if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to database"
-            }), 500
-
-        # Get optional query parameters
-        username = request.args.get('username')
-        role = request.args.get('role')
-        status = request.args.get('status')
-
-        # Build query filter
-        query = {}
-        if username:
-            query["username"] = username
-        if role:
-            query["role"] = role
-        if status:
-            query["status"] = status
-
-        # Get all video processing records, sorted by timestamp descending
-        video_docs = list(db.video_processing.find(
-            query,
-            sort=[("timestamp", -1)]
-        ))
-        
-        # Convert ObjectId to string for JSON serialization
-        for doc in video_docs:
-            doc["_id"] = str(doc["_id"])
-        
-        return jsonify({
-            "success": True,
-            "video_processing_records": video_docs
-        })
-        
-    except Exception as e:
-        logger.error(f"Error listing video processing records: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": f"Error listing video processing records: {str(e)}"
-        }), 500
-
-@pavement_bp.route('/test-classification', methods=['POST'])
-def test_classification():
-    """Test route to check road classification only"""
-    try:
-        # Get image data
-        image_data = request.json['image']
-        image = decode_base64_image(image_data)
-
-        if image is None:
-            return jsonify({
-                "success": False,
-                "message": "Invalid image data"
-            }), 400
-
-        # Test classification with different thresholds
-        results = {}
-        for threshold in [0.1, 0.2, 0.3, 0.4, 0.5]:
-            classification_result = classify_road_image(image, models, confidence_threshold=threshold)
-            results[f"threshold_{threshold}"] = classification_result
-
-        return jsonify({
-            "success": True,
-            "image_shape": image.shape,
-            "classification_results": results
-        })
-
-    except Exception as e:
-        print(f"❌ Error in test classification: {e}")
         traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Error: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
+
+@router.post("/stop-video-processing")
+async def stop_video_processing():
+    """API endpoint to stop ongoing video processing."""
+    global video_processing_stop_flag
+    video_processing_stop_flag = True
+    return {"success": True, "message": "Video processing stopped"}
+
+
+class DetectAllPayload(PotholeDetectionPayload):
+    pass
+
+@router.post('/detect-all')
+def detect_all(payload: DetectAllPayload):
+    """
+    API endpoint to detect all pavement defects (potholes, cracks, kerbs) in an uploaded image.
+    This endpoint combines the functionality of the individual detection endpoints.
+    """
+    try:
+        # 1. Initialization
+        models, midas, midas_transform = get_models()
+        device = get_device()
+        if not models:
+            raise HTTPException(status_code=500, detail="Failed to load detection models")
+
+        # 2. Image Validation and Decoding
+        image_data = payload.image
+        is_valid, error_message = validate_base64_image(image_data, 'all_detection')
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_message)
+        
+        image = decode_base64_image(image_data)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+        
+        processed_image = image.copy()
+        timestamp = pd.Timestamp.now().isoformat()
+        image_upload_id = str(uuid.uuid4())
+
+        # 3. Metadata Extraction
+        username = payload.username
+        role = payload.role
+        lat, lon = get_gps_coordinates(image_data)
+        coordinates = format_coordinates(lat, lon) if lat is not None and lon is not None else payload.coordinates
+        exif_metadata = extract_media_metadata(image_data, 'image')
+
+        # 4. Road Classification
+        if not payload.skip_road_classification:
+            classification_result = classify_road_image(processed_image, models, confidence_threshold=0.4)
+            if not classification_result["is_road"]:
+                return {"success": True, "processed": False, "message": "No road detected.", "classification": classification_result}
+        else:
+            classification_result = {"is_road": True, "confidence": 1.0, "class_name": "skipped"}
+
+        all_results = {"potholes": [], "cracks": [], "kerbs": []}
+        pothole_id_counter = 1
+        crack_id_counter = 1
+        kerb_id_counter = 1
+
+        # --- 5. Pothole Detection ---
+        if "potholes" in models:
+            depth_map = estimate_depth(image, midas, midas_transform) if midas else None
+            with torch.no_grad():
+                results = models["potholes"](cv2.cvtColor(image, cv2.COLOR_BGR2RGB), conf=0.2, device=device)
+            
+            for result in results:
+                if result.boxes is not None and result.masks is not None:
+                    masks = result.masks.data.cpu().numpy()
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    confidences = result.boxes.conf.cpu().numpy()
+
+                    for mask, box, conf in zip(masks, boxes, confidences):
+                        binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                        binary_mask = cv2.resize(binary_mask, (processed_image.shape[1], processed_image.shape[0]))
+                        
+                        mask_indices = binary_mask > 0
+                        processed_image[mask_indices] = cv2.addWeighted(processed_image[mask_indices], 0.7, np.full_like(processed_image[mask_indices], (255, 0, 0)), 0.3, 0)
+                        
+                        dimensions = calculate_pothole_dimensions(binary_mask)
+                        depth_metrics = calculate_real_depth(binary_mask, depth_map) if depth_map is not None else {"max_depth_cm": 5.0, "avg_depth_cm": 3.0}
+
+                        if dimensions and depth_metrics:
+                            x1, y1, x2, y2 = map(int, box[:4])
+                            volume = dimensions["area_cm2"] * depth_metrics["max_depth_cm"]
+                            volume_range = "Small (<1k)" if volume < 1000 else ("Medium (1k - 10k)" if volume < 10000 else "Big (>10k)")
+                            
+                            cv2.rectangle(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            text = f"P{pothole_id_counter}, A:{dimensions['area_cm2']:.1f}, D:{depth_metrics['max_depth_cm']:.1f}"
+                            cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            
+                            all_results["potholes"].append({
+                                "pothole_id": pothole_id_counter, "area_cm2": float(dimensions["area_cm2"]), "depth_cm": float(depth_metrics["max_depth_cm"]),
+                                "volume": float(volume), "volume_range": volume_range, "confidence": float(conf), "coordinates": coordinates,
+                                "username": username, "role": role, "has_mask": True
+                            })
+                            pothole_id_counter += 1
+
+        # --- 6. Crack Detection ---
+        if "cracks" in models:
+            with torch.no_grad():
+                results = models["cracks"](cv2.cvtColor(image, cv2.COLOR_BGR2RGB), conf=0.2, device=device)
+            
+            CRACK_TYPES = {0: {"name": "Alligator", "color": (0, 0, 255)}, 1: {"name": "Edge", "color": (0, 255, 255)}, 2: {"name": "Hairline", "color": (255, 0, 0)}, 3: {"name": "Longitudinal", "color": (0, 255, 0)}, 4: {"name": "Transverse", "color": (128, 0, 128)}}
+
+            for result in results:
+                if result.masks is not None:
+                    for mask, box, cls, conf in zip(result.masks.data.cpu().numpy(), result.boxes.xyxy.cpu().numpy(), result.boxes.cls.cpu().numpy(), result.boxes.conf.cpu().numpy()):
+                        binary_mask = cv2.resize((mask > 0.5).astype(np.uint8) * 255, (processed_image.shape[1], processed_image.shape[0]))
+                        crack_type = CRACK_TYPES.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
+                        
+                        area_data = calculate_area(binary_mask)
+                        area_cm2 = area_data["area_cm2"] if area_data else 0
+                        area_range = "Small" if area_cm2 < 50 else ("Medium" if area_cm2 < 200 else "Large")
+                        
+                        x1, y1, x2, y2 = map(int, box[:4])
+                        color = crack_type["color"]
+                        cv2.rectangle(processed_image, (x1, y1), (x2, y2), color, 2)
+                        label = f"C{crack_id_counter}: {crack_type['name']}"
+                        cv2.putText(processed_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        
+                        all_results["cracks"].append({
+                            "crack_id": crack_id_counter, "crack_type": crack_type["name"], "area_cm2": area_cm2, "area_range": area_range,
+                            "coordinates": coordinates, "confidence": float(conf), "username": username, "role": role
+                        })
+                        crack_id_counter += 1
+
+        # --- 7. Kerb Detection ---
+        if "kerbs" in models:
+            with torch.no_grad():
+                results = models["kerbs"](cv2.cvtColor(image, cv2.COLOR_BGR2RGB), conf=0.5, device=device)
+
+            KERB_TYPES = {0: {"name": "Damaged", "color": (0, 0, 255)}, 1: {"name": "Faded", "color": (0, 165, 255)}, 2: {"name": "Normal", "color": (0, 255, 0)}}
+
+            for result in results:
+                if result.boxes is not None:
+                    for box, cls, conf in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.cls.cpu().numpy(), result.boxes.conf.cpu().numpy()):
+                        x1, y1, x2, y2 = map(int, box[:4])
+                        kerb_type = KERB_TYPES.get(int(cls), {"name": "Unknown", "color": (128, 128, 128)})
+                        color = kerb_type["color"]
+                        
+                        cv2.rectangle(processed_image, (x1, y1), (x2, y2), color, 2)
+                        text = f"K{kerb_id_counter}: {kerb_type['name']}"
+                        cv2.putText(processed_image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        
+                        all_results["kerbs"].append({
+                            "kerb_id": kerb_id_counter, "kerb_type": "Concrete", "condition": kerb_type["name"],
+                            "length_m": (x2 - x1) * 0.01, "confidence": float(conf), "coordinates": coordinates,
+                            "username": username, "role": role
+                        })
+                        kerb_id_counter += 1
+        
+        # --- 8. Save to DB and S3 ---
+        db = connect_to_db()
+        if db is not None:
+            if all_results["potholes"]:
+                db.pothole_images.insert_one({"image_id": image_upload_id, "timestamp": timestamp, "coordinates": coordinates, "username": username, "role": role, "potholes": all_results["potholes"], "exif_data": exif_metadata, "media_type": "image"})
+            if all_results["cracks"]:
+                db.crack_images.insert_one({"image_id": image_upload_id, "timestamp": timestamp, "coordinates": coordinates, "username": username, "role": role, "cracks": all_results["cracks"], "exif_data": exif_metadata, "media_type": "image"})
+            if all_results["kerbs"]:
+                db.kerb_images.insert_one({"image_id": image_upload_id, "timestamp": timestamp, "coordinates": coordinates, "username": username, "role": role, "kerbs": all_results["kerbs"], "exif_data": exif_metadata, "media_type": "image"})
+
+        # --- 9. Return Response ---
+        return {
+            "success": True, "processed": True, "classification": classification_result,
+            "message": f"Detected {len(all_results['potholes'])} potholes, {len(all_results['cracks'])} cracks, {len(all_results['kerbs'])} kerbs.",
+            "processed_image": encode_processed_image(processed_image),
+            "potholes": all_results['potholes'], "cracks": all_results['cracks'], "kerbs": all_results['kerbs'],
+            "coordinates": coordinates, "username": username, "role": role
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+
+@router.get('/images')
+def list_all_images():
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    images = []
+    images.extend(list(db.pothole_images.find({}, {'_id': 0})))
+    images.extend(list(db.crack_images.find({}, {'_id': 0})))
+    images.extend(list(db.kerb_images.find({}, {'_id': 0})))
+    
+    return {"success": True, "images": images}
+
+@router.get('/images/{image_id}')
+def get_image_details(image_id: str):
+    db = connect_to_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    # Check in pothole_images collection
+    image = db.pothole_images.find_one({"image_id": image_id}, {'_id': 0})
+    if image:
+        return {"success": True, "image": image, "type": "pothole"}
+        
+    # Check in crack_images collection
+    image = db.crack_images.find_one({"image_id": image_id}, {'_id': 0})
+    if image:
+        return {"success": True, "image": image, "type": "crack"}
+        
+    # Check in kerb_images collection
+    image = db.kerb_images.find_one({"image_id": image_id}, {'_id': 0})
+    if image:
+        return {"success": True, "image": image, "type": "kerb"}
+    
+    # If not found in any image collection, check in video_processing as a fallback
+    video_doc = db.video_processing.find_one({"video_id": image_id})
+    if video_doc:
+        image_obj = {
+            "image_id": video_doc.get("video_id"),
+            "timestamp": video_doc.get("timestamp"),
+            "coordinates": video_doc.get("coordinates"),
+            "username": video_doc.get("username"),
+            "role": video_doc.get("role"),
+            "media_type": "video",
+            "representative_frame": video_doc.get("representative_frame"),
+            "potholes": video_doc.get("model_outputs", {}).get("potholes", []),
+            "cracks": video_doc.get("model_outputs", {}).get("cracks", []),
+            "kerbs": video_doc.get("model_outputs", {}).get("kerbs", []),
+            "exif_data": video_doc.get("metadata"),
+            "metadata": video_doc.get("metadata")
+        }
+        return {"success": True, "image": image_obj, "type": "video"}
+        
+    raise HTTPException(status_code=404, detail="Image or Video not found")

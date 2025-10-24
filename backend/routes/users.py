@@ -1,30 +1,29 @@
-from flask import Blueprint, request, jsonify, session
+from fastapi import APIRouter, Depends, HTTPException, Query
 from werkzeug.security import generate_password_hash, check_password_hash
 from config.db import connect_to_db
 import datetime
 from utils.rbac import get_allowed_roles, validate_user_role
-from utils.auth_middleware import validate_rbac_access
+from typing import Optional
 
-users_bp = Blueprint('users', __name__)
+router = APIRouter()
 
-# ... existing code ...
+def get_user_role_from_request(user_role: Optional[str] = Query(None)):
+    return user_role
 
-@users_bp.route('/summary', methods=['GET'])
-@validate_rbac_access
-def get_user_summary():
+def validate_rbac_access(user_role: str = Depends(get_user_role_from_request)):
+    if user_role and not validate_user_role(user_role):
+        raise HTTPException(status_code=400, detail="Invalid user role")
+    return user_role
+
+@router.get('/summary')
+def get_user_summary(user_role: str = Depends(validate_rbac_access)):
     """
     API endpoint to get user summary for dashboard with RBAC
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
-        
-        # Get user role from request
-        user_role = request.args.get('user_role')
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Get allowed roles for RBAC filtering
         allowed_roles = get_allowed_roles(user_role) if user_role and validate_user_role(user_role) else None
@@ -73,35 +72,25 @@ def get_user_summary():
                     if len(recent_users) >= 10:
                         break
         
-        return jsonify({
+        return {
             "success": True,
             "total_users": total_users,
             "roles_distribution": roles_distribution,
             "recent_users": recent_users
-        })
+        }
         
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching user summary: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching user summary: {str(e)}")
 
-@users_bp.route('/all', methods=['GET'])
-@validate_rbac_access
-def get_all_users():
+@router.get('/all')
+def get_all_users(user_role: str = Depends(validate_rbac_access)):
     """
     API endpoint to get all users for dashboard filter with RBAC
     """
     try:
         db = connect_to_db()
         if db is None:
-            return jsonify({
-                "success": False,
-                "message": "Database connection failed"
-            }), 500
-        
-        # Get user role from request
-        user_role = request.args.get('user_role')
+            raise HTTPException(status_code=500, detail="Database connection failed")
         
         # Get all users from database with limited fields
         all_users = list(db.users.find({}, {
@@ -118,13 +107,10 @@ def get_all_users():
             # If no role provided or invalid role, return all users (backwards compatibility)
             filtered_users = all_users
         
-        return jsonify({
+        return {
             "success": True,
             "users": filtered_users
-        })
+        }
         
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Error fetching users: {str(e)}"
-        }), 500
+        raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")

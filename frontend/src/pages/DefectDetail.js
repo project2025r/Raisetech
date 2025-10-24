@@ -223,8 +223,19 @@ function DefectDetail() {
     const fetchDefectDetail = async () => {
       try {
         setLoading(true);
-        const response = await axios.get(`/api/pavement/images/${imageId}`);
-        
+        let response;
+        try {
+          // First, try to fetch as a video
+          response = await axios.get(`/api/pavement/videos/${imageId}/representative_frame`);
+        } catch (videoError) {
+          if (videoError.response && videoError.response.status === 404) {
+            // If it's not a video, try to fetch as an image
+            response = await axios.get(`/api/pavement/images/${imageId}`);
+          } else {
+            throw videoError;
+          }
+        }
+
         if (response.data.success) {
           setDefectData(response.data);
         } else {
@@ -290,56 +301,38 @@ function DefectDetail() {
                 <h5 className="mb-0">
                   {getDefectTypeLabel(defectData.type)} - ID: {imageId}
                 </h5>
-                {/* Only show Original/Processed buttons for non-video entries */}
-                {defectData.image.media_type !== 'video' && (
-                  <div>
-                    <Button
-                      variant={imageType === 'original' ? 'light' : 'outline-light'}
-                      size="sm"
-                      className="me-2"
-                      onClick={toggleImageType}
-                    >
-                      Original
-                    </Button>
-                    <Button
-                      variant={imageType === 'processed' ? 'light' : 'outline-light'}
-                      size="sm"
-                      onClick={toggleImageType}
-                    >
-                      Processed
-                    </Button>
-                  </div>
-                )}
               </div>
             </Card.Header>
             <Card.Body>
               <Row>
                 <Col md={6} className="text-center mb-4">
-                  {/* Toggle Buttons - Same as Dashboard */}
-                  <div className="d-flex justify-content-center mb-3">
-                    <div className="btn-group btn-group-sm" role="group">
-                      <button
-                        type="button"
-                        className={`btn ${imageType === 'processed' ? 'btn-primary' : 'btn-outline-primary'}`}
-                        onClick={() => setImageType('processed')}
-                      >
-                        Processed
-                      </button>
-                      <button
-                        type="button"
-                        className={`btn ${imageType === 'original' ? 'btn-primary' : 'btn-outline-primary'}`}
-                        onClick={() => setImageType('original')}
-                      >
-                        Original
-                      </button>
-                    </div>
-                  </div>
-
                   <EnhancedDefectImageDisplay
                     imageData={defectData.image}
                     imageType={imageType}
                     defectType={defectData.type}
                   />
+
+                  {/* Toggle Buttons - Same as Dashboard */}
+                  {defectData.image.media_type !== 'video' && (
+                    <div className="d-flex justify-content-center mt-3">
+                      <div className="btn-group btn-group-sm" role="group">
+                        <button
+                          type="button"
+                          className={`btn ${imageType === 'processed' ? 'btn-primary' : 'btn-outline-primary'}`}
+                          onClick={() => setImageType('processed')}
+                        >
+                          Processed
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn ${imageType === 'original' ? 'btn-primary' : 'btn-outline-primary'}`}
+                          onClick={() => setImageType('original')}
+                        >
+                          Original
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </Col>
                 <Col md={6}>
                   <h5>Basic Information</h5>

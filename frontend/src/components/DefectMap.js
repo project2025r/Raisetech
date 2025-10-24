@@ -409,6 +409,7 @@ function DefectMap({ user }) {
   const [center] = useState([20.5937, 78.9629]); // India center
   const [zoom] = useState(6); // Country-wide zoom for India
   const mapRef = useRef(null);
+  const [videoThumbnail, setVideoThumbnail] = useState(null);
   
   // Filters for the map
   const [startDate, setStartDate] = useState('');
@@ -563,6 +564,19 @@ function DefectMap({ user }) {
       }
     } catch (error) {
       console.error('Error fetching users:', error);
+    }
+  };
+
+  const fetchVideoThumbnail = async (videoId) => {
+    try {
+      setVideoThumbnail(null);
+      const response = await axios.get(`/api/pavement/videos/${videoId}/representative_frame`, {
+        responseType: 'blob',
+      });
+      const imageUrl = URL.createObjectURL(response.data);
+      setVideoThumbnail(imageUrl);
+    } catch (error) {
+      console.error('Error fetching video thumbnail:', error);
     }
   };
 
@@ -843,6 +857,13 @@ function DefectMap({ user }) {
                   key={defect.id || `defect-${Math.random()}`}
                   position={defect.position}
                   icon={selectedIcon}
+                  eventHandlers={{
+                    click: () => {
+                      if (defect.media_type === 'video') {
+                        fetchVideoThumbnail(defect.image_id);
+                      }
+                    },
+                  }}
                 >
                   <Popup maxWidth={400}>
                     <div className="defect-popup">
@@ -851,31 +872,17 @@ function DefectMap({ user }) {
                       {/* Video Thumbnail */}
                       {defect.media_type === 'video' && (
                         <div className="mb-3 text-center">
-                          {defect.representative_frame ? (
-                            <>
-                              <img
-                                src={`data:image/jpeg;base64,${defect.representative_frame}`}
-                                alt="Video thumbnail"
-                                className="img-fluid border rounded shadow-sm"
-                                style={{ maxHeight: '150px', maxWidth: '100%', objectFit: 'cover' }}
-                                onError={(e) => {
-                                  console.warn(`Failed to load representative frame for video ${defect.image_id}`);
-                                  e.target.style.display = 'none';
-                                  // Show fallback message
-                                  const fallback = e.target.nextElementSibling;
-                                  if (fallback && fallback.classList.contains('video-thumbnail-fallback')) {
-                                    fallback.style.display = 'block';
-                                  }
-                                }}
-                              />
-                              <div className="video-thumbnail-fallback text-muted small p-2 border rounded bg-light" style={{ display: 'none' }}>
-                                <i className="fas fa-video"></i> Video thumbnail unavailable
-                              </div>
-                            </>
+                          {videoThumbnail ? (
+                            <img
+                              src={videoThumbnail}
+                              alt="Video thumbnail"
+                              className="img-fluid border rounded shadow-sm"
+                              style={{ maxHeight: '150px', maxWidth: '100%', objectFit: 'cover' }}
+                            />
                           ) : (
                             <div className="text-muted small p-3 border rounded bg-light">
                               <i className="fas fa-video fa-2x mb-2"></i>
-                              <div>Video thumbnail not available</div>
+                              <div>Loading thumbnail...</div>
                             </div>
                           )}
                           <div className="mt-2">
@@ -1057,4 +1064,4 @@ function DefectMap({ user }) {
   );
 }
 
-export default DefectMap; 
+export default DefectMap;

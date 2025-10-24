@@ -19,8 +19,8 @@ import logging
 import base64
 import io
 from typing import Tuple, Optional, List, Union
-from werkzeug.datastructures import FileStorage
 from PIL import Image
+from fastapi import UploadFile
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def get_file_extension(filename: str) -> str:
     return os.path.splitext(filename.lower())[1]
 
 
-def get_mime_type(file_obj: FileStorage) -> str:
+def get_mime_type(file_obj: UploadFile) -> str:
     """
     Get MIME type from file object
     
@@ -106,7 +106,7 @@ def get_mime_type(file_obj: FileStorage) -> str:
     return 'application/octet-stream'
 
 
-def check_file_signature(file_obj: FileStorage) -> Optional[str]:
+async def check_file_signature(file_obj: UploadFile) -> Optional[str]:
     """
     Check file signature (magic bytes) to verify file type
     
@@ -118,14 +118,14 @@ def check_file_signature(file_obj: FileStorage) -> Optional[str]:
     """
     try:
         # Save current position
-        current_pos = file_obj.stream.tell()
+        current_pos = file_obj.file.tell()
         
         # Read first 32 bytes for signature checking
-        file_obj.stream.seek(0)
-        header = file_obj.stream.read(32)
+        await file_obj.seek(0)
+        header = await file_obj.read(32)
         
         # Restore position
-        file_obj.stream.seek(current_pos)
+        await file_obj.seek(current_pos)
         
         # Check against known signatures
         for signature, mime_type in FILE_SIGNATURES.items():
@@ -147,7 +147,7 @@ def check_file_signature(file_obj: FileStorage) -> Optional[str]:
         return None
 
 
-def validate_file_size(file_obj: FileStorage, file_type: str) -> None:
+async def validate_file_size(file_obj: UploadFile, file_type: str) -> None:
     """
     Validate file size based on file type
     
@@ -160,10 +160,10 @@ def validate_file_size(file_obj: FileStorage, file_type: str) -> None:
     """
     try:
         # Get file size
-        current_pos = file_obj.stream.tell()
-        file_obj.stream.seek(0, 2)  # Seek to end
-        file_size = file_obj.stream.tell()
-        file_obj.stream.seek(current_pos)  # Restore position
+        current_pos = file_obj.file.tell()
+        file_obj.file.seek(0, 2)  # Seek to end
+        file_size = file_obj.file.tell()
+        file_obj.file.seek(current_pos)  # Restore position
         
         # Check size limits
         if file_type == 'image' and file_size > MAX_IMAGE_SIZE:
@@ -184,7 +184,7 @@ def validate_file_size(file_obj: FileStorage, file_type: str) -> None:
         # Don't fail validation just because we can't check size
 
 
-def validate_image_file(file_obj: FileStorage) -> Tuple[bool, str]:
+async def validate_image_file(file_obj: UploadFile) -> Tuple[bool, str]:
     """
     Validate uploaded image file
     
@@ -211,10 +211,10 @@ def validate_image_file(file_obj: FileStorage) -> Tuple[bool, str]:
             return False, f"Invalid file format. Please upload only image files. The file appears to be: {mime_type}"
         
         # Validate file size
-        validate_file_size(file_obj, 'image')
+        await validate_file_size(file_obj, 'image')
         
         # Optional: Check file signature for additional security
-        detected_mime = check_file_signature(file_obj)
+        detected_mime = await check_file_signature(file_obj)
         if detected_mime and not detected_mime.startswith('image/'):
             return False, "Invalid file format. The file content does not match an image format. Please upload only image files."
         
@@ -227,7 +227,7 @@ def validate_image_file(file_obj: FileStorage) -> Tuple[bool, str]:
         return False, "An error occurred while validating the image file. Please try again with a different file."
 
 
-def validate_video_file(file_obj: FileStorage) -> Tuple[bool, str]:
+async def validate_video_file(file_obj: UploadFile) -> Tuple[bool, str]:
     """
     Validate uploaded video file
     
@@ -254,10 +254,10 @@ def validate_video_file(file_obj: FileStorage) -> Tuple[bool, str]:
             return False, f"Invalid file format. Please upload only video files. The file appears to be: {mime_type}"
         
         # Validate file size
-        validate_file_size(file_obj, 'video')
+        await validate_file_size(file_obj, 'video')
         
         # Optional: Check file signature for additional security
-        detected_mime = check_file_signature(file_obj)
+        detected_mime = await check_file_signature(file_obj)
         if detected_mime and not detected_mime.startswith('video/'):
             return False, "Invalid file format. The file content does not match a video format. Please upload only video files."
         
@@ -270,7 +270,7 @@ def validate_video_file(file_obj: FileStorage) -> Tuple[bool, str]:
         return False, "An error occurred while validating the video file. Please try again with a different file."
 
 
-def validate_upload_file(file_obj: FileStorage, expected_type: str) -> Tuple[bool, str]:
+async def validate_upload_file(file_obj: UploadFile, expected_type: str) -> Tuple[bool, str]:
     """
     Main validation function for uploaded files
     
@@ -283,9 +283,9 @@ def validate_upload_file(file_obj: FileStorage, expected_type: str) -> Tuple[boo
     """
     try:
         if expected_type == 'image':
-            return validate_image_file(file_obj)
+            return await validate_image_file(file_obj)
         elif expected_type == 'video':
-            return validate_video_file(file_obj)
+            return await validate_video_file(file_obj)
         else:
             return False, f"Invalid expected file type: {expected_type}. Must be 'image' or 'video'."
             
