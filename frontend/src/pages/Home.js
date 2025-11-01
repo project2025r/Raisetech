@@ -11,28 +11,28 @@ const Home = ({ user }) => {
       description: 'Detect and analyze potholes and cracks in road pavement',
       icon: <FaMap size={48} className="module-icon-svg" />,
       path: '/pavement',
-      color: '#3498db'
+      color: '#d32f2f'
     },
     {
       title: 'Infrastructure',
       description: 'Identify and monitor road infrastructure elements such as kerbs',
       icon: <FaColumns size={48} className="module-icon-svg" />,
       path: '/road-infrastructure',
-      color: '#2ecc71'
+      color: '#c62828'
     },
     {
       title: 'Recommendation',
       description: 'Get repair recommendations and cost estimates for detected issues',
       icon: <FaLightbulb size={48} className="module-icon-svg" />,
       path: '/recommendation',
-      color: '#f39c12'
+      color: '#e53935'
     },
     {
       title: 'Dashboard',
       description: 'View analytics and statistics from collected data',
       icon: <FaChartBar size={48} className="module-icon-svg" />,
       path: '/dashboard',
-      color: '#9b59b6'
+      color: '#b71c1c'
     }
   ];
 

@@ -1,27 +1,31 @@
 .home-page {
   padding: 15px;
-  background-color: #ffffff;
+  background-color: #fef5f5;
+  min-height: 100vh;
 }
 
 .welcome-medium {
   font-size: 1.2rem;
   font-weight: 500;
-  color: #333;
+  color: #d32f2f;
   margin-bottom: 1.5rem;
+  font-family: sans-serif;
 }
 
 .home-card {
   background: #ffffff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
+  border: 2px solid #ffcdd2;
+  border-radius: 12px;
   overflow: hidden;
   margin-bottom: 12px;
-  box-shadow: none;
+  box-shadow: -3px 20px 20px 20px rgba(211, 47, 47, 0.1);
+  transition: all 0.3s ease;
 }
 
 .home-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-5px);
+  box-shadow: 0 6px 16px rgba(211, 47, 47, 0.2);
+  border-color: #ef5350;
 }
 
 .module-icon {
@@ -34,13 +38,20 @@
   font-weight: 600;
   text-align: center;
   margin-bottom: 10px;
-  color: #333;
+  color: #c62828;
 }
 
 .module-description {
   text-align: center;
   color: #666;
   font-size: 0.9rem;
+}
+
+.info-card {
+  background: #ffffff;
+  border: 2px solid #ffcdd2;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(211, 47, 47, 0.1);
 }
 
 /* Responsive styles */
@@ -53,6 +64,7 @@
   .welcome-medium {
     font-size: 1.1rem;
     margin-bottom: 20px;
+    
   }
 
   .home-card {

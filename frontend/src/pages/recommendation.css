@@ -46,8 +46,8 @@
 }
 
 .recommendation-btn.active {
-  background-color: white;
-  color: #007bff;
+  background-color: #dc3545 !important;
+  color: white !important;
   border-color: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
   z-index: 2;

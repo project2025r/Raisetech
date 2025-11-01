@@ -55,7 +55,7 @@ const ChartContainer = ({
   };
 
   return (
-    <div className={`chart-wrapper ${className}`}>
+    <div className={`chart-wrapper ${className} new-class`}>
       {showLegend && legendItems.length > 0 && (
         <div className="legend-container">
           {legendItems.map((item, index) => (

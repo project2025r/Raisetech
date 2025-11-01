@@ -20,6 +20,9 @@ pandas==2.0.3
 plotly==5.15.0
 matplotlib==3.9.2
 
+# PDF Generation
+reportlab==4.0.4
+
 # Database
 pymongo==4.5.0
 dnspython==2.7.0

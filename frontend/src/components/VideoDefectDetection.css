@@ -270,6 +270,10 @@
   z-index: 1;
 }
 
+.text-name{
+  background-color: #dc3545;
+}
+
 /* Style improvements for real-time updates */
 .detection-results {
   position: relative;
@@ -315,3 +319,8 @@
     font-size: 0.9rem;
   }
 } 
+
+.bg-color-card{
+  background:rgb(255 198 204) !important;
+  color: #542a2e !important;
+}

@@ -582,7 +582,7 @@ const VideoDefectDetection = () => {
       <Row>
         <Col md={6}>
           <Card className="mb-4">
-            <Card.Header className="bg-primary text-white">
+            <Card.Header className="bg-color-card">
               <h5 className="mb-0">Video Defect Detection</h5>
             </Card.Header>
             <Card.Body>
@@ -809,7 +809,7 @@ const VideoDefectDetection = () => {
               <Card.Header className="bg-info text-white">
                 <h5 className="mb-0">Detection Results</h5>
                 {isProcessing && (
-                  <small className="text-white-50">
+                  <small className="bg-color-card">
                     Results update in real-time as processing continues...
                   </small>
                 )}
