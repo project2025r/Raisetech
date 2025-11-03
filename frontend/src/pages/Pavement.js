@@ -1057,12 +1057,17 @@ const Pavement = () => {
                         style={{
                           width: '60px',
                           height: '30px',
-                          backgroundColor: roadClassificationEnabled ? '#28a745' : '#6c757d',
+                          background: roadClassificationEnabled
+                            ? 'linear-gradient(135deg, #C41E3A, #8B0000)'
+                            : 'linear-gradient(135deg, #6c757d, #495057)',
                           borderRadius: '15px',
                           position: 'relative',
                           cursor: 'pointer',
-                          transition: 'background-color 0.3s ease',
-                          border: '2px solid transparent'
+                          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                          border: roadClassificationEnabled ? '2px solid #C41E3A' : '2px solid #6c757d',
+                          boxShadow: roadClassificationEnabled
+                            ? '0 3px 10px rgba(196, 30, 58, 0.4)'
+                            : '0 2px 6px rgba(108, 117, 125, 0.3)'
                         }}
                       >
                         <div
@@ -1242,7 +1247,7 @@ const Pavement = () => {
                           </div>
                         )}
                         <button 
-                          className="btn btn-sm btn-danger remove-image" 
+                          className="btn btn-sm btn-danger remove-image cross-mark" 
                           onClick={(e) => {
                             e.stopPropagation();
                             const newFiles = imageFiles.filter((_, i) => i !== index);

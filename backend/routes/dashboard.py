@@ -185,22 +185,36 @@ def get_video_processing_summary(query_filter=None, limit=20):
         if db is None:
             return False, "Database connection failed"
 
-        # Build query filter
-        video_query = {"status": "completed"}
-        # if query_filter:
-        #     # Apply RBAC filters
-        #     if 'username' in query_filter:
-        #         video_query['username'] = query_filter['username']
-        #     if 'role' in query_filter:
-        #         video_query['role'] = query_filter['role']
-        #     # Apply date filters
-        #     if 'timestamp' in query_filter:
-        #         video_query['timestamp'] = query_filter['timestamp']
-        #         logger.info(f"Video query with date filter: {video_query}")
+        # Build query filter - Show completed videos by default, but allow status override for debugging
+        video_query = {}
+        
+        # Set default status to completed, but allow override via query filter
+        show_all_status = False
+        if query_filter:
+            # Apply RBAC filters
+            if 'username' in query_filter:
+                video_query['username'] = query_filter['username']
+            if 'role' in query_filter:
+                video_query['role'] = query_filter['role']
+            # Apply date filters
+            if 'timestamp' in query_filter:
+                video_query['timestamp'] = query_filter['timestamp']
+                logger.info(f"Video query with date filter: {video_query}")
+            # Check if we should show all statuses (for debugging)
+            if 'show_all_status' in query_filter and query_filter['show_all_status']:
+                show_all_status = True
+                logger.info("🔧 Debug mode: showing videos with all statuses")
+
+        # Add status filter (only completed by default)
+        if not show_all_status:
+            video_query["status"] = "completed"
+            logger.info(f"📋 Showing only completed videos")
+        else:
+            logger.info(f"📋 Debug: Showing videos with all statuses")
 
         logger.info(f"Final video query: {video_query}")
 
-        # Get completed video processing records with representative frames
+        # Get video processing records
         video_docs = list(db.video_processing.find(
             video_query,
             sort=[("timestamp", -1)],
@@ -211,21 +225,20 @@ def get_video_processing_summary(query_filter=None, limit=20):
 
         processed_videos = []
         for video_doc in video_docs:
-            # Only include videos that have representative frames
-            if video_doc.get('representative_frame'):
-                # Count total detections
-                model_outputs = video_doc.get('model_outputs', {})
-                total_potholes = len(model_outputs.get('potholes', []))
-                total_cracks = len(model_outputs.get('cracks', []))
-                total_kerbs = len(model_outputs.get('kerbs', []))
+            # Include all videos that match the query
+            # Count total detections
+            model_outputs = video_doc.get('model_outputs', {})
+            total_potholes = len(model_outputs.get('potholes', []))
+            total_cracks = len(model_outputs.get('cracks', []))
+            total_kerbs = len(model_outputs.get('kerbs', []))
 
-                processed_video = {
+            processed_video = {
                     'video_id': video_doc['video_id'],
                     'timestamp': video_doc.get('timestamp'),
                     'username': video_doc.get('username'),
                     'role': video_doc.get('role'),
                     'models_run': video_doc.get('models_run', []),
-                    'representative_frame': video_doc['representative_frame'],
+                    'representative_frame': video_doc.get('representative_frame'),
                     'representative_frame_detections': video_doc.get('representative_frame_detections', []),
                     'detection_counts': {
                         'potholes': total_potholes,
@@ -236,9 +249,10 @@ def get_video_processing_summary(query_filter=None, limit=20):
                     'original_video_url': video_doc.get('original_video_url'),
                     'processed_video_url': video_doc.get('processed_video_url'),
                     'status': video_doc.get('status'),
+                    'error': video_doc.get('error'),  # Include error info for debugging
                     '_id': str(video_doc['_id'])
-                }
-                processed_videos.append(processed_video)
+            }
+            processed_videos.append(processed_video)
 
         return True, {
             'latest': processed_videos,
@@ -1015,7 +1029,11 @@ def get_kerb_data(filters: dict = Depends(parse_filters)):
         raise HTTPException(status_code=500, detail=f"Error fetching kerb data: {str(e)}")
 
 @router.get('/video-processing-data')
-def get_video_processing_data(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters)):
+def get_video_processing_data(
+    user_role: str = Depends(validate_rbac_access), 
+    filters: dict = Depends(parse_filters),
+    show_all_status: bool = Query(False, description="Show videos with all statuses (including failed)")
+):
     """
     Get processed videos with representative frames for dashboard display
     """
@@ -1025,58 +1043,118 @@ def get_video_processing_data(user_role: str = Depends(validate_rbac_access), fi
             raise HTTPException(status_code=500, detail="Database connection failed")
 
         # Get filters
-        query_filter = filters
+        query_filter = filters.copy() if filters else {}
 
-        # Add status filter to only get completed videos
-        query_filter["status"] = "completed"
+        # Add debug flag to show all statuses
+        if show_all_status:
+            query_filter['show_all_status'] = True
+            logger.info("🔧 Debug mode enabled: showing videos with all statuses")
+        else:
+            # Add status filter to only get completed videos (default behavior)
+            query_filter["status"] = "completed"
 
-        # Get all completed video processing records with representative frames
-        video_docs = list(db.video_processing.find(
-            query_filter,
-            sort=[("timestamp", -1)],
-            limit=50  # Limit to latest 50 videos
-        ))
+        # Use the updated get_video_processing_summary function
+        success, video_data = get_video_processing_summary(query_filter, limit=50)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch video data: {video_data}")
 
-        processed_videos = []
-        for video_doc in video_docs:
-            # Only include videos that have representative frames
-            if video_doc.get('representative_frame'):
-                # Count total detections
-                model_outputs = video_doc.get('model_outputs', {})
-                total_potholes = len(model_outputs.get('potholes', []))
-                total_cracks = len(model_outputs.get('cracks', []))
-                total_kerbs = len(model_outputs.get('kerbs', []))
-
-                processed_video = {
-                    'video_id': video_doc['video_id'],
-                    'timestamp': video_doc.get('timestamp'),
-                    'username': video_doc.get('username'),
-                    'role': video_doc.get('role'),
-                    'models_run': video_doc.get('models_run', []),
-                    'representative_frame': video_doc['representative_frame'],
-                    'representative_frame_detections': video_doc.get('representative_frame_detections', []),
-                    'detection_counts': {
-                        'potholes': total_potholes,
-                        'cracks': total_cracks,
-                        'kerbs': total_kerbs,
-                        'total': total_potholes + total_cracks + total_kerbs
-                    },
-                    'original_video_url': video_doc.get('original_video_url'),
-                    'processed_video_url': video_doc.get('processed_video_url'),
-                    'status': video_doc.get('status'),
-                    '_id': str(video_doc['_id'])
-                }
-                processed_videos.append(processed_video)
+        processed_videos = video_data.get('latest', [])
 
         return {
             "success": True,
             "count": len(processed_videos),
-            "videos": processed_videos
+            "videos": processed_videos,
+            "debug_mode": show_all_status
         }
 
     except Exception as e:
         logger.error(f"Error fetching video processing data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching video processing data: {str(e)}")
+
+@router.get('/video-processing-debug')
+def get_video_processing_debug(
+    user_role: str = Depends(validate_rbac_access), 
+    filters: dict = Depends(parse_filters)
+):
+    """
+    Debug endpoint to show ALL video processing records including failed ones
+    """
+    try:
+        db = connect_to_db()
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+
+        # Get filters but don't add status filter
+        query_filter = filters.copy() if filters else {}
+        query_filter['show_all_status'] = True  # Show all statuses
+
+        logger.info(f"🔧 DEBUG: Fetching ALL video processing records with filter: {query_filter}")
+
+        # Get ALL video processing records (no status filter)
+        video_docs = list(db.video_processing.find(
+            {k: v for k, v in query_filter.items() if k != 'show_all_status'},  # Remove our custom flag
+            sort=[("timestamp", -1)],
+            limit=100  # Increased limit for debugging
+        ))
+
+        logger.info(f"🔧 DEBUG: Found {len(video_docs)} total video documents")
+
+        processed_videos = []
+        status_counts = {}
+        
+        for video_doc in video_docs:
+            # Count status distribution
+            status = video_doc.get('status', 'unknown')
+            status_counts[status] = status_counts.get(status, 0) + 1
+            
+            # Count total detections
+            model_outputs = video_doc.get('model_outputs', {})
+            total_potholes = len(model_outputs.get('potholes', []))
+            total_cracks = len(model_outputs.get('cracks', []))
+            total_kerbs = len(model_outputs.get('kerbs', []))
+
+            processed_video = {
+                'video_id': video_doc['video_id'],
+                'timestamp': video_doc.get('timestamp'),
+                'username': video_doc.get('username'),
+                'role': video_doc.get('role'),
+                'models_run': video_doc.get('models_run', []),
+                'representative_frame': video_doc.get('representative_frame'),
+                'representative_frame_detections': video_doc.get('representative_frame_detections', []),
+                'detection_counts': {
+                    'potholes': total_potholes,
+                    'cracks': total_cracks,
+                    'kerbs': total_kerbs,
+                    'total': total_potholes + total_cracks + total_kerbs
+                },
+                'original_video_url': video_doc.get('original_video_url'),
+                'processed_video_url': video_doc.get('processed_video_url'),
+                'status': status,
+                'error': video_doc.get('error'),  # Include error details
+                'created_at': video_doc.get('created_at'),
+                'updated_at': video_doc.get('updated_at'),
+                '_id': str(video_doc['_id'])
+            }
+            processed_videos.append(processed_video)
+
+        logger.info(f"🔧 DEBUG: Status distribution: {status_counts}")
+
+        return {
+            "success": True,
+            "count": len(processed_videos),
+            "videos": processed_videos,
+            "status_counts": status_counts,
+            "debug_info": {
+                "total_videos": len(video_docs),
+                "query_used": {k: v for k, v in query_filter.items() if k != 'show_all_status'},
+                "message": "This endpoint shows ALL videos including failed ones for debugging"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error in video processing debug endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching debug data: {str(e)}")
 
 @router.get('/video-processing-export')
 def export_video_processing_data(user_role: str = Depends(validate_rbac_access), filters: dict = Depends(parse_filters), video_id: Optional[str] = Query(None), format: str = Query('csv')):

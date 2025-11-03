@@ -190,6 +190,48 @@ class S3ImageManager:
         except Exception as e:
             logger.error(f"Unexpected error downloading image from S3: {e}")
             return None
+    
+    def upload_video_to_s3(self, video_path, aws_folder, s3_key):
+        """
+        Upload a video file to S3
+        
+        Args:
+            video_path (str): Local path to the video file
+            aws_folder (str): AWS folder configuration (not used, kept for compatibility)
+            s3_key (str): S3 key path for the video
+            
+        Returns:
+            tuple: (success: bool, s3_url_or_error: str)
+        """
+        try:
+            # Compose full S3 key with prefix
+            full_s3_key = f"{self.prefix}/{s3_key}" if self.prefix else s3_key
+            
+            # Upload video file to S3
+            with open(video_path, 'rb') as video_file:
+                self.s3_client.put_object(
+                    Bucket=self.bucket,
+                    Key=full_s3_key,
+                    Body=video_file,
+                    ContentType='video/mp4'
+                )
+            
+            # Return relative S3 path (not full URL)
+            logger.info(f"✅ Video uploaded successfully to S3: {s3_key}")
+            return True, s3_key
+            
+        except FileNotFoundError:
+            error_msg = f"Video file not found: {video_path}"
+            logger.error(error_msg)
+            return False, error_msg
+        except ClientError as e:
+            error_msg = f"S3 upload error: {e}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error during S3 video upload: {e}"
+            logger.error(error_msg)
+            return False, error_msg
 
 
 class MongoDBImageManager:

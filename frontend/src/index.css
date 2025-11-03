@@ -24,7 +24,7 @@ code {
 }
 
 .full-bar {
-  background: linear-gradient(to right, #5A95D6, #C49FD6, #FF9B33);
+  background: linear-gradient(to bottom, #d86074, #d37070, #f0a9a9);
   padding: 8px 10px;
   font-size: 30px;
   font-weight: bold;
@@ -33,9 +33,9 @@ code {
   margin-left: auto;
   margin-right: auto;
   text-align: center;
-  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.80);
+  box-shadow: -2px 13px 20px 0px rgb(169 169 169);
   position: relative;
-  margin-bottom: 20px;
+  margin-bottom: 40px;
   color: white;
 }
 
@@ -60,17 +60,44 @@ a, button, input, select, textarea {
     font-size: 20px;
     padding: 6px 8px;
     border-radius: 30px;
+    height:50px;
   }
 }
+@media (min-width: 768px) {
+    .full-bar {
+      height:75px;
+    }
+}
+
 
 @media (max-width: 480px) {
   html {
     font-size: 12px;
   }
-  
+
   .full-bar {
     font-size: 16px;
     padding: 5px;
     border-radius: 20px;
   }
+}
+
+/* Custom checkbox styling to match design */
+.form-check-input[type=checkbox] {
+  border-radius: 0.25em;
+  border-color: #ced4da;
+}
+
+.form-check-input:checked[type=checkbox] {
+  background-color: #d86074;
+  border-color: #d86074;
+}
+
+.form-check-input:focus[type=checkbox] {
+  border-color: #d86074;
+  box-shadow: 0 0 0 0.25rem rgba(216, 96, 116, 0.25);
+}
+
+.form-check-input[type=checkbox]:checked {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3e%3cpath fill='none' stroke='%23fff' stroke-linecap='round' stroke-linejoin='round' stroke-width='3' d='m6 10 3 3 6-6'/%3e%3c/svg%3e");
 } 

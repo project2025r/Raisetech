@@ -782,21 +782,23 @@ const VideoDefectDetection = () => {
 
   return (
     <div className="video-defect-detection">
-        <Card className="mb-4">
-          <Card.Header className="bg-primary text-white">
-            <h5 className="mb-0">Video Defect Detection</h5>
-          </Card.Header>
-          <Card.Body>
-            {error && (
-              <Alert variant="danger" className="mb-3">
-                {error}
-              </Alert>
-            )}
-            {warning && (
-              <Alert variant="warning" className="mb-3">
-                {warning}
-              </Alert>
-            )}
+      <Row>
+        <Col md={6}>
+          <Card className="mb-4">
+            <Card.Header className="bg-color-card">
+              <h5 className="mb-0">Video Defect Detection</h5>
+            </Card.Header>
+            <Card.Body>
+              {error && (
+                <Alert variant="danger" className="mb-3">
+                  {error}
+                </Alert>
+              )}
+              {warning && (
+                <Alert variant="warning" className="mb-3">
+                  {warning}
+                </Alert>
+              )}
 
             {/* Model Selection */}
             <Form.Group className="mb-3">
@@ -1000,136 +1002,92 @@ const VideoDefectDetection = () => {
               </Button>
             </div>
 
-            {/* Always show progress during processing */}
-            {isProcessing && (
-              <div className="mt-3">
-                {(totalFramesValid || estimatedTotalFrames) && processingProgress > 0 && Number.isFinite(processingProgress) ? (
-                  <>
-                    <div className="d-flex justify-content-between">
-                      <span>Processing Progress:</span>
-                      <span>{Math.max(0, Math.min(100, processingProgress)).toFixed(1)}%</span>
+              {/* Always show progress during processing */}
+              {isProcessing && (
+                <div className="mt-3">
+                  {(totalFramesValid || estimatedTotalFrames) && processingProgress > 0 && Number.isFinite(processingProgress) ? (
+                    <>
+                      <div className="d-flex justify-content-between">
+                        <span>Processing Progress:</span>
+                        <span>{Math.max(0, Math.min(100, processingProgress)).toFixed(1)}%</span>
+                      </div>
+                      <div className="progress mt-1">
+                        <div
+                          className="progress-bar progress-bar-striped progress-bar-animated"
+                          role="progressbar"
+                          style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
+                          aria-valuenow={Math.max(0, Math.min(100, processingProgress))}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                        ></div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="d-flex align-items-center mt-3">
+                      <span>Processing...</span>
+                      <div className="progress flex-grow-1 ms-2" style={{ height: '20px' }}>
+                        <div
+                          className="progress-bar progress-bar-striped progress-bar-animated"
+                          role="progressbar"
+                          style={{ width: `100%`, backgroundColor: '#e0e0e0' }}
+                          aria-valuenow={0}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                        ></div>
+                      </div>
                     </div>
-                    <div className="progress mt-1">
-                      <div
-                        className="progress-bar progress-bar-striped progress-bar-animated"
-                        role="progressbar"
-                        style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
-                        aria-valuenow={Math.max(0, Math.min(100, processingProgress))}
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                      ></div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="d-flex align-items-center mt-3">
-                    <span>Processing...</span>
-                    <div className="progress flex-grow-1 ms-2" style={{ height: '20px' }}>
-                      <div
-                        className="progress-bar progress-bar-striped progress-bar-animated"
-                        role="progressbar"
-                        style={{ width: `100%`, backgroundColor: '#e0e0e0' }}
-                        aria-valuenow={0}
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                      ></div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card.Body>
-        </Card>
-
-        {(inputSource === 'camera' ? routeReady : true) && 
-            <MapPanel
-              panelTitle="Video Route Map"
-              fromLocation={fromLoc}
-              toLocation={toLoc}
-              onFromChange={setFromLoc}
-              onToChange={setToLoc}
-              onRoutesLoaded={setRoutes}
-              gpsTrack={gpsTrack}
-              onOutOfRange={() => {
-                setRangeMessage('You are outside the defined range — please return within the route.');
-                setShowRangeModal(true);
-              }}
-            />
-        }
-
-        {/* Live Location Update Display */}
-        {inputSource === 'camera' && isRecording && (
-          <Card className="mt-4">
-            <Card.Body>
-                <Row className="align-items-center">
-                    <Col>
-                        <strong>Location:</strong>
-                        {liveFromLoc && <span> From: {liveFromLoc}</span>}
-                        {liveToLoc && <span> To: {liveToLoc}</span>}
-                        {liveCurrentLoc ? (
-                        <span> Current: {` ${liveCurrentLoc[0].toFixed(6)}, ${liveCurrentLoc[1].toFixed(6)}`}
-                        </span>
-                        ) : (
-                        <span> Waiting for update...</span>
-                        )}
-                    </Col>
-                    <Col xs="auto">
-                        {locationUpdated ? (
-                        <span className="text-success">✓ Updated</span>
-                        ) : (
-                        <Spinner animation="border" size="sm" role="status">
-                            <span className="visually-hidden">Loading...</span>
-                        </Spinner>
-                        )}
-                    </Col>
-                </Row>
+                  )}
+                </div>
+              )}
             </Card.Body>
           </Card>
-        )}
+        </Col>
 
-        {/* Show detection results as soon as we have any, and always after processing is complete if results exist */}
-        {((showResults || allDetections.length > 0 || (!isProcessing && videoResults && allDetections.length > 0))) && (
-          <Card className="mt-4">
-            <Card.Header className="bg-info text-white">
-              <h5 className="mb-0">Detection Results</h5>
-              {isProcessing && (
-                <small className="text-white-50">
-                  Results update in real-time as processing continues...
-                </small>
-              )}
-              {!isProcessing && videoResults && (
-                <small className="text-success">
-                  <b>Processing Complete.</b> Final results are shown below.
-                </small>
-              )}
-            </Card.Header>
-            <Card.Body>
-              {/* Summary */}
-              <div className="detection-summary mb-3">
-                <h6>Detection Summary:</h6>
-                <div className="mb-2">
-                  {Object.entries(getDetectionSummary()).map(([type, count]) => (
-                    <span key={type} className="badge bg-secondary me-1">
-                      {type}: {count}
-                    </span>
-                  ))}
-                </div>
-                
-                {/* Tracking Statistics */}
-                <div className="tracking-stats">
-                  <small className="text-muted">
-                    <strong>Tracking Stats:</strong> {' '}
-                    <span className="badge bg-success me-1">
-                      Unique: {getTrackingStats().uniqueDetections}
-                    </span>
-                    <span className="badge bg-info me-1">
-                      Total Frames: {getTrackingStats().frameDetections}
-                    </span>
-                    <span className="badge bg-warning">
-                      Duplicates Removed: {getTrackingStats().duplicatesRemoved}
-                    </span>
+        <Col md={6}>
+          {/* Show detection results as soon as we have any, and always after processing is complete if results exist */}
+          {((showResults || allDetections.length > 0 || (!isProcessing && videoResults && allDetections.length > 0))) && (
+            <Card>
+              <Card.Header className="bg-info text-white">
+                <h5 className="mb-0">Detection Results</h5>
+                {isProcessing && (
+                  <small className="bg-color-card">
+                    Results update in real-time as processing continues...
                   </small>
+                )}
+                {!isProcessing && videoResults && (
+                  <small className="text-success">
+                    <b>Processing Complete.</b> Final results are shown below.
+                  </small>
+                )}
+              </Card.Header>
+              <Card.Body>
+                {/* Summary */}
+                <div className="detection-summary mb-3">
+                  <h6>Detection Summary:</h6>
+                  <div className="mb-2">
+                    {Object.entries(getDetectionSummary()).map(([type, count]) => (
+                      <span key={type} className="badge bg-secondary me-1">
+                        {type}: {count}
+                      </span>
+                    ))}
+                  </div>
+                  
+                  {/* Tracking Statistics */}
+                  <div className="tracking-stats">
+                    <small className="text-muted">
+                      <strong>Tracking Stats:</strong> {' '}
+                      <span className="badge bg-success me-1">
+                        Unique: {getTrackingStats().uniqueDetections}
+                      </span>
+                      <span className="badge bg-info me-1">
+                        Total Frames: {getTrackingStats().frameDetections}
+                      </span>
+                      <span className="badge bg-warning">
+                        Duplicates Removed: {getTrackingStats().duplicatesRemoved}
+                      </span>
+                    </small>
+                  </div>
                 </div>
-              </div>
 
               {/* Separate Tables for Each Defect Type */}
               {(() => {
@@ -1254,6 +1212,8 @@ const VideoDefectDetection = () => {
             </Card.Body>
           </Card>
         )}
+        </Col>
+      </Row>
 
       {/* Range Exceeded Modal */}
       <Modal show={showRangeModal} onHide={() => setShowRangeModal(false)} centered>

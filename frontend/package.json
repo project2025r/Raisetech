@@ -26,8 +26,8 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
+    "start": "cross-env GENERATE_SOURCEMAP=false react-scripts start",
+    "build": "cross-env GENERATE_SOURCEMAP=false react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
@@ -51,6 +51,6 @@
   },
   "proxy": "http://localhost:5000",
   "devDependencies": {
-    "@craco/craco": "^7.1.0"
+    "cross-env": "^10.1.0"
   }
 }
