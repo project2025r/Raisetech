@@ -795,7 +795,7 @@ function Dashboard({ user }) {
                                   y: weeklyData.issues,
                                   type: 'scatter',
                                   mode: 'lines+markers',
-                                  marker: { color: '#007bff' }
+                                  marker: { color: '#ff7675' }
                                 }
                               ]}
                               layout={{
@@ -821,9 +821,9 @@ function Dashboard({ user }) {
                                   y: filteredIssuesByType.counts,
                                   marker: {
                                     color: filteredIssuesByType.types.map(type => {
-                                      if (type.includes('Pothole')) return '#007bff';
-                                      if (type.includes('Crack')) return '#28a745';
-                                      if (type.includes('Kerb')) return '#dc3545';
+                                      if (type.includes('Pothole')) return '#ff7675';
+                                      if (type.includes('Crack')) return '#55efc4';
+                                      if (type.includes('Kerb')) return '#74b9ff';
                                       return '#6c757d';
                                     })
                                   }
@@ -842,19 +842,19 @@ function Dashboard({ user }) {
                               legendItems={[
                                 {
                                   label: 'Potholes',
-                                  color: '#007bff',
+                                  color: '#ff7675',
                                   checked: defectFilters.potholes,
                                   onChange: () => handleDefectFilterChange('potholes')
                                 },
                                 {
                                   label: 'Cracks',
-                                  color: '#28a745',
+                                  color: '#55efc4',
                                   checked: defectFilters.cracks,
                                   onChange: () => handleDefectFilterChange('cracks')
                                 },
                                 {
                                   label: 'Kerbs',
-                                  color: '#dc3545',
+                                  color: '#74b9ff',
                                   checked: defectFilters.kerbs,
                                   onChange: () => handleDefectFilterChange('kerbs')
                                 }
@@ -885,7 +885,7 @@ function Dashboard({ user }) {
                                     statistics.kerbsDetected
                                   ],
                                   marker: {
-                                    colors: ['#007bff', '#28a745', '#dc3545']
+                                    colors: ['#ff7675', '#55efc4', '#74b9ff']
                                   },
                                   textinfo: "label+percent",
                                   insidetextorientation: "radial"
