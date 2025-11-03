@@ -21,6 +21,7 @@ archive/
 *.egg-info/
 .installed.cfg
 *.egg
+test_videos/
 
 # Flask
 instance/
